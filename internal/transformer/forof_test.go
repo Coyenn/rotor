@@ -2,7 +2,6 @@ package transformer_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -26,21 +25,19 @@ func renderForOfFile(t *testing.T, relPath string) string {
 }
 
 // forOfDiagnostics transforms a probe file and returns rotor's diagnostics.
-// The probes iterate non-array types (Set unions, Iterable<T>, $range's
-// Iterable<number> return), which are valid rbxtsc 3.0.0 input but trip a
-// known TS5->TS7 checker divergence in tsgo: TS7 resolves the global
-// `Iterable`/`IterableIterator` types with arity 3 (checker.go:1082-1085)
-// while @rbxts/compiler-types declares the TS5 arity-1 shape, so tsgo cannot
-// see the ecosystem's iteration globals and reports "can only be iterated
-// through when using '--downlevelIteration'" (and the sanitizer must strip
-// downlevelIteration — TS7 removed the option). Tolerate exactly that
-// message; everything else still fails. Phase 3's Set/Map/generator builders
-// need a real fix (compiler-types overlay or checker shim).
+// The probes iterate non-array types (Set/Map/generators, Set unions,
+// Iterable<T>, $range's Iterable<number> return) — valid rbxtsc 3.0.0 input
+// that historically tripped a TS5->TS7 checker divergence: tsgo resolves the
+// global `Iterable`/`IterableIterator` types with arity 3 while
+// @rbxts/compiler-types declares the TS5 arity-1 shape, producing spurious
+// "can only be iterated through when using '--downlevelIteration'"
+// diagnostics. compile.SanitizeFS now rewrites the compiler-types interfaces
+// to arity 3 (RewriteIterableArity), so the checker computes real iteration
+// types and the probes must build with ZERO checker diagnostics — buildState
+// is strict; any regression of the overlay resurfaces here.
 func forOfDiagnostics(t *testing.T, relPath string) []transformer.Diagnostic {
 	t.Helper()
-	s := buildStateTolerating(t, filepath.Join("testdata", "forof"), relPath, func(msg string) bool {
-		return strings.Contains(msg, "can only be iterated through")
-	})
+	s := buildState(t, filepath.Join("testdata", "forof"), relPath)
 	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
 	return s.Diags.Flush()
 }
@@ -174,6 +171,45 @@ func TestForOfNoIterableIterationDiagnostic(t *testing.T) {
 	ds := forOfDiagnostics(t, "src/iterable.ts")
 	if !hasDiagnostic(ds, "noIterableIteration", "Iterating on Iterable<T> is not supported!") {
 		t.Errorf("no noIterableIteration diagnostic; got: %v", ds)
+	}
+}
+
+// TestForOfSetNotYetSupported: with the Iterable-arity overlay live, for-of
+// over Set<string> typechecks cleanly (zero checker diagnostics — buildState
+// asserts) and reaches the transformer's own dispatch, which reports the
+// Phase 3 NYS for the Set loop builder.
+func TestForOfSetNotYetSupported(t *testing.T) {
+	ds := forOfDiagnostics(t, "src/set.ts")
+	if len(ds) != 1 {
+		t.Fatalf("expected exactly 1 diagnostic, got %d: %v", len(ds), ds)
+	}
+	if !hasDiagnostic(ds, "rotorNotYetSupported", "for-of over `Set<T>`") {
+		t.Errorf("no rotorNotYetSupported diagnostic for Set; got: %v", ds)
+	}
+}
+
+// TestForOfMapNotYetSupported: destructured for-of over Map<string, number>
+// — zero checker diagnostics, transformer NYS from the Map builder dispatch.
+func TestForOfMapNotYetSupported(t *testing.T) {
+	ds := forOfDiagnostics(t, "src/map.ts")
+	if len(ds) != 1 {
+		t.Fatalf("expected exactly 1 diagnostic, got %d: %v", len(ds), ds)
+	}
+	if !hasDiagnostic(ds, "rotorNotYetSupported", "for-of over `Map<K, V>`") {
+		t.Errorf("no rotorNotYetSupported diagnostic for Map; got: %v", ds)
+	}
+}
+
+// TestForOfGeneratorNotYetSupported: for-of over a generator-object call —
+// zero checker diagnostics, transformer NYS from the generator builder
+// dispatch.
+func TestForOfGeneratorNotYetSupported(t *testing.T) {
+	ds := forOfDiagnostics(t, "src/generator.ts")
+	if len(ds) != 1 {
+		t.Fatalf("expected exactly 1 diagnostic, got %d: %v", len(ds), ds)
+	}
+	if !hasDiagnostic(ds, "rotorNotYetSupported", "for-of over generators") {
+		t.Errorf("no rotorNotYetSupported diagnostic for generators; got: %v", ds)
 	}
 }
 

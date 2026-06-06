@@ -1,6 +1,7 @@
 package transformer
 
 import (
+	"sort"
 	"strings"
 
 	"rotor/internal/luau"
@@ -40,7 +41,16 @@ import (
 // ProjectError at construction when a registration name cannot be resolved
 // ("You may need to update your @rbxts/compiler-types!"); rotor skips the
 // entry so checker-light test projects keep working (same divergence as the
-// AmbientSymbol nil-return pattern).
+// AmbientSymbol nil-return pattern) — BUT records every skip with the exact
+// upstream ProjectError text (see Missing). CompileProject/CompileFile fail
+// hard when Missing() is non-empty, restoring upstream's
+// ProjectError-before-any-emit contract for real projects: a failed
+// ResolveName must never silently regress a macro to a plain method call
+// (the damage-numbers.ts bug class: `v.add(w)` -> wrong `v:add(w)` output
+// with no diagnostic). The sentinel gating (compiler-types present iff
+// LuaTuple resolves; @rbxts/types present iff CFrame resolves) keeps
+// checker-light unit-test projects, which lack the packages entirely, from
+// failing the audit.
 
 // ---------------------------------------------------------------------------
 // Macro signatures — macros/types.ts
@@ -122,6 +132,65 @@ func init() {
 	}
 }
 
+// symbolNames ports MacroManager.ts SYMBOL_NAMES (the registry values, in
+// upstream declaration order). Upstream resolves every entry eagerly in the
+// constructor and throws on a miss; rotor resolves them eagerly too (misses
+// recorded by the audit) and Symbol() reads the memoized results.
+var symbolNames = []string{
+	"globalThis",
+
+	"ArrayConstructor",
+	"SetConstructor",
+	"MapConstructor",
+	"WeakSetConstructor",
+	"WeakMapConstructor",
+	"ReadonlyMapConstructor",
+	"ReadonlySetConstructor",
+
+	"Array",
+	"Generator",
+	"IterableFunction",
+	"LuaTuple",
+	"Map",
+	"Object",
+	"ReadonlyArray",
+	"ReadonlyMap",
+	"ReadonlySet",
+	"ReadVoxelsArray",
+	"Set",
+	"String",
+	"TemplateStringsArray",
+	"WeakMap",
+	"WeakSet",
+
+	"Iterable",
+
+	"$range",
+	"$tuple",
+}
+
+// typesNotice ports MacroManager.ts TYPES_NOTICE, appended verbatim to every
+// registration-failure ProjectError text.
+const typesNotice = "\nYou may need to update your @rbxts/compiler-types!"
+
+// rbxTypesClasses lists the PROPERTY_CALL_MACROS classes declared by
+// @rbxts/types (include/macro_math.d.ts) rather than @rbxts/compiler-types.
+// Their audit entries gate on the @rbxts/types sentinel (CFrame); everything
+// else gates on the compiler-types sentinel (LuaTuple). Upstream throws
+// unconditionally; the partition is rotor's test-friendly refinement — a
+// project genuinely missing the packages already dies earlier in
+// noLib/global resolution.
+var rbxTypesClasses = map[string]bool{
+	"CFrame":       true,
+	"UDim":         true,
+	"UDim2":        true,
+	"Vector2":      true,
+	"Vector2int16": true,
+	"Vector3":      true,
+	"Vector3int16": true,
+	"Number":       true,
+}
+
 // NominalLuaTupleName ports Shared/constants.ts NOMINAL_LUA_TUPLE_NAME.
 const NominalLuaTupleName = "_nominal_LuaTuple"
 
@@ -131,12 +200,13 @@ const NominalLuaTupleName = "_nominal_LuaTuple"
 
 // MacroManager ports classes/MacroManager.ts: symbol -> macro lookup maps
 // built once per compilation pass from the checker's ambient declarations,
-// plus the SYMBOL_NAMES ambient-symbol registry (rotor resolves those lazily;
-// see Symbol).
+// plus the SYMBOL_NAMES ambient-symbol registry (resolved eagerly like
+// upstream; see Symbol for the lazy tail).
 type MacroManager struct {
 	chk *checker.Checker // nil in checker-free mechanics tests
 
-	// symbols ports the SYMBOL_NAMES map, lazily resolved and memoized
+	// symbols ports the SYMBOL_NAMES map: the upstream names are resolved
+	// eagerly by the constructor; other names memoize lazily via Symbol
 	// (including misses — presence in the map marks "resolved").
 	symbols map[string]*ast.Symbol
 
@@ -149,6 +219,15 @@ type MacroManager struct {
 	// from the ambient LuaTuple<T> alias (see LuaTupleNominalSymbol).
 	luaTupleNominal         *ast.Symbol
 	luaTupleNominalResolved bool
+
+	// Registration audit (digest §6): every registration that upstream's
+	// constructor would have thrown ProjectError for is recorded with the
+	// exact upstream message, partitioned by the package that declares the
+	// failed name. Missing() gates each bucket on its package sentinel.
+	missingCompilerTypes []string // gated on compilerTypesPresent
+	missingRbxTypes      []string // gated on rbxTypesPresent
+	compilerTypesPresent bool     // LuaTuple resolves (declared only by compiler-types)
+	rbxTypesPresent      bool     // CFrame resolves (declared only by @rbxts/types)
 }
 
 // NewMacroManager builds the symbol->macro maps, mirroring the upstream
@@ -170,33 +249,52 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 		return m
 	}
 
+	// Audit gating sentinels (digest §6): LuaTuple's declaration lives only
+	// in @rbxts/compiler-types; CFrame's only in @rbxts/types.
+	m.compilerTypesPresent = chk.ResolveName("LuaTuple", nil, ast.SymbolFlagsAll, false) != nil
+	m.rbxTypesPresent = chk.ResolveName("CFrame", nil, ast.SymbolFlagsInterface, false) != nil
+
 	for name, macro := range identifierMacroTable {
 		if symbol := chk.ResolveName(name, nil, ast.SymbolFlagsVariable, false); symbol != nil {
 			m.identifierMacros[symbol] = &IdentifierMacroEntry{Name: name, Macro: macro}
+		} else {
+			// getGlobalSymbolByNameOrThrow (MacroManager.ts L78).
+			m.recordMissing(name, "MacroManager could not find symbol for "+name+typesNotice)
 		}
 	}
 
 	for name, macro := range callMacroTable {
 		if symbol := chk.ResolveName(name, nil, ast.SymbolFlagsFunction, false); symbol != nil {
 			m.callMacros[symbol] = &CallMacroEntry{Name: name, Macro: macro}
+		} else {
+			m.recordMissing(name, "MacroManager could not find symbol for "+name+typesNotice)
 		}
 	}
 
 	for name, macro := range constructorMacroTable {
 		symbol := chk.ResolveName(name, nil, ast.SymbolFlagsInterface, false)
 		if symbol == nil {
+			m.recordMissing(name, "MacroManager could not find symbol for "+name+typesNotice)
 			continue
 		}
 		// getFirstDeclarationOrThrow(symbol, ts.isInterfaceDeclaration) +
 		// getConstructorSymbol(interfaceDec): FIRST interface declaration only.
+		var interfaceDec *ast.Node
 		for _, declaration := range symbol.Declarations {
-			if !ast.IsInterfaceDeclaration(declaration) {
-				continue
+			if ast.IsInterfaceDeclaration(declaration) {
+				interfaceDec = declaration
+				break
 			}
-			if constructSymbol := interfaceConstructSymbol(declaration); constructSymbol != nil {
-				m.constructorMacros[constructSymbol] = macro
-			}
-			break
+		}
+		if interfaceDec == nil {
+			// getFirstDeclarationOrThrow throws ProjectError("") — the empty
+			// message is upstream's, verbatim (MacroManager.ts L70).
+			m.recordMissing(name, "")
+		} else if constructSymbol := interfaceConstructSymbol(interfaceDec); constructSymbol != nil {
+			m.constructorMacros[constructSymbol] = macro
+		} else {
+			// getConstructorSymbol throw (MacroManager.ts L88).
+			m.recordMissing(name, "MacroManager could not find constructor for "+name+typesNotice)
 		}
 	}
 
@@ -213,6 +311,7 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 	for className, methods := range propertyCallMacroTable {
 		symbol := chk.ResolveName(className, nil, ast.SymbolFlagsInterface, false)
 		if symbol == nil {
+			m.recordMissing(className, "MacroManager could not find symbol for "+className+typesNotice)
 			continue
 		}
 
@@ -232,15 +331,65 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 		}
 
 		for methodName, macro := range methods {
-			// upstream throws ProjectError when the method is missing; rotor
-			// skips (same checker-light-project divergence as the other tables).
+			// upstream throws ProjectError when the method is missing
+			// (MacroManager.ts L138-141); rotor skips and records for the
+			// audit (same checker-light-project divergence as the other
+			// tables, made loud again by Missing()).
 			if methodSymbol := methodMap[methodName]; methodSymbol != nil {
 				m.propertyCallMacros[methodSymbol] = &PropertyCallMacroEntry{Name: className + "." + methodName, Macro: macro}
+			} else {
+				m.recordMissing(className, "MacroManager could not find method for "+className+"."+methodName+typesNotice)
 			}
 		}
 	}
 
+	// SYMBOL_NAMES registration (MacroManager.ts L146-153): upstream resolves
+	// eagerly and throws on the first miss; rotor resolves eagerly into the
+	// memo map Symbol() reads (misses memoized as nil, preserving the lazy
+	// nil-return contract for callers) and records each miss for the audit.
+	for _, name := range symbolNames {
+		symbol := chk.ResolveName(name, nil, ast.SymbolFlagsAll, false)
+		m.symbols[name] = symbol
+		if symbol == nil {
+			m.recordMissing(name, "MacroManager could not find symbol for "+name+typesNotice)
+		}
+	}
+
 	return m
+}
+
+// recordMissing files a registration failure under the audit bucket of the
+// package that declares className/name (see rbxTypesClasses).
+func (m *MacroManager) recordMissing(name, message string) {
+	if rbxTypesClasses[name] {
+		m.missingRbxTypes = append(m.missingRbxTypes, message)
+	} else {
+		m.missingCompilerTypes = append(m.missingCompilerTypes, message)
+	}
+}
+
+// Missing returns the upstream ProjectError texts for every registration
+// that failed while the package declaring it is present (compiler-types
+// present iff LuaTuple resolves; @rbxts/types present iff CFrame resolves),
+// sorted for determinism (registration iterates Go maps). nil when the audit
+// passes — including for checker-light projects without the types packages,
+// where upstream's unconditional throw would be test-hostile. Upstream
+// throws the FIRST failure at construction (ProjectError before any emit);
+// rotor collects them all and CompileProject/CompileFile fail hard with the
+// full list.
+func (m *MacroManager) Missing() []string {
+	var out []string
+	if m.compilerTypesPresent {
+		out = append(out, m.missingCompilerTypes...)
+	}
+	if m.rbxTypesPresent {
+		out = append(out, m.missingRbxTypes...)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Strings(out)
+	return out
 }
 
 // interfaceConstructSymbol ports MacroManager.ts getConstructorSymbol: the
@@ -255,10 +404,13 @@ func interfaceConstructSymbol(interfaceDec *ast.Node) *ast.Symbol {
 	return nil
 }
 
-// Symbol ports MacroManager.getSymbolOrThrow + the SYMBOL_NAMES registration:
+// Symbol ports MacroManager.getSymbolOrThrow:
 // `typeChecker.resolveName(symbolName, undefined, ts.SymbolFlags.All, false)`,
-// memoized (including misses). Returns nil instead of throwing for projects
-// without @rbxts/compiler-types (callers nil-guard).
+// memoized (including misses). The upstream SYMBOL_NAMES set is resolved
+// eagerly by NewMacroManager (with audit recording); other names resolve
+// lazily here. Returns nil instead of throwing for projects without
+// @rbxts/compiler-types (callers nil-guard; Missing() makes real projects
+// fail loudly instead).
 func (m *MacroManager) Symbol(name string) *ast.Symbol {
 	if symbol, ok := m.symbols[name]; ok {
 		return symbol

@@ -2,6 +2,8 @@ package compile
 
 import (
 	"encoding/json"
+	"path"
+	"regexp"
 	"strings"
 
 	"rotor/tsgo/vfs"
@@ -9,17 +11,32 @@ import (
 )
 
 // SanitizeFS wraps an FS so that any ReadFile of a file named exactly
-// "tsconfig.json" returns sanitized config text (see SanitizeTSConfig). The
-// wrapper is general: it applies to every tsconfig.json the compiler host
-// touches (the project's own config plus anything reached via "extends").
+// "tsconfig.json" returns sanitized config text (see SanitizeTSConfig), and
+// any ReadFile of an @rbxts/compiler-types .d.ts returns text with the
+// Iterable interfaces rewritten to tsgo's expected arity (see
+// RewriteIterableArity). The wrapper is general: it applies to every
+// tsconfig.json the compiler host touches (the project's own config plus
+// anything reached via "extends").
+//
+// Known gap (load-bearing for the baseUrl rewrite): only files NAMED
+// "tsconfig.json" are intercepted, so an `"extends": "./tsconfig.base.json"`
+// carrying baseUrl (or any other removed option) is not sanitized and tsgo
+// still hard-errors on it. Acceptable for now — rbxts projects keep these
+// options in the root tsconfig.json.
 func SanitizeFS(inner vfs.FS) vfs.FS {
 	return wrapvfs.Wrap(inner, wrapvfs.Replacements{
 		ReadFile: func(path string) (string, bool) {
 			contents, ok := inner.ReadFile(path)
-			if !ok || !isTSConfigPath(path) {
+			if !ok {
 				return contents, ok
 			}
-			return SanitizeTSConfig(contents), true
+			if isTSConfigPath(path) {
+				return SanitizeTSConfig(contents), true
+			}
+			if isCompilerTypesDTSPath(path) {
+				return RewriteIterableArity(contents), true
+			}
+			return contents, ok
 		},
 	})
 }
@@ -29,6 +46,48 @@ func SanitizeFS(inner vfs.FS) vfs.FS {
 // unrelated files like "my-tsconfig.json".
 func isTSConfigPath(path string) bool {
 	return path == "tsconfig.json" || strings.HasSuffix(path, "/tsconfig.json")
+}
+
+// isCompilerTypesDTSPath reports whether path is a declaration file of the
+// @rbxts/compiler-types package. Matched by package directory rather than by
+// the specific file (types/Iterable.d.ts today) because declarations may move
+// across compiler-types versions.
+func isCompilerTypesDTSPath(path string) bool {
+	return strings.Contains(path, "/node_modules/@rbxts/compiler-types/") && strings.HasSuffix(path, ".d.ts")
+}
+
+// iterableArityPattern matches the four arity-1 iteration-protocol interface
+// declarations of @rbxts/compiler-types (anchored to a single type parameter
+// named exactly T — the shape across compiler-types 2.x/3.x). References like
+// `Iterable<T>` in extends clauses or bodies do NOT match: only the
+// `interface Name<T>` declaration form does.
+var iterableArityPattern = regexp.MustCompile(`\binterface (Iterable|IterableIterator|AsyncIterable|AsyncIterableIterator)<T>`)
+
+// RewriteIterableArity rewrites @rbxts/compiler-types' arity-1 iteration
+// interfaces to the TS5.6+ lib shape `<T, TReturn = any, TNext = any>`.
+//
+// Why: tsgo (TS7) resolves the iteration globals (Iterable,
+// IterableIterator, ...) at arity 3 (checker.go getGlobalTypeResolver(name,
+// 3, ...)); compiler-types declares them at arity 1, so getGlobalType
+// returns emptyGenericType and the checker's entire iteration-protocol
+// branch is skipped — for-of/spread/destructuring over Set/Map/generators
+// degrade to the array-like fallback and report "can only be iterated
+// through when using the '--downlevelIteration' flag" (an option the
+// sanitizer must strip — TS7 removed it). rbxtsc pins TS 5.5 where the
+// checker resolved arity 1, which is why upstream never hits this.
+//
+// The defaults are `any` (maximally permissive), NOT the lib's strict
+// BuiltinIteratorReturn shape: TReturn/TNext only feed assignability checks
+// that TS5.5 never performed, and `any` keeps them vacuous so no NEW
+// diagnostics appear on code rbxtsc accepts. Defaulted parameters keep
+// existing 1-arg references legal, and getGlobalType counts ALL type
+// parameters including defaulted ones, so the rewritten interfaces resolve
+// at arity 3. Declaration merging is not an alternative (merged declarations
+// must repeat identical type parameter lists), hence the in-place rewrite.
+// The transform is textual, idempotent (the rewritten form no longer matches
+// `<T>`), and has zero emit impact (.d.ts text only).
+func RewriteIterableArity(src string) string {
+	return iterableArityPattern.ReplaceAllString(src, "interface $1<T, TReturn = any, TNext = any>")
 }
 
 // SanitizeTSConfig rewrites a tsconfig.json that rbxtsc requires into one
@@ -79,6 +138,9 @@ func SanitizeTSConfig(src string) string {
 		return clean
 	}
 	delete(co, "downlevelIteration")
+	if baseURL, ok := co["baseUrl"].(string); ok {
+		injectBaseURLPaths(co, baseURL)
+	}
 	delete(co, "baseUrl")
 	if mr, ok := co["moduleResolution"].(string); ok {
 		// Case-insensitive value match: tsconfig enum values are
@@ -96,6 +158,111 @@ func SanitizeTSConfig(src string) string {
 		return clean
 	}
 	return string(out)
+}
+
+// injectBaseURLPaths rewrites a stripped `"baseUrl": B` into the equivalent
+// "paths" wildcard — the exact replacement tsgo's own removed-option
+// diagnostic suggests (tsgo/compiler/program.go:791-803): for
+// `baseUrl: "src"`, `"paths": { "*": ["./src/*"] }` in the same config file.
+//
+// Equivalence (tsgo resolver mechanics, empirically validated against the
+// fixture project): paths substitutions are resolved against PathsBasePath =
+// the directory of the config file that DECLARES paths
+// (tsoptions/tsconfigparsing.go) — the same anchor TS5 resolved baseUrl
+// against, so no path math is needed; a matched-but-failed "*" pattern
+// returns continueSearching() and resolution proceeds to
+// loadModuleFromNearestNodeModulesDirectory, so `import "@rbxts/foo"` still
+// resolves through node_modules exactly like TS5's baseUrl-miss fallback.
+//
+// When the config already has "paths" (rare in rbxts projects), TS5's
+// paths-relative-to-baseUrl + baseUrl-fallback semantics are reproduced:
+//   - every relative substitution s is rewritten to ./B/s (TS5 resolved
+//     substitutions against baseUrl; tsgo resolves against the config dir);
+//   - ./B/<pattern> (pattern text, * kept) is appended to each pattern's
+//     substitution list — restoring TS5's "specific pattern failed ->
+//     baseUrl lookup of the FULL name" fallback, because tsgo's
+//     MatchPatternOrExact picks only the single longest-prefix pattern and
+//     never retries "*";
+//   - the "*" wildcard is added if absent, else ./B/* is appended to it.
+//
+// Order within a substitution list is significant (tried in order): user
+// entries stay first, injected baseUrl fallbacks go last, matching TS5's
+// paths-before-baseUrl priority.
+func injectBaseURLPaths(co map[string]any, baseURL string) {
+	b := strings.TrimSuffix(strings.TrimPrefix(strings.ReplaceAll(baseURL, "\\", "/"), "./"), "/")
+	prefix := "./"
+	switch {
+	case isAbsolutePathText(b):
+		// Absolute baseUrl (rare): substitutions stay absolute —
+		// tspath.CombinePaths returns an absolute second argument unchanged.
+		prefix = b + "/"
+	case b != "" && b != ".":
+		prefix = "./" + b + "/"
+	}
+	wild := prefix + "*"
+
+	if _, present := co["paths"]; !present {
+		co["paths"] = map[string]any{"*": []any{wild}}
+		return
+	}
+	paths, ok := co["paths"].(map[string]any)
+	if !ok {
+		return // malformed "paths"; leave it for tsoptions to report
+	}
+
+	// rebase maps a baseUrl-relative path text onto the config dir, keeping
+	// the "./" anchor tsgo's own suggestion uses (program.go:795-797).
+	rebase := func(s string) string {
+		if isAbsolutePathText(s) {
+			return s
+		}
+		cleaned := path.Clean(prefix + strings.TrimPrefix(s, "./"))
+		if !isAbsolutePathText(cleaned) && !strings.HasPrefix(cleaned, "./") && !strings.HasPrefix(cleaned, "../") {
+			cleaned = "./" + cleaned
+		}
+		return cleaned
+	}
+
+	for pattern, subsAny := range paths {
+		subs, ok := subsAny.([]any)
+		if !ok {
+			continue // malformed; leave for tsoptions to report
+		}
+		out := make([]any, 0, len(subs)+1)
+		for _, subAny := range subs {
+			sub, ok := subAny.(string)
+			if !ok {
+				out = append(out, subAny)
+				continue
+			}
+			out = append(out, rebase(sub))
+		}
+		// The full-name baseUrl fallback; for the "*" pattern itself this is
+		// exactly `wild`, which the loop below appends anyway.
+		if pattern != "*" {
+			out = append(out, rebase(pattern))
+		}
+		paths[pattern] = out
+	}
+
+	if starAny, ok := paths["*"]; ok {
+		if star, ok := starAny.([]any); ok {
+			paths["*"] = append(star, wild)
+		}
+	} else {
+		paths["*"] = []any{wild}
+	}
+}
+
+// isAbsolutePathText reports whether a tsconfig path text is absolute
+// (POSIX "/...", Windows drive "C:...", or UNC "\\..."); absolute
+// substitutions need no rebasing.
+func isAbsolutePathText(s string) bool {
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "\\") {
+		return true
+	}
+	return len(s) >= 2 && s[1] == ':' &&
+		(('a' <= s[0] && s[0] <= 'z') || ('A' <= s[0] && s[0] <= 'Z'))
 }
 
 // stripJSONC removes // line comments, /* */ block comments, and trailing
