@@ -159,8 +159,8 @@ func TestDirectPredicates(t *testing.T) {
 	// The FRESH boolean literal types survive only on `const x = true/false`
 	// declaration names (getTypeOfSymbol); getTypeAtLocation on EXPRESSION
 	// nodes goes through getRegularTypeOfExpression, which strips freshness —
-	// in upstream too, so isBooleanLiteralType through state.getType(expr) can
-	// only match the fallback branch. Probe both.
+	// in upstream too, so isBooleanLiteralType through state.getType(expr)
+	// always sees the regular variants it matches. Probe both.
 	freshTrue := probeType(t, s, "troof")
 	freshFalse := probeType(t, s, "falsef")
 	regularTrueExpr := s.GetType(findFirstKind(t, root, ast.KindTrueKeyword))
@@ -173,15 +173,17 @@ func TestDirectPredicates(t *testing.T) {
 		{"isAnyType(any)", transformer.IsAnyType(s).Check(get("anyVal")), true},
 		{"isAnyType(unknown)", transformer.IsAnyType(s).Check(get("unk")), false},
 		{"isBooleanType(true literal)", transformer.IsBooleanType.Check(get("troo")), true},
-		// isBooleanLiteralType compares identity against the checker's FRESH
-		// true/false types (upstream getTrueType()/getFalseType()): a literal
-		// EXPRESSION's type matches, a declared `true` annotation (regular
-		// variant) does not — upstream quirk, ported exactly.
-		{"isBooleanLiteralType(true) on fresh true", transformer.IsBooleanLiteralType(s, true).Check(freshTrue), true},
+		// isBooleanLiteralType compares identity against upstream
+		// getTrueType()/getFalseType(), which TS implements as
+		// `(fresh) => fresh ? freshType : regularType` — the no-argument
+		// upstream call yields the REGULAR true/false types (the members of
+		// the `boolean` union). A fresh literal-expression type does NOT
+		// match; declared annotations and union members (regular variants) do.
+		{"isBooleanLiteralType(true) on fresh true", transformer.IsBooleanLiteralType(s, true).Check(freshTrue), false},
 		{"isBooleanLiteralType(false) on fresh true", transformer.IsBooleanLiteralType(s, false).Check(freshTrue), false},
-		{"isBooleanLiteralType(false) on fresh false", transformer.IsBooleanLiteralType(s, false).Check(freshFalse), true},
-		{"isBooleanLiteralType(true) on regular true (annotation)", transformer.IsBooleanLiteralType(s, true).Check(get("troo")), false},
-		{"isBooleanLiteralType(true) on regular true (expression)", transformer.IsBooleanLiteralType(s, true).Check(regularTrueExpr), false},
+		{"isBooleanLiteralType(false) on fresh false", transformer.IsBooleanLiteralType(s, false).Check(freshFalse), false},
+		{"isBooleanLiteralType(true) on regular true (annotation)", transformer.IsBooleanLiteralType(s, true).Check(get("troo")), true},
+		{"isBooleanLiteralType(true) on regular true (expression)", transformer.IsBooleanLiteralType(s, true).Check(regularTrueExpr), true},
 		// non-literal fallback: plain boolean members count as possibly-false
 		{"isBooleanLiteralType(false) falls back for non-literals", transformer.IsBooleanLiteralType(s, false).Check(get("num")), false},
 		{"isNaNType(number)", transformer.IsNaNType.Check(get("num")), true},

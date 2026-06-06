@@ -186,19 +186,22 @@ func isBooleanTypeCheck(t *checker.Type) bool {
 var IsBooleanType = TypeCheck{check: isBooleanTypeCheck}
 
 // IsBooleanLiteralType ports isBooleanLiteralType (L91-99). Upstream compares
-// identity against typeChecker.getTrueType()/getFalseType() — the FRESH
-// true/false types. The checker creates exactly four boolean literal types
-// (fresh/regular x true/false) and only the fresh ones satisfy
-// `freshType == self`, so identity is equivalent to value + freshness (the s
-// parameter mirrors the upstream signature; tsgo needs no checker access
-// here). Non-literals fall back to isBooleanType, so plain `boolean` counts
-// as possibly-false.
+// identity against typeChecker.getTrueType()/getFalseType(), and TS implements
+// `getFalseType: (fresh) => fresh ? falseType : regularFalseType` — the
+// NO-ARGUMENT upstream call yields the REGULAR true/false types (the `boolean`
+// union's members), NOT the fresh literal-expression variants. The checker
+// creates exactly four boolean literal types (fresh/regular x true/false), so
+// identity is equivalent to value + regularness (the s parameter mirrors the
+// upstream signature; tsgo needs no checker access here). Non-literals fall
+// back to isBooleanType, so plain non-literal boolean-ish types count too.
+// Verified against rbxtsc 3.0.0: `(boolean | undefined) ?? x` refuses the
+// inline `or` form, which requires the regular `false` member to match.
 func IsBooleanLiteralType(s *State, value bool) TypeCheck {
 	_ = s
 	return TypeCheck{check: func(t *checker.Type) bool {
 		if t.Flags()&checker.TypeFlagsBooleanLiteral != 0 {
 			lt := t.AsLiteralType()
-			return lt.Value() == value && lt.FreshType() == t
+			return lt.Value() == value && lt.RegularType() == t
 		}
 		return isBooleanTypeCheck(t)
 	}}

@@ -7,5 +7,8 @@ package diff
 var EnabledFixtures = []string{
 	"01_literals",
 	"02_variables",
+	"03_arithmetic",
+	"04_logic",
+	"09_unary",
 	"10_strings",
 }

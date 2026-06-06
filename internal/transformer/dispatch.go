@@ -60,6 +60,10 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformObjectLiteralExpression(s, node)
 	case ast.KindParenthesizedExpression:
 		return transformParenthesizedExpression(s, node)
+	case ast.KindPostfixUnaryExpression:
+		return transformPostfixUnaryExpression(s, node)
+	case ast.KindPrefixUnaryExpression:
+		return transformPrefixUnaryExpression(s, node)
 	case ast.KindStringLiteral:
 		return transformStringLiteral(s, node)
 	case ast.KindTemplateExpression:
@@ -116,6 +120,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformVariableStatement(s, node)
 	case ast.KindExpressionStatement:
 		return transformExpressionStatement(s, node)
+	case ast.KindIfStatement:
+		return transformIfStatement(s, node)
 	}
 
 	// Remaining upstream-supported statements (blocks, control flow,
@@ -142,7 +148,7 @@ func transformCallExpression(s *State, node *ast.Node) luau.Expression {
 	}
 
 	expression := TransformExpression(s, callee)
-	args := luau.NewList[luau.Expression](transformExpressionsLeftToRight(s, call.Arguments.Nodes)...)
+	args := luau.NewList[luau.Expression](ensureTransformOrder(s, call.Arguments.Nodes)...)
 	return luau.NewCall(convertToIndexableExpression(expression), args)
 }
 
@@ -154,66 +160,4 @@ func convertToIndexableExpression(expression luau.Expression) luau.IndexableExpr
 		return expression.(luau.IndexableExpression)
 	}
 	return luau.NewParenthesized(expression)
-}
-
-// transformExpressionsLeftToRight transforms sibling expressions (call args,
-// array elements, template spans) in source order. Upstream routes these
-// through util/ensureTransformOrder.ts, which additionally pins earlier
-// expressions into temps when a later sibling produces prerequisite
-// statements; no Task 6 transform produces prereqs, so plain source order is
-// behavior-identical here. ensureTransformOrder: Task 10.
-func transformExpressionsLeftToRight(s *State, nodes []*ast.Node) []luau.Expression {
-	result := make([]luau.Expression, len(nodes))
-	for i, node := range nodes {
-		result[i] = TransformExpression(s, node)
-	}
-	return result
-}
-
-// ---------------------------------------------------------------------------
-// Binary (minimal path — full binary/logical/assignment support: Task 9)
-// ---------------------------------------------------------------------------
-
-// transformBinaryExpression ports expressions/transformBinaryExpression.ts
-// for the banned-operator diagnostics and the `+` operator (the `..` vs `+`
-// decision of util/createBinaryFromOperator.ts createBinaryAdd). Everything
-// else — logical, assignment, comparison, arithmetic, bitwise: Task 9.
-// validateNotAnyType gating: Task 8 (type predicates).
-func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
-	expression := node.AsBinaryExpression()
-	operatorKind := expression.OperatorToken.Kind
-
-	switch operatorKind {
-	case ast.KindEqualsEqualsToken:
-		s.Diags.Add(DiagNoEqualsEquals(node))
-		return luau.NewNone()
-	case ast.KindExclamationEqualsToken:
-		s.Diags.Add(DiagNoExclamationEquals(node))
-		return luau.NewNone()
-	case ast.KindPlusToken:
-		ordered := transformExpressionsLeftToRight(s, []*ast.Node{expression.Left, expression.Right})
-		return createBinaryAdd(s, expression, ordered[0], ordered[1])
-	}
-
-	s.Diags.Add(DiagRotorNotYetSupported(node, "operator `"+kindName(operatorKind)+"`"))
-	return luau.NewNone()
-}
-
-// createBinaryAdd ports util/createBinaryFromOperator.ts createBinaryAdd: if
-// either side is definitely a string, emit `..` concatenation with
-// `tostring()` wrapped around any side that is not definitely a string; else
-// numeric `+`.
-func createBinaryAdd(s *State, expression *ast.BinaryExpression, left, right luau.Expression) luau.Expression {
-	leftIsString := IsDefinitelyType(s, s.GetType(expression.Left), IsStringType)
-	rightIsString := IsDefinitelyType(s, s.GetType(expression.Right), IsStringType)
-	if leftIsString || rightIsString {
-		if !leftIsString {
-			left = luau.NewCall(luau.GlobalID("tostring"), luau.NewList[luau.Expression](left))
-		}
-		if !rightIsString {
-			right = luau.NewCall(luau.GlobalID("tostring"), luau.NewList[luau.Expression](right))
-		}
-		return luau.NewBinary(left, "..", right)
-	}
-	return luau.NewBinary(left, "+", right)
 }

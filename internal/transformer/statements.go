@@ -134,66 +134,134 @@ func transformExpressionStatement(s *State, node *ast.Node) *luau.List[luau.Stat
 	return transformExpressionStatementInner(s, expression)
 }
 
+// transformUnaryExpressionStatement ports transformExpressionStatement.ts
+// transformUnaryExpressionStatement (L13-24): ++/-- as a whole statement
+// needs no temp — `transformWritableExpression(operand, readAfterWrite =
+// false)` plus a single `+= 1` / `-= 1` assignment.
+func transformUnaryExpressionStatement(s *State, expression *ast.Node) luau.Statement {
+	var operand *ast.Node
+	var operatorKind ast.Kind
+	if ast.IsPrefixUnaryExpression(expression) {
+		unary := expression.AsPrefixUnaryExpression()
+		operand, operatorKind = unary.Operand, unary.Operator
+	} else {
+		unary := expression.AsPostfixUnaryExpression()
+		operand, operatorKind = unary.Operand, unary.Operator
+	}
+
+	writable := transformWritableExpression(s, operand, false)
+	operator := luau.AssignmentOperator("+=")
+	if operatorKind == ast.KindMinusMinusToken {
+		operator = "-="
+	}
+	return luau.NewAssignment(writable, operator, luau.Num(1))
+}
+
+// isUnaryAssignmentOperator ports typeGuards.ts isUnaryAssignmentOperator
+// (L13-17).
+func isUnaryAssignmentOperator(operator ast.Kind) bool {
+	return operator == ast.KindPlusPlusToken || operator == ast.KindMinusMinusToken
+}
+
 // transformExpressionStatementInner ports transformExpressionStatementInner
-// (L26-84). Phase 2 first-wave scope:
-//   - simple `=` assignment with an identifier lvalue (ported below);
-//   - logical assignment (&&=, ||=, ??=), compound operators (+= etc.),
-//     property/element lvalues, and the ++/-- statement specialization —
-//     full assignment ops: Task 9;
-//   - destructuring assignment (array/object literal LHS) — destructuring task;
-//   - everything else: wrapExpressionStatement discard semantics.
+// (L26-84): the statement-position specializations for assignments and
+// ++/-- (no value temps), with wrapExpressionStatement discard semantics for
+// everything else. Destructuring-assignment LHS falls through to
+// transformBinaryExpression, whose destructuring entry raises
+// rotorNotYetSupported (destructuring task); upstream routes it the same way
+// and transforms it there.
 func transformExpressionStatementInner(s *State, expression *ast.Node) *luau.List[luau.Statement] {
 	if ast.IsBinaryExpression(expression) {
 		binary := expression.AsBinaryExpression()
 		operatorKind := binary.OperatorToken.Kind
-		if ast.IsAssignmentOperator(operatorKind) {
-			if ast.IsArrayLiteralExpression(binary.Left) || ast.IsObjectLiteralExpression(binary.Left) {
-				s.Diags.Add(DiagRotorNotYetSupported(expression, "destructuring assignment"))
-				return luau.NewList[luau.Statement]()
-			}
-			if operatorKind == ast.KindEqualsToken {
-				if left := SkipDownwards(binary.Left); ast.IsIdentifier(left) {
-					return transformSimpleIdentifierAssignment(s, left, binary.Right)
-				}
-				// property/element access lvalues: Task 9/10.
-				s.Diags.Add(DiagRotorNotYetSupported(expression,
-					"assignment to "+kindName(SkipDownwards(binary.Left).Kind)))
-				return luau.NewList[luau.Statement]()
-			}
-			// full assignment ops: Task 9.
+		if ast.IsLogicalOrCoalescingAssignmentExpression(expression) {
+			// transformLogicalOrCoalescingAssignmentExpressionStatement
+			// (&&=, ||=, ??=): later task.
 			s.Diags.Add(DiagRotorNotYetSupported(expression, "operator `"+kindName(operatorKind)+"`"))
 			return luau.NewList[luau.Statement]()
+		} else if ast.IsAssignmentOperator(operatorKind) &&
+			!ast.IsArrayLiteralExpression(binary.Left) &&
+			!ast.IsObjectLiteralExpression(binary.Left) {
+			writableType := s.GetType(binary.Left)
+			valueType := s.GetType(binary.Right)
+			operator, isSimple := getSimpleAssignmentOperator(s, writableType, operatorKind, valueType)
+			// NOTE both flags are false for simple operators: statement
+			// position never re-reads the target (compare the expression form
+			// in transformBinaryExpression, which passes true, !isSimple).
+			assignment := transformWritableAssignment(s, binary.Left, binary.Right, !isSimple, !isSimple)
+			if isSimple {
+				return luau.NewList[luau.Statement](luau.NewAssignment(
+					assignment.writable,
+					operator,
+					getAssignableValue(s, operator, assignment.value, valueType),
+				))
+			}
+			return luau.NewList[luau.Statement](createCompoundAssignmentStatement(
+				s, assignment.writable, writableType, assignment.readable, operatorKind, assignment.value, valueType,
+			))
 		}
+	} else if (ast.IsPrefixUnaryExpression(expression) && isUnaryAssignmentOperator(expression.AsPrefixUnaryExpression().Operator)) ||
+		(ast.IsPostfixUnaryExpression(expression) && isUnaryAssignmentOperator(expression.AsPostfixUnaryExpression().Operator)) {
+		return luau.NewList[luau.Statement](transformUnaryExpressionStatement(s, expression))
 	}
-	// ++/-- statement specialization (upstream L76-81): Task 9 — until then
-	// prefix/postfix unary falls through to TransformExpression, whose unary
-	// path raises rotorNotYetSupported.
 
 	return wrapExpressionStatement(TransformExpression(s, expression))
 }
 
-// transformSimpleIdentifierAssignment ports the identifier-lvalue slice of
-// transformExpressionStatementInner's assignment branch: upstream routes
-// `x = y` through getSimpleAssignmentOperator (always "=" for EqualsToken) and
-// transformWritableAssignment(state, left, right, false, false). For an
-// identifier lvalue transformWritableExpression degenerates to
-// transformExpression(skipDownwards(left)) + a writability assert, the
-// readable binding is never consulted (readBeforeWrite=false), and
-// getAssignableValue returns the value unchanged for "=".
-// full assignment ops: Task 9.
-func transformSimpleIdentifierAssignment(s *State, left, right *ast.Node) *luau.List[luau.Statement] {
-	transformed := TransformExpression(s, left)
-	writable, ok := transformed.(luau.WritableExpression)
-	if !ok {
-		panic("transformer: assignment lvalue is not writable") // upstream assert
+// ---------------------------------------------------------------------------
+// If statements — statements/transformIfStatement.ts
+// ---------------------------------------------------------------------------
+
+// getStatements ports util/getStatements.ts: a Block's statement list, or the
+// single statement itself.
+func getStatements(statement *ast.Node) []*ast.Node {
+	if ast.IsBlock(statement) {
+		return statement.AsBlock().Statements.Nodes
+	}
+	return []*ast.Node{statement}
+}
+
+// transformIfStatementInner ports transformIfStatement.ts
+// transformIfStatementInner (L9-38): truthiness-wrapped condition, statement
+// lists for both branches. An `else if` whose transform produced prereqs
+// cannot live in an `elseif` clause, so the elseBody becomes a statement list
+// `[...prereqs, IfStatement]` (rendering as `else` + nested `if`); otherwise
+// the IfStatement attaches directly (renders as `elseif`).
+func transformIfStatementInner(s *State, node *ast.Node) *luau.IfStatement {
+	statement := node.AsIfStatement()
+	condition := CreateTruthinessChecks(s, TransformExpression(s, statement.Expression), statement.Expression, s.GetType(statement.Expression))
+
+	statements := TransformStatementList(s, statement.ThenStatement, getStatements(statement.ThenStatement), nil)
+
+	elseStatement := statement.ElseStatement
+
+	var elseBody luau.NodeOrList
+	if elseStatement == nil {
+		elseBody = luau.NewList[luau.Statement]()
+	} else if ast.IsIfStatement(elseStatement) {
+		var elseIf *luau.IfStatement
+		elseIfPrereqs := s.CaptureStatements(func() {
+			elseIf = transformIfStatementInner(s, elseStatement)
+		})
+		if elseIfPrereqs.IsEmpty() {
+			elseBody = elseIf
+		} else {
+			elseIfStatements := luau.NewList[luau.Statement]()
+			elseIfStatements.PushList(elseIfPrereqs)
+			elseIfStatements.Push(elseIf)
+			elseBody = elseIfStatements
+		}
+	} else {
+		elseBody = TransformStatementList(s, elseStatement, getStatements(elseStatement), nil)
 	}
 
-	value, prereqs := s.Capture(func() luau.Expression {
-		return TransformExpression(s, right)
-	})
-	s.PrereqList(prereqs)
+	return luau.NewIf(condition, statements, elseBody)
+}
 
-	return luau.NewList[luau.Statement](luau.NewAssignment(writable, "=", value))
+// transformIfStatement ports transformIfStatement.ts transformIfStatement
+// (L40-42).
+func transformIfStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	return luau.NewList[luau.Statement](transformIfStatementInner(s, node))
 }
 
 // wrapExpressionStatement ports util/wrapExpressionStatement.ts: an

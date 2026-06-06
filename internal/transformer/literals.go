@@ -81,7 +81,7 @@ func transformTemplateExpression(s *State, node *ast.Node) luau.Expression {
 	for i, span := range spans {
 		spanExpressions[i] = span.AsTemplateSpan().Expression
 	}
-	orderedExpressions := transformExpressionsLeftToRight(s, spanExpressions)
+	orderedExpressions := ensureTransformOrder(s, spanExpressions)
 
 	for i, span := range spans {
 		parts.Push(orderedExpressions[i])
@@ -106,7 +106,7 @@ func transformArrayLiteralExpression(s *State, node *ast.Node) luau.Expression {
 			return luau.NewNone()
 		}
 	}
-	members := luau.NewList[luau.Expression](transformExpressionsLeftToRight(s, elements)...)
+	members := luau.NewList[luau.Expression](ensureTransformOrder(s, elements)...)
 	return luau.NewArray(members)
 }
 
