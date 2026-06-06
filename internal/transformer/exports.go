@@ -286,7 +286,13 @@ func (s *State) GetModuleExports(moduleSymbol *ast.Symbol) []*ast.Symbol {
 		if gi != gj {
 			return gi < gj // binder pass: function declarations first
 		}
-		return pi < pj
+		if pi != pj {
+			return pi < pj
+		}
+		// Final tiebreaker: keep the order deterministic even when two
+		// symbols share a declaration position (map iteration order would
+		// otherwise leak through).
+		return exports[i].Name < exports[j].Name
 	})
 	s.Multi.GetModuleExportsCache[moduleSymbol] = exports
 	return exports
@@ -321,6 +327,12 @@ func (s *State) GetModuleExportsAliasMap(moduleSymbol *ast.Symbol) map[*ast.Symb
 // one (bound in the binder's functions-first pass), otherwise pass 1 with the
 // first-bound declaration's position. tsgo appends Symbol.Declarations in
 // binding order, so Declarations[0] is the insertion-defining declaration.
+//
+// NOTE: the "any FunctionDeclaration → pass 0" rule assumes top-level
+// functions: bindEachFunctionsFirst applies per container, so once
+// namespaces (ModuleBlock containers) land, a function nested in a namespace
+// is not bound in the source file's functions-first pass and this must be
+// keyed on the declaration's container instead.
 func exportSortKey(symbol *ast.Symbol) (file string, pass int, pos int, ok bool) {
 	var decl *ast.Node
 	for _, d := range symbol.Declarations {
@@ -340,6 +352,10 @@ func exportSortKey(symbol *ast.Symbol) (file string, pass int, pos int, ok bool)
 	if decl == nil {
 		return "", 0, 0, false
 	}
+	// TODO(phase-3 imports): the filename-primary key cannot reproduce
+	// upstream's cross-file insertion order — `export ... from` star-exports
+	// interleave symbols from re-exported modules in resolution order, not
+	// filename order. Revisit when `export ... from` lands.
 	if sf := ast.GetSourceFileOfNode(decl); sf != nil {
 		file = sf.FileName()
 	}

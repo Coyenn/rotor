@@ -59,8 +59,8 @@ func transformVariable(s *State, identifier *ast.Node, right luau.Expression) lu
 // declaration demoted to an assignment (transformVariable sees IsHoisted).
 // Runs at DECLARATIONS, distinct from checkIdentifierHoist (use-before-
 // declare, at references). Keyed on the CaseClause in HoistsByStatement —
-// consumed by the switch transform's createHoistDeclaration (Task 6 wires
-// switch; until then no CaseClause-scoped declaration reaches a transform).
+// consumed by the switch transform's createHoistDeclaration; switch
+// statements are live, so this fires for case-clause-scoped declarations.
 func checkVariableHoist(s *State, identifier *ast.Node, symbol *ast.Symbol) {
 	if _, decided := s.IsHoisted[symbol]; decided {
 		return
