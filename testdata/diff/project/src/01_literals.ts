@@ -1,0 +1,15 @@
+const a = 5;
+const b = 3.25;
+const c = 0xff;
+const d = 0b101;
+const e = 1_000_000;
+const s1 = "double";
+const s2 = 'single';
+const s3 = "escape \"quotes\" and \\ backslash";
+const t = true;
+const f = false;
+const arr = [1, 2, 3];
+const empty: Array<number> = [];
+const obj = { x: 1, y: "two", ["computed key"]: 3 };
+const tmpl = `value is ${a} and ${s1}`;
+print(a, b, c, d, e, s1, s2, s3, t, f, arr, empty, obj, tmpl);

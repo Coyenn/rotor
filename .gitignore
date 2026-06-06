@@ -1,3 +1,6 @@
 *.exe
 *.test
 /tmp/
+testdata/diff/project/node_modules/
+testdata/diff/project/out/
+testdata/diff/project/include/

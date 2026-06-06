@@ -1,0 +1,11 @@
+const arr = [10, 20, 30];
+const first = arr[0];
+const second = arr[1];
+let idx = 2;
+const dynamic = arr[idx];
+const obj = { alpha: 1, ["beta key"]: 2 };
+const byProp = obj.alpha;
+const byString = obj["beta key"];
+const nested = { inner: { deep: "value" } };
+print(first, second, dynamic, byProp, byString, nested.inner.deep);
+print(math.floor(3.7), math.max(1, 2, 3), tostring(42), tonumber("7"));

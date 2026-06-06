@@ -1,0 +1,12 @@
+let i = 0;
+i++;
+i--;
+++i;
+const neg = -i;
+const pos = 5;
+const negExpr = -(pos + 1);
+const notted = !false;
+print(i, neg, negExpr, notted);
+const after = i++;
+const before = ++i;
+print(after, before, i);

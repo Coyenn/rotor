@@ -1,0 +1,10 @@
+{
+	"name": "rotor-diff-fixtures",
+	"version": "1.0.0",
+	"devDependencies": {
+		"roblox-ts": "3.0.0",
+		"typescript": "5.5.3",
+		"@rbxts/compiler-types": "3.0.0-types.0",
+		"@rbxts/types": "^1.0.800"
+	}
+}
