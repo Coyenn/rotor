@@ -1,8 +1,6 @@
 package transformer
 
 import (
-	"strings"
-
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
 )
@@ -47,19 +45,24 @@ func TransformIdentifier(s *State, node *ast.Node) luau.Expression {
 
 	// Macro hook points (upstream L132-159) — upstream consults the
 	// MacroManager here for:
-	//   - identifier macros (getIdentifierMacro, e.g. `script`, `Promise`),
+	//   - identifier macros (getIdentifierMacro, e.g. `Promise`),
 	//   - constructor-macro misuse (getFirstConstructSymbol +
 	//     getConstructorMacro -> noMacroExtends / noConstructorMacroWithoutNew),
 	//   - call-macro misuse outside call position (getCallMacro ->
 	//     noIndexWithoutCall).
-	// rotor has no macro tables yet. Every value the MacroManager registers is
-	// declared by @rbxts/compiler-types, so Phase 2 treats any symbol declared
-	// there as a macro and rejects it loudly — in EVERY position, including
-	// the call position upstream defers to transformCallExpression, because
-	// emitting a macro's name as a plain global would be silently wrong
-	// output. full macro tables: Phase 3.
-	if isCompilerTypesSymbol(symbol) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+node.Text()+"`"))
+	// GetIdentifierMacro's compiler-types fallback keeps the Phase 2 blanket:
+	// any compiler-types-declared symbol in identifier position is rejected
+	// loudly — in EVERY position, including the call position upstream defers
+	// to transformCallExpression, because emitting a macro's name as a plain
+	// global would be silently wrong output. NOTE constructor-macro NEW
+	// expressions never reach here: transformNewExpression dispatches the
+	// macro before transforming its callee. Phase 3b narrows this to the real
+	// table plus the misuse guards above.
+	if macro := s.Macros().GetIdentifierMacro(symbol); macro != nil {
+		if macro.Macro != nil {
+			return macro.Macro(s, node)
+		}
+		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
 		return luau.NewNone()
 	}
 
@@ -248,18 +251,4 @@ func isGlobalThisSymbol(symbol *ast.Symbol) bool {
 	return symbol.Name == "globalThis" &&
 		symbol.Flags&ast.SymbolFlagsModule != 0 &&
 		len(symbol.Declarations) == 0
-}
-
-// isCompilerTypesSymbol reports whether symbol is declared by the
-// @rbxts/compiler-types package — upstream's MacroManager builds its macro
-// tables exclusively from those declaration files, so this is the Phase 2
-// stand-in for "symbol has a macro". full macro tables: Phase 3.
-func isCompilerTypesSymbol(symbol *ast.Symbol) bool {
-	for _, declaration := range symbol.Declarations {
-		if sf := ast.GetSourceFileOfNode(declaration); sf != nil &&
-			strings.Contains(sf.FileName(), "node_modules/@rbxts/compiler-types/") {
-			return true
-		}
-	}
-	return false
 }

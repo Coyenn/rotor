@@ -60,6 +60,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return luau.Bool(true)
 	case ast.KindIdentifier:
 		return TransformIdentifier(s, node)
+	case ast.KindNewExpression:
+		return transformNewExpression(s, node)
 	case ast.KindNoSubstitutionTemplateLiteral:
 		return transformNoSubstitutionTemplateLiteral(s, node)
 	case ast.KindNumericLiteral:

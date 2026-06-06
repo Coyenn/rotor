@@ -26,6 +26,13 @@ type MultiState struct {
 	IsReportedByMultipleDefinitionsCache map[*ast.Symbol]bool
 	GetModuleExportsCache                map[*ast.Symbol][]*ast.Symbol
 	GetModuleExportsAliasMapCache        map[*ast.Symbol]map[*ast.Symbol]string
+
+	// macroManager is the upstream TransformServices analog: ONE MacroManager
+	// per compilation pass, shared across every file's State (upstream
+	// constructs it next to the MultiTransformState in compileFiles.ts and
+	// threads it through `services`). Built by NewState from the first
+	// checker-bearing State; see State.Macros.
+	macroManager *MacroManager
 }
 
 // NewMultiState returns an empty compilation-step cache container.
@@ -113,35 +120,30 @@ type State struct {
 	// module's exports table (source file symbol -> `exports`; namespaces ->
 	// their container id).
 	moduleIDBySymbol map[*ast.Symbol]luau.AnyIdentifier
-
-	// ambientSymbolCache memoizes AmbientSymbol lookups (nil results too —
-	// presence in the map marks "resolved").
-	ambientSymbolCache map[string]*ast.Symbol
-
-	// luaTupleNominal caches the `_nominal_LuaTuple` property symbol resolved
-	// from the ambient LuaTuple<T> alias (see LuaTupleNominalSymbol).
-	luaTupleNominal         *ast.Symbol
-	luaTupleNominalResolved bool
 }
 
 // NewState constructs the per-file transform state. program/chk/sourceFile may
 // be nil for checker-free prereq-mechanics tests (see NewTestState).
 func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.SourceFile, diags *DiagService, multi *MultiState) *State {
 	s := &State{
-		Program:            program,
-		Checker:            chk,
-		SourceFile:         sourceFile,
-		Diags:              diags,
-		Multi:              multi,
-		getTypeCache:       make(map[*ast.Node]*checker.Type),
-		HoistsByStatement:  make(map[*ast.Node][]*ast.Node),
-		IsHoisted:          make(map[*ast.Symbol]bool),
-		SymbolToID:         make(map[*ast.Symbol]*luau.TemporaryIdentifier),
-		moduleIDBySymbol:   make(map[*ast.Symbol]luau.AnyIdentifier),
-		ambientSymbolCache: make(map[string]*ast.Symbol),
+		Program:           program,
+		Checker:           chk,
+		SourceFile:        sourceFile,
+		Diags:             diags,
+		Multi:             multi,
+		getTypeCache:      make(map[*ast.Node]*checker.Type),
+		HoistsByStatement: make(map[*ast.Node][]*ast.Node),
+		IsHoisted:         make(map[*ast.Symbol]bool),
+		SymbolToID:        make(map[*ast.Symbol]*luau.TemporaryIdentifier),
+		moduleIDBySymbol:  make(map[*ast.Symbol]luau.AnyIdentifier),
 	}
 	if sourceFile != nil {
 		s.SourceFileText = sourceFile.Text()
+	}
+	// One MacroManager per compilation pass (upstream constructs it once per
+	// Program); the first checker-bearing State builds it.
+	if multi.macroManager == nil && chk != nil {
+		multi.macroManager = NewMacroManager(chk)
 	}
 	return s
 }
@@ -303,46 +305,31 @@ func (s *State) RuntimeLib(node *ast.Node, name string) luau.IndexableExpression
 }
 
 // ---------------------------------------------------------------------------
-// Ambient symbols (upstream MacroManager SYMBOL_NAMES registration)
+// MacroManager access (upstream services.macroManager)
 // ---------------------------------------------------------------------------
 
-// NominalLuaTupleName ports Shared/constants.ts NOMINAL_LUA_TUPLE_NAME.
-const NominalLuaTupleName = "_nominal_LuaTuple"
-
-// AmbientSymbol resolves a global ambient symbol by name, memoized (including
-// misses). Ports the MacroManager SYMBOL_NAMES table population:
-// `typeChecker.resolveName(symbolName, undefined, ts.SymbolFlags.All, false)`.
-// Upstream throws when @rbxts/compiler-types is missing; rotor returns nil so
-// checker-light test projects keep working (callers nil-guard).
-func (s *State) AmbientSymbol(name string) *ast.Symbol {
-	if symbol, ok := s.ambientSymbolCache[name]; ok {
-		return symbol
+// Macros returns the pass-wide MacroManager (upstream
+// state.services.macroManager), creating an empty one lazily for
+// checker-free mechanics states.
+func (s *State) Macros() *MacroManager {
+	if s.Multi.macroManager == nil {
+		s.Multi.macroManager = NewMacroManager(s.Checker)
 	}
-	symbol := s.Checker.ResolveName(name, nil, ast.SymbolFlagsAll, false)
-	s.ambientSymbolCache[name] = symbol
-	return symbol
+	return s.Multi.macroManager
+}
+
+// AmbientSymbol resolves a global ambient symbol by name through the
+// MacroManager's SYMBOL_NAMES registry (upstream
+// macroManager.getSymbolOrThrow; rotor returns nil instead of throwing so
+// checker-light test projects keep working — callers nil-guard).
+func (s *State) AmbientSymbol(name string) *ast.Symbol {
+	return s.Macros().Symbol(name)
 }
 
 // LuaTupleNominalSymbol resolves the `_nominal_LuaTuple` property symbol from
-// the ambient LuaTuple<T> type alias, memoized. Ports the MacroManager
-// constructor tail: find the LuaTuple TypeAliasDeclaration, take the type at
-// that location, and grab its NOMINAL_LUA_TUPLE_NAME property. nil when the
-// project has no @rbxts/compiler-types.
+// the ambient LuaTuple<T> type alias (see MacroManager.LuaTupleNominalSymbol).
 func (s *State) LuaTupleNominalSymbol() *ast.Symbol {
-	if s.luaTupleNominalResolved {
-		return s.luaTupleNominal
-	}
-	s.luaTupleNominalResolved = true
-	if luaTupleSymbol := s.AmbientSymbol("LuaTuple"); luaTupleSymbol != nil {
-		for _, declaration := range luaTupleSymbol.Declarations {
-			if ast.IsTypeAliasDeclaration(declaration) {
-				t := s.Checker.GetTypeAtLocation(declaration)
-				s.luaTupleNominal = s.Checker.GetPropertyOfType(t, NominalLuaTupleName)
-				break
-			}
-		}
-	}
-	return s.luaTupleNominal
+	return s.Macros().LuaTupleNominalSymbol()
 }
 
 // ---------------------------------------------------------------------------

@@ -11,11 +11,10 @@ import (
 // util/convertToIndexableExpression.ts, util/expressionMightMutate.ts,
 // util/wrapReturnIfLuaTuple.ts, util/arrayBindingPatternContainsHoists.ts.
 //
-// Macro hook points (macroManager.getCallMacro / getPropertyCallMacro) follow
-// the Phase 2 stand-in from identifier.go: every macro upstream registers is
-// declared by @rbxts/compiler-types, so a compiler-types-declared symbol at a
-// macro hook raises rotorNotYetSupported instead of silently-wrong output.
-// full macro tables (runCallMacro): Phase 3.
+// Macro hook points query the MacroManager (macromanager.go); registered
+// entries with a nil Macro are known upstream macros rotor has not
+// implemented yet and raise rotorNotYetSupported instead of silently-wrong
+// output. full macro tables (runCallMacro): Phase 3b.
 
 // convertToIndexableExpression ports util/convertToIndexableExpression.ts:
 // wrap non-indexable expressions in parentheses so they can be indexed or
@@ -25,60 +24,6 @@ func convertToIndexableExpression(expression luau.Expression) luau.IndexableExpr
 		return expression.(luau.IndexableExpression)
 	}
 	return luau.NewParenthesized(expression)
-}
-
-// ---------------------------------------------------------------------------
-// Macro stand-ins (Phase 2; full macro tables: Phase 3)
-// ---------------------------------------------------------------------------
-
-// isCallMacroSymbol stands in for macroManager.getCallMacro(symbol): every
-// upstream CALL_MACROS entry (typeOf, typeIs, identity, $range, ...) is a
-// `declare function` in @rbxts/compiler-types. Restricting to
-// FunctionDeclaration declarations keeps compiler-types TYPES (e.g. a
-// Callback-typed value's anonymous function type) callable.
-func isCallMacroSymbol(symbol *ast.Symbol) bool {
-	if !isCompilerTypesSymbol(symbol) {
-		return false
-	}
-	for _, declaration := range symbol.Declarations {
-		if ast.IsFunctionDeclaration(declaration) {
-			return true
-		}
-	}
-	return false
-}
-
-// isTypeCheckCallMacroSymbol stands in for `macro === CALL_MACROS.typeIs ||
-// macro === CALL_MACROS.typeOf` (isValidMethodIndexWithoutCall.ts L24-29).
-func isTypeCheckCallMacroSymbol(symbol *ast.Symbol) bool {
-	return (symbol.Name == "typeIs" || symbol.Name == "typeOf") && isCallMacroSymbol(symbol)
-}
-
-// isPropertyCallMacroSymbol stands in for
-// macroManager.getPropertyCallMacro(symbol): upstream PROPERTY_CALL_MACROS
-// keys are method-member symbols of compiler-types interfaces (Array.push,
-// Map.set, String.size, ...). Interface symbols themselves (e.g. the Array
-// type of `arr` in `arr[0]`) are NOT macros.
-func isPropertyCallMacroSymbol(symbol *ast.Symbol) bool {
-	if !isCompilerTypesSymbol(symbol) {
-		return false
-	}
-	for _, declaration := range symbol.Declarations {
-		if ast.IsMethodSignatureDeclaration(declaration) || ast.IsMethodDeclaration(declaration) {
-			return true
-		}
-	}
-	return false
-}
-
-// macroDisplayName renders a macro symbol for diagnostics, mirroring
-// upstream's `${symbol.parent.name}.${symbol.name}` assert text where a
-// parent exists (e.g. "Array.push").
-func macroDisplayName(symbol *ast.Symbol) string {
-	if symbol.Parent != nil && luau.IsValidIdentifier(symbol.Parent.Name) {
-		return symbol.Parent.Name + "." + symbol.Name
-	}
-	return symbol.Name
 }
 
 // ---------------------------------------------------------------------------
@@ -270,10 +215,14 @@ func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expr
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
-	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil && isCallMacroSymbol(symbol) {
-		// upstream: runCallMacro(macro, state, node, expression, nodeArguments)
-		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macroDisplayName(symbol)+"`"))
-		return luau.NewNone()
+	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
+		if macro := s.Macros().GetCallMacro(symbol); macro != nil {
+			// upstream: runCallMacro(macro, state, node, expression,
+			// nodeArguments) — lands with the Phase 3b macro tables; every
+			// registered entry is a sentinel until then.
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+			return luau.NewNone()
+		}
 	}
 
 	var args []luau.Expression
@@ -308,10 +257,13 @@ func transformPropertyCallExpressionInner(s *State, node *ast.Node, expression *
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
-	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil && isPropertyCallMacroSymbol(symbol) {
-		// upstream: runCallMacro(macro, state, node, baseExpression, nodeArguments)
-		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macroDisplayName(symbol)+"`"))
-		return luau.NewNone()
+	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
+		if macro := s.Macros().GetPropertyCallMacro(symbol); macro != nil {
+			// upstream: runCallMacro(macro, state, node, baseExpression,
+			// nodeArguments) — Phase 3b; sentinel until then.
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+			return luau.NewNone()
+		}
 	}
 
 	var args []luau.Expression
@@ -369,10 +321,13 @@ func transformElementCallExpressionInner(s *State, node *ast.Node, expression *a
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
-	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil && isPropertyCallMacroSymbol(symbol) {
-		// upstream: runCallMacro(macro, state, node, baseExpression, nodeArguments)
-		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macroDisplayName(symbol)+"`"))
-		return luau.NewNone()
+	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
+		if macro := s.Macros().GetPropertyCallMacro(symbol); macro != nil {
+			// upstream: runCallMacro(macro, state, node, baseExpression,
+			// nodeArguments) — Phase 3b; sentinel until then.
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+			return luau.NewNone()
+		}
 	}
 
 	var ordered []luau.Expression

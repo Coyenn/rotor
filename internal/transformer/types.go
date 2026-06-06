@@ -443,6 +443,29 @@ func WalkTypes(s *State, t *checker.Type, callback func(t *checker.Type)) {
 	}
 }
 
+// getFirstConstructSymbol ports getFirstConstructSymbol (L226-242): the
+// symbol of the first construct-signature member found among the interface
+// declarations of the expression type's symbol, or nil. transformNewExpression
+// looks this up to dispatch constructor macros (the MacroManager registers
+// the construct-signature symbols of the GLOBAL interfaces, so user-defined
+// shadowing types won't collide).
+func getFirstConstructSymbol(s *State, expression *ast.Node) *ast.Symbol {
+	symbol := s.GetType(expression).Symbol()
+	if symbol == nil {
+		return nil
+	}
+	for _, declaration := range symbol.Declarations {
+		if ast.IsInterfaceDeclaration(declaration) {
+			for _, member := range declaration.AsInterfaceDeclaration().Members.Nodes {
+				if ast.IsConstructSignatureDeclaration(member) {
+					return member.Symbol()
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // GetFirstDefinedSymbol ports getFirstDefinedSymbol (L244-254):
 // union/intersection -> first member with a non-undefined symbol; otherwise
 // the type's own symbol (which may be nil).

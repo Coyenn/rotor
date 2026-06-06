@@ -448,13 +448,14 @@ func unaryOperandAndOperator(node *ast.Node) (*ast.Node, ast.Kind) {
 }
 
 // isSizeMacro ports isSizeMacro (L334-346): a call whose callee symbol is the
-// `size` property-call macro (e.g. `arr.size()`), using the Phase 2 macro
-// stand-in from call.go.
+// `size` property-call macro (e.g. `arr.size()`). Upstream:
+// `macroManager.getPropertyCallMacro(symbol)` non-nil AND symbol.name ===
+// "size".
 func isSizeMacro(s *State, expression *ast.Node) bool {
 	if ast.IsCallExpression(expression) {
 		expType := s.Checker.GetNonOptionalType(s.GetType(expression.AsCallExpression().Expression))
 		symbol := GetFirstDefinedSymbol(s, expType)
-		if symbol != nil && symbol.Name == "size" && isPropertyCallMacroSymbol(symbol) {
+		if symbol != nil && symbol.Name == "size" && s.Macros().GetPropertyCallMacro(symbol) != nil {
 			return true
 		}
 	}

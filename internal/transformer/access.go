@@ -139,7 +139,7 @@ func isValidMethodIndexWithoutCall(s *State, node *ast.Node) bool {
 	// typeIs/typeOf macros
 	if ast.IsCallExpression(parent) {
 		expType := s.Checker.GetNonOptionalType(s.GetType(parent.AsCallExpression().Expression))
-		if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil && isTypeCheckCallMacroSymbol(symbol) {
+		if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil && s.Macros().IsTypeCheckCallMacro(symbol) {
 			return true
 		}
 	}
@@ -151,7 +151,7 @@ func isValidMethodIndexWithoutCall(s *State, node *ast.Node) bool {
 // itself, element access passes the object's type.
 func addIndexDiagnostics(s *State, node *ast.Node, expType *checker.Type) {
 	symbol := GetFirstDefinedSymbol(s, expType)
-	if (symbol != nil && isPropertyCallMacroSymbol(symbol)) ||
+	if (symbol != nil && s.Macros().GetPropertyCallMacro(symbol) != nil) ||
 		(!isValidMethodIndexWithoutCall(s, SkipUpwards(node)) && isMethod(s, node)) {
 		s.Diags.Add(DiagNoIndexWithoutCall(node))
 	}
