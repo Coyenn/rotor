@@ -76,6 +76,10 @@ func TestRenderLoops(t *testing.T) {
 			"for i = 1, 10 do\n\tf()\nend\n", // step of 1 omitted
 		},
 		{
+			stmts(luau.NewNumericFor(luau.ID("i"), luau.Num(1), luau.Num(10), luau.NewNumberLiteral("0x1"), body.Clone())),
+			"for i = 1, 10 do\n\tf()\nend\n", // hex step of 1 also omitted (JS Number("0x1") == 1)
+		},
+		{
 			stmts(luau.NewNumericFor(luau.ID("i"), luau.Num(1), luau.Num(10), luau.Num(2), body.Clone())),
 			"for i = 1, 10, 2 do\n\tf()\nend\n",
 		},

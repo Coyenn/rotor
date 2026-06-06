@@ -55,5 +55,13 @@ func renderStatements(s *RenderState, statements *luau.List[luau.Statement]) str
 // parseNumberValue mirrors JS Number(value) for literal forms the compiler emits.
 func parseNumberValue(text string) (float64, error) {
 	cleaned := strings.ReplaceAll(text, "_", "")
-	return strconv.ParseFloat(cleaned, 64)
+	f, err := strconv.ParseFloat(cleaned, 64)
+	if err == nil {
+		return f, nil
+	}
+	// JS Number() also accepts 0x/0b/0o integer forms that ParseFloat rejects.
+	if i, err2 := strconv.ParseInt(cleaned, 0, 64); err2 == nil {
+		return float64(i), nil
+	}
+	return 0, err
 }
