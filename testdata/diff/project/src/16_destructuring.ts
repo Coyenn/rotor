@@ -1,0 +1,12 @@
+const arr = [1, 2, 3, 4];
+const [first, second] = arr;
+const [, , third] = arr;
+const [head] = [10];
+const obj = { x: 1, y: 2, nested: { z: 3 } };
+const { x, y: renamed } = obj;
+const { nested: { z } } = obj;
+const { x: dx = 99, missing = 7 } = { x: 5 } as { x: number; missing?: number };
+let a = 0, b = 0;
+[a, b] = [b, a];
+({ x: a } = obj);
+print(first, second, third, head, x, renamed, z, dx, missing, a, b);
