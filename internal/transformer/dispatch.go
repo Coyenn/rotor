@@ -141,6 +141,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformIfStatement(s, node)
 	case ast.KindReturnStatement:
 		return transformReturnStatement(s, node)
+	case ast.KindSwitchStatement:
+		return transformSwitchStatement(s, node)
 	case ast.KindThrowStatement:
 		return transformThrowStatement(s, node)
 	case ast.KindVariableStatement:
@@ -151,9 +153,9 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformWhileStatement(s, node)
 	}
 
-	// Statement kinds not yet ported (classes, imports/exports, switch,
-	// try/catch, for-of, ...) report a not-yet-supported diagnostic rather
-	// than emitting wrong output.
+	// Statement kinds not yet ported (classes, imports/exports, try/catch,
+	// ...) report a not-yet-supported diagnostic rather than emitting wrong
+	// output.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewList[luau.Statement]()
 }
