@@ -45,12 +45,11 @@ type WritableExpression interface {
 	writableNode()
 }
 
-// TODO(Task 7): HasParameters mirrors the upstream HasParameters interface.
-// It is commented out until List[T] is introduced in Task 7.
-// type HasParameters interface {
-// 	Node
-// 	ParamData() (params *List[AnyIdentifier], hasDotDotDot bool)
-// }
+// HasParameters mirrors the upstream HasParameters interface.
+type HasParameters interface {
+	Node
+	ParamData() (params *List[AnyIdentifier], hasDotDotDot bool)
+}
 
 // base is embedded in every node struct.
 type base struct{ parent Node }
