@@ -32,10 +32,11 @@ import (
 //     `v:add(w)` method call (found by the Phase 3a randomness re-smoke:
 //     damage-numbers.ts). Phase 3b Task 3 added the String/ArrayLike rows
 //     (stringmacros.go) — 12 of the 13 String methods are @rbxts/types-
-//     declared (include/lua.d.ts) and had the same silent-miss problem. The
-//     remaining method tables (Array.push, Map.set, Promise.then, ...) land
-//     in Phase 3b Tasks 4-5; those interfaces are compiler-types-declared,
-//     so the fallback below covers detection.
+//     declared (include/lua.d.ts) and had the same silent-miss problem.
+//     Task 4 added the ReadonlyArray/Array rows (arraymacros.go,
+//     arraymacros2.go). The remaining method tables (Map.set, Promise.then,
+//     ...) land in Phase 3b Task 5; those interfaces are
+//     compiler-types-declared, so the fallback below covers detection.
 //
 // Fallback semantics (the Phase 2 stand-ins, centralized): every macro
 // upstream registers is declared by @rbxts/compiler-types, so a

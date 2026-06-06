@@ -23,3 +23,14 @@ func (c *Checker) GetTypeOfAssignmentPattern(expr *ast.Node) *Type {
 	}
 	return c.errorType
 }
+
+// GetIndexTypeOfType exposes getIndexTypeOfType (checker.go) for rotor's
+// ReadonlyArray.join macro: strada's public
+// `typeChecker.getIndexTypeOfType(type, ts.IndexKind.Number)` resolves to
+// `getIndexTypeOfType(type, numberType)` — the ELEMENT type of an array —
+// which roblox-ts consumes at propertyCallMacros.ts L168-171. Pass
+// c.GetNumberType() for IndexKind.Number. nil when no applicable index info
+// exists (same as strada's undefined).
+func (c *Checker) GetIndexTypeOfType(t *Type, keyType *Type) *Type {
+	return c.getIndexTypeOfType(t, keyType)
+}

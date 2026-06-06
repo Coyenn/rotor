@@ -1,0 +1,38 @@
+function isBig(v: number): boolean {
+	return v > 15;
+}
+const arr = [10, 20, 30];
+print(arr.isEmpty());
+print(arr.join());
+arr.move(0, 1, 3);
+print(arr.includes(20));
+print(arr.indexOf(20));
+print(arr.every((v) => v > 0));
+print(arr.some((v) => v > 25));
+arr.forEach((v, i) => print(v, i));
+print(arr.map((v, i) => v + i));
+print(arr.mapFiltered((v) => (v > 10 ? v : undefined)));
+const sparse: Array<number | undefined> = [10, undefined];
+print(sparse.filterUndefined());
+print(arr.filter((v) => v > 10));
+print(arr.filter(isBig));
+print(arr.reduce((a, b) => a + b));
+print(arr.reduce((a, b) => a + b, 0));
+print(arr.find((v) => v === 20));
+print(arr.findIndex((v) => v === 20));
+const list = [1, 2];
+list.push(3);
+const len = list.push(4, 5);
+print(len);
+list.pop();
+print(list.pop());
+print(list.shift());
+list.unshift(0);
+list.insert(0, 9);
+list.remove(0);
+list.unorderedRemove(0);
+list.sort();
+list.clear();
+let i = 2;
+list.insert(i - 1, 7);
+print(i);

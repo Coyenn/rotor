@@ -65,10 +65,11 @@ print(obj, lookup, arr, prev, i, mutObj)
 	}
 }
 
-// TestPropertyCallMacroRaisesDiagnostic: `arr.push(...)` resolves to the
-// compiler-types Array.push method symbol — upstream runs the property-call
-// macro, rotor Phase 2 must raise a clean rotorNotYetSupported diagnostic
-// (never silently-wrong output like `list:push(4)`).
+// TestPropertyCallMacroRaisesDiagnostic: `bag.add(...)` resolves to the
+// compiler-types Set.add method symbol — upstream runs the property-call
+// macro, rotor must raise a clean rotorNotYetSupported diagnostic until the
+// Set/Map tables land in Phase 3b Task 5 (never silently-wrong output like
+// `bag:add(4)`). The Array methods graduated out of this test in Task 4.
 func TestPropertyCallMacroRaisesDiagnostic(t *testing.T) {
 	s := buildState(t, filepath.Join("testdata", "calls"), "src/macro.ts")
 
@@ -80,12 +81,12 @@ func TestPropertyCallMacroRaisesDiagnostic(t *testing.T) {
 	}
 	found := false
 	for _, d := range ds {
-		if d.Code == "rotorNotYetSupported" && strings.Contains(d.Message, "macro `Array.push`") {
+		if d.Code == "rotorNotYetSupported" && strings.Contains(d.Message, "macro `Set.add`") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("no rotorNotYetSupported diagnostic mentioning macro `Array.push`; got: %v", ds)
+		t.Errorf("no rotorNotYetSupported diagnostic mentioning macro `Set.add`; got: %v", ds)
 	}
 }
 
