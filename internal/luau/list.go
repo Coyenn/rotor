@@ -56,7 +56,7 @@ func (l *List[T]) PushList(other *List[T]) {
 	l.assertWritable()
 	other.assertWritable()
 	other.ReadOnly = true
-	if other.Head != nil {
+	if other.Head != nil && other.Tail != nil {
 		if l.Head != nil {
 			l.Tail.Next = other.Head
 			other.Head.Prev = l.Tail
@@ -100,7 +100,7 @@ func (l *List[T]) UnshiftList(other *List[T]) {
 	l.assertWritable()
 	other.assertWritable()
 	other.ReadOnly = true
-	if other.Head != nil {
+	if other.Head != nil && other.Tail != nil {
 		if l.Head != nil {
 			l.Head.Prev = other.Tail
 			other.Tail.Next = l.Head
