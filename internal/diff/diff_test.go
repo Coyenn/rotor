@@ -33,6 +33,17 @@ func TestDifferential(t *testing.T) {
 		enabled[name] = true
 	}
 
+	// ONE project-wide compile (multi-file fixtures import each other, so a
+	// per-file CompileFile can no longer stand alone); each enabled manifest
+	// entry then diffs its out-file against the rbxtsc golden.
+	out, diags, err := compile.CompileProject(projDir)
+	if err != nil {
+		t.Fatalf("CompileProject error: %v (diagnostics: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("CompileProject diagnostics: %v", diags)
+	}
+
 	skipped := []string{}
 	for _, goldenPath := range goldens {
 		name := strings.TrimSuffix(filepath.Base(goldenPath), ".luau")
@@ -45,15 +56,9 @@ func TestDifferential(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, diags, err := compile.CompileFile(projDir, filepath.Join("src", name+".ts"))
-			if err != nil {
-				t.Fatalf("compile error: %v", err)
-			}
-			if len(diags) > 0 {
-				for _, d := range diags {
-					t.Errorf("diagnostic: %s", d)
-				}
-				t.FailNow()
+			got, ok := out["out/"+name+".luau"]
+			if !ok {
+				t.Fatalf("out/%s.luau missing from CompileProject output", name)
 			}
 			if got != string(want) {
 				t.Errorf("output differs from rbxtsc golden")

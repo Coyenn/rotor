@@ -25,4 +25,9 @@ var EnabledFixtures = []string{
 	"18_switch",
 	"19_closures",
 	"20_mixed2b",
+	"21a_util",
+	"21b_main",
+	"22a_base",
+	"22_exportfrom",
+	"23_new",
 }
