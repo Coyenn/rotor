@@ -380,7 +380,10 @@ func DiagIncorrectFileName(originalFileName, suggestedFileName, fullPath string)
 func DiagRojoPathInSrc(partitionPath, suggestedPath string) Diagnostic {
 	return errorDiag("rojoPathInSrc", nil,
 		"Invalid Rojo configuration. $path fields should be relative to out directory.",
-		suggestion(fmt.Sprintf("Change the value of $path from %q to %q.", partitionPath, suggestedPath)),
+		// Upstream interpolates the paths raw inside literal quotes
+		// (`from "${partitionPath}" to "${suggestedPath}"`, diagnostics.ts:233);
+		// Go's %q would double-escape Windows backslashes, so plain %s.
+		suggestion(fmt.Sprintf("Change the value of $path from \"%s\" to \"%s\".", partitionPath, suggestedPath)),
 	)
 }
 

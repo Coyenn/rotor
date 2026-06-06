@@ -220,11 +220,12 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 			continue
 		}
 
-		// Per-file pre-emit diagnostics; the first file with errors aborts
-		// the pass (compileFiles.ts L156-158 + the hasErrors early return).
-		// Running GetSemanticDiagnostics before transforming also populates
-		// the checker's alias-reference marks for this file (digest §7.3).
-		if tsDiags := program.GetSemanticDiagnostics(ctx, sourceFile); len(tsDiags) > 0 {
+		// Per-file pre-emit diagnostics (syntactic + semantic + checker
+		// globals); the first file with errors aborts the pass
+		// (compileFiles.ts L156-158 + the hasErrors early return). Running
+		// the semantic pass before transforming also populates the checker's
+		// alias-reference marks for this file (digest §7.3).
+		if tsDiags := preEmitDiagnostics(ctx, program, sourceFile); len(tsDiags) > 0 {
 			return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
 

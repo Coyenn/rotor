@@ -13,6 +13,7 @@ import (
 	"rotor/internal/luau/render"
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/compiler"
 )
 
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
@@ -45,10 +46,11 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	}
 
 	// Program-level option diagnostics (e.g. removed-option checks) plus this
-	// file's semantic diagnostics; any of them fails the compile before
-	// transforming, mirroring upstream's pre-emit bail (compileFiles.ts:151-156).
+	// file's pre-emit diagnostics (syntactic + semantic + checker globals); any
+	// of them fails the compile before transforming, mirroring upstream's
+	// pre-emit bail (compileFiles.ts:151-158).
 	tsDiags := program.GetProgramDiagnostics()
-	tsDiags = append(tsDiags, program.GetSemanticDiagnostics(ctx, sourceFile)...)
+	tsDiags = append(tsDiags, preEmitDiagnostics(ctx, program, sourceFile)...)
 	if len(tsDiags) > 0 {
 		return "", diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
@@ -87,6 +89,26 @@ func transformAndRender(state *transformer.State) (text string, diags []string, 
 	}
 
 	return render.RenderAST(luauAST), diags, nil
+}
+
+// preEmitDiagnostics ports the per-file half of ts.getPreEmitDiagnostics
+// (TypeScript program.ts), which rbxtsc runs for every compiled file
+// (compileFiles.ts:156). Upstream concatenates config-parse, options,
+// syntactic, global, and semantic diagnostics, then sorts and dedupes;
+// rbxtsc fails the file when any are present. Config-parse failures already
+// aborted in newProjectProgram and options diagnostics are program-level
+// (GetProgramDiagnostics, checked once by each caller), so this collects the
+// rest: syntactic first (upstream order), then semantic, then the checker's
+// global diagnostics — tsgo accumulates globals only as checkers run, so they
+// are queried after the semantic pass, exactly as tsgo's own CLI does
+// (compiler.GetDiagnosticsOfAnyProgram re-queries globals after checking).
+// Upstream sorts the combined list anyway, and any non-empty result aborts
+// the compile, so the global/semantic order swap is unobservable.
+func preEmitDiagnostics(ctx context.Context, program *compiler.Program, sourceFile *ast.SourceFile) []*ast.Diagnostic {
+	tsDiags := program.GetSyntacticDiagnostics(ctx, sourceFile)
+	tsDiags = append(tsDiags, program.GetSemanticDiagnostics(ctx, sourceFile)...)
+	tsDiags = append(tsDiags, program.GetGlobalDiagnostics(ctx)...)
+	return tsDiags
 }
 
 func diagnosticStrings(diags []*ast.Diagnostic) []string {

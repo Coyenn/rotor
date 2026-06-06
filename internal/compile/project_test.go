@@ -247,6 +247,36 @@ func TestCompileProjectNoRojoDataForFile(t *testing.T) {
 	}
 }
 
+// A file that does not parse must fail the compile. rbxtsc runs
+// ts.getPreEmitDiagnostics per file — syntactic diagnostics included — and
+// rejects this source with TS1128; tsgo's GetSemanticDiagnostics alone
+// reports nothing for the stray `}`, so CompileProject must collect
+// GetSyntacticDiagnostics too. The scoped package name makes this a Package
+// project, which needs no Rojo config, so the compile reaches the per-file
+// diagnostics pass.
+func TestCompileProjectSyntacticErrorFails(t *testing.T) {
+	dir := writeProject(t, "@syntax/error-fixture", "")
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const x = 5;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, diags, err := CompileProject(dir)
+	if err == nil {
+		t.Fatal("expected a hard error for the parse error")
+	}
+	if files != nil {
+		t.Errorf("files = %v, want nil", keys(files))
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics for the parse error")
+	}
+	// Syntactic diagnostics come first, mirroring upstream's
+	// getPreEmitDiagnostics ordering.
+	if !strings.Contains(diags[0], "Declaration or statement expected") {
+		t.Errorf("diags[0] = %q, want the TS1128 'Declaration or statement expected.' diagnostic (all: %v)", diags[0], diags)
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

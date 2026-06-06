@@ -165,6 +165,30 @@ func TestCompileFilePanicBecomesError(t *testing.T) {
 	}
 }
 
+// CompileFile mirror of TestCompileProjectSyntacticErrorFails: the
+// single-file fast path runs the same pre-emit collection, so a parse error
+// must surface as a diagnostic, never as silently-compiled output.
+func TestCompileFileSyntacticErrorFails(t *testing.T) {
+	dir := writeProject(t, "@syntax/error-fixture", "")
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const x = 5;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	text, diags, err := CompileFile(dir, filepath.Join("src", "main.ts"))
+	if err == nil {
+		t.Fatal("expected a hard error for the parse error")
+	}
+	if text != "" {
+		t.Errorf("text = %q, want empty", text)
+	}
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics for the parse error")
+	}
+	if !strings.Contains(diags[0], "Declaration or statement expected") {
+		t.Errorf("diags[0] = %q, want the TS1128 'Declaration or statement expected.' diagnostic (all: %v)", diags[0], diags)
+	}
+}
+
 func TestCompileFileMissingSource(t *testing.T) {
 	withStubDispatch(t)
 	_, _, err := CompileFile(fixtureProjectDir(t), filepath.Join("src", "does_not_exist.ts"))
