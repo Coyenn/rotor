@@ -9,12 +9,10 @@ import (
 // Parameters — nodes/transformParameters.ts, nodes/transformInitializer.ts
 // ---------------------------------------------------------------------------
 //
-// Pulled forward from the functions task (Task 3) alongside
-// transformFunctionExpression. Binding-pattern parameter names — both the
-// `...[a, b]` spread-array-pattern flattening (optimizeArraySpreadParameter,
-// L16-51) and ordinary destructuring params (L103-116) — depend on the
-// destructuring transforms (Task 4) and raise rotorNotYetSupported until
-// they land.
+// Binding-pattern parameter names — both the `...[a, b]`
+// spread-array-pattern flattening (optimizeArraySpreadParameter, L16-51) and
+// ordinary destructuring params (L103-116) — depend on the destructuring
+// transforms (Task 4) and raise rotorNotYetSupported until they land.
 
 // transformInitializer ports transformInitializer.ts (L6-20): the `= default`
 // shape. Default expressions are evaluated lazily inside the nil-check (TS

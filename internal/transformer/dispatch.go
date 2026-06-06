@@ -86,8 +86,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return TransformExpression(s, node.Expression())
 	}
 
-	// Upstream-supported kinds awaiting their port (functions, classes, JSX,
-	// new, await, delete, ...) and genuinely unknown kinds both fail loudly.
+	// Upstream-supported kinds awaiting their port (classes, JSX, new, await,
+	// delete, ...) and genuinely unknown kinds both fail loudly.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewNone()
 }
@@ -133,6 +133,10 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformDoStatement(s, node)
 	case ast.KindForStatement:
 		return transformForStatement(s, node)
+	case ast.KindForOfStatement:
+		return transformForOfStatement(s, node)
+	case ast.KindFunctionDeclaration:
+		return transformFunctionDeclaration(s, node)
 	case ast.KindIfStatement:
 		return transformIfStatement(s, node)
 	case ast.KindReturnStatement:
@@ -147,9 +151,9 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformWhileStatement(s, node)
 	}
 
-	// Statement kinds not yet ported (functions, classes, imports/exports,
-	// switch, try/catch, for-of, ...) report a not-yet-supported diagnostic
-	// rather than emitting wrong output.
+	// Statement kinds not yet ported (classes, imports/exports, switch,
+	// try/catch, for-of, ...) report a not-yet-supported diagnostic rather
+	// than emitting wrong output.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewList[luau.Statement]()
 }

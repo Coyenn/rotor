@@ -83,9 +83,12 @@ func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, 
 
 // getLastToken ports transformStatementList.ts getLastToken: the trailing
 // `}`/EOF token whose leading trivia holds the block's trailing comments.
-// Phase 2 only transforms source-file statement lists, so only the
-// EndOfFileToken case is wired; block-level last tokens (`}` of a Block etc.)
-// land with the block transforms (Phase 2b).
+// Only the EndOfFileToken case is wired. Block-level last tokens (`}` of a
+// Block — upstream `lastStatement.parent.getLastToken()`) need real token
+// scanning (tsgo materializes no `}` node; lsutil.GetLastToken would build
+// one); no diff fixture places a trailing comment before a closing `}`, so
+// that case stays deferred — a block-trailing comment is dropped, never
+// mis-emitted. Phase 3: wire via token scan.
 func getLastToken(parent *ast.Node, statements []*ast.Node) *ast.Node {
 	if len(statements) > 0 {
 		lastStatement := statements[len(statements)-1]

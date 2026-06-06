@@ -114,11 +114,10 @@ func transformArrayLiteralExpression(s *State, node *ast.Node) luau.Expression {
 // expressions/transformObjectLiteralExpression.ts: walk the properties
 // building a MapPointer — inline `{ ... }` until a member's transform
 // produces prereqs, then materialize a temp and emit per-field assignments.
-// validateMethodAssignment (method-ness vs contextual type) lands with the
-// function transforms.
 func transformObjectLiteralExpression(s *State, node *ast.Node) luau.Expression {
 	ptr := CreateMapPointer("object")
 	for _, property := range node.AsObjectLiteralExpression().Properties.Nodes {
+		validateMethodAssignment(s, property)
 		switch property.Kind {
 		case ast.KindPropertyAssignment:
 			name := property.Name()
@@ -135,7 +134,7 @@ func transformObjectLiteralExpression(s *State, node *ast.Node) luau.Expression 
 			// table.clone fast path / generic-for copy: later task.
 			s.Diags.Add(DiagRotorNotYetSupported(property, "object spread assignments"))
 		case ast.KindMethodDeclaration:
-			s.Diags.Add(DiagRotorNotYetSupported(property, "object literal method declarations"))
+			s.PrereqList(transformMethodDeclaration(s, property, ptr))
 		default:
 			// must be an AccessorDeclaration, which is banned
 			s.Diags.Add(DiagNoGetterSetter(property))

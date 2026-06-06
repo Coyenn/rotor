@@ -6,13 +6,80 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Function expressions / arrows —
-// expressions/transformFunctionExpression.ts
+// Functions — statements/transformFunctionDeclaration.ts,
+// expressions/transformFunctionExpression.ts, nodes/transformMethodDeclaration.ts
 // ---------------------------------------------------------------------------
+
+// transformFunctionDeclaration ports transformFunctionDeclaration.ts (L13-76).
 //
-// Pulled forward from the functions task (Task 3) because the loop
-// closure-copy fixture needs closures to actually compile.
-// transformFunctionDeclaration and the method transforms land with Task 3.
+//   - bodiless overload signatures emit nothing;
+//   - anonymous functions are only legal as `export default` and emit under
+//     the literal name `default`;
+//   - localize: an export-default anonymous function is always localized; a
+//     NAMED function is localized unless its symbol was hoisted (a `local f`
+//     already emitted by createHoistDeclaration — e.g. mutual recursion),
+//     in which case the non-local `function f() end` assigns into it.
+func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	declaration := node.AsFunctionDeclaration()
+
+	// overload signatures emit nothing
+	if declaration.Body == nil {
+		return luau.NewList[luau.Statement]()
+	}
+
+	// NOTE ts.hasSyntacticModifier matches ANY selected flag, so a plain
+	// `export function f` also sets isExportDefault — harmless upstream and
+	// here, because the named branch below overrides localize and anonymous
+	// declarations require a real `export default`. Ported verbatim.
+	isExportDefault := ast.HasSyntacticModifier(node, ast.ModifierFlagsExportDefault)
+
+	nameNode := declaration.Name()
+	if nameNode == nil && !isExportDefault {
+		panic("transformer: anonymous FunctionDeclaration must be export default") // upstream assert
+	}
+
+	var name luau.AnyIdentifier
+	if nameNode != nil {
+		ValidateIdentifier(s, nameNode)
+		name = TransformIdentifierDefined(s, nameNode)
+	} else {
+		name = luau.ID("default")
+	}
+
+	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	// parameter-default/destructure statements come FIRST in the body, then
+	// the transformed body. No implicit return is ever inserted: Luau
+	// functions return nil implicitly.
+	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
+
+	localize := isExportDefault
+	if nameNode != nil {
+		symbol := s.Checker.GetSymbolAtLocation(nameNode)
+		if symbol == nil {
+			panic("transformer: FunctionDeclaration name has no symbol") // upstream assert
+		}
+		localize = !s.IsHoisted[symbol]
+	}
+
+	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
+
+	if declaration.AsteriskToken != nil {
+		if isAsync {
+			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
+		}
+		// Phase 3: TS.generator — wrapStatementsAsGenerator replaces the body
+		// with `return TS.generator(function() <stmts> end)` (runtime lib).
+		s.Diags.Add(DiagRotorNotYetSupported(node, "generator functions"))
+	} else if isAsync {
+		// Phase 3: TS.async — upstream emits `local f = TS.async(function()
+		// ... end)` when localized, `f = TS.async(...)` when hoisted (the
+		// declaration switches to a VariableDeclaration/Assignment).
+		s.Diags.Add(DiagRotorNotYetSupported(node, "async functions"))
+	}
+
+	return luau.NewList[luau.Statement](
+		luau.NewFunctionDeclaration(localize, name, parameters, hasDotDotDot, statements))
+}
 
 // transformFunctionExpression ports transformFunctionExpression.ts (L11-47):
 // FunctionExpression and ArrowFunction share one transform. Named function
@@ -60,4 +127,75 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 	}
 
 	return luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+}
+
+// transformMethodDeclaration ports nodes/transformMethodDeclaration.ts
+// (L14-106) for object-literal methods (`{ m() {} }`), writing through the
+// object's MapPointer. Class methods route here too once classes land.
+//
+// Decorator bookkeeping (upstream L36-49, setClassElementObjectKey) is
+// class-only — decorators are not legal on object-literal methods — and lands
+// with classes (Phase 3+).
+func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+
+	declaration := node.AsMethodDeclaration()
+	if declaration.Body == nil {
+		return luau.NewList[luau.Statement]()
+	}
+
+	nameNode := declaration.Name()
+	if nameNode == nil {
+		panic("transformer: MethodDeclaration has no name") // upstream assert
+	}
+	if nameNode.Kind == ast.KindPrivateIdentifier {
+		s.Diags.Add(DiagNoPrivateIdentifier(nameNode))
+		return luau.NewList[luau.Statement]()
+	}
+
+	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
+
+	name := transformPropertyName(s, nameNode)
+
+	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
+
+	if declaration.AsteriskToken != nil {
+		if isAsync {
+			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
+		}
+		// Phase 3: TS.generator (wrapStatementsAsGenerator).
+		s.Diags.Add(DiagRotorNotYetSupported(node, "generator functions"))
+	} else if isAsync {
+		// Phase 3: TS.async — the function value is wrapped `TS.async(...)`.
+		s.Diags.Add(DiagRotorNotYetSupported(node, "async functions"))
+	}
+
+	// can we use `function class:name() end`? — only when the pointer was
+	// already spilled to a temp id (an inline map field can't hold a
+	// function statement).
+	nameStr, nameIsStr := name.(*luau.StringLiteral)
+	_, ptrIsMap := ptr.Value.(*luau.Map)
+	if !isAsync && nameIsStr && !ptrIsMap && luau.IsValidIdentifier(nameStr.Value) {
+		if isMethod(s, node) {
+			parameters.Shift() // remove `self`
+			result.Push(luau.NewMethodDeclaration(
+				ptr.Value.(luau.IndexableExpression), nameStr.Value, parameters, hasDotDotDot, statements))
+		} else {
+			result.Push(luau.NewFunctionDeclaration(
+				false, /*localize*/
+				luau.NewPropertyAccess(ptr.Value.(luau.IndexableExpression), nameStr.Value),
+				parameters, hasDotDotDot, statements))
+		}
+		return result
+	}
+
+	expression := luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+
+	// we have to use `class[name] = function()`
+	result.PushList(s.CaptureStatements(func() {
+		AssignToMapPointer(s, ptr, name, expression)
+	}))
+
+	return result
 }

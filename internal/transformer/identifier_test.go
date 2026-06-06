@@ -149,9 +149,9 @@ func TestCheckIdentifierHoistUseBeforeDeclaration(t *testing.T) {
 	//   let a = 1;
 	//   let b = 2;
 	// References to `a`/`b` inside the function precede their declarations, so
-	// both symbols hoist onto the function statement. Function bodies aren't
-	// transformed yet (Phase 2b), so the references are transformed directly —
-	// the same call the future function transform makes.
+	// both symbols hoist onto the function statement. The references are
+	// transformed directly first — the same call the function transform makes
+	// while walking the body.
 	s := buildState(t, filepath.Join("testdata", "hoist"), "src/hoist.ts")
 
 	statements := s.SourceFile.Statements.Nodes
@@ -176,15 +176,13 @@ func TestCheckIdentifierHoistUseBeforeDeclaration(t *testing.T) {
 	// before the premature-reference statement, and the declarations become
 	// assignments (isHoisted -> assignment-instead-of-local).
 	list := transformer.TransformStatementList(s, s.SourceFile.AsNode(), statements, nil)
-	want := "local a, b\na = 1\nb = 2\n"
+	want := "local a, b\nlocal function useBeforeDeclare()\n\treturn a + b\nend\na = 1\nb = 2\n"
 	if got := render.RenderAST(list); got != want {
 		t.Errorf("rendered statement list = %q, want %q", got, want)
 	}
 
-	// The only diagnostic is the unported FunctionDeclaration statement.
-	ds := s.Diags.Flush()
-	if len(ds) != 1 || ds[0].Code != "rotorNotYetSupported" {
-		t.Errorf("diagnostics = %v, want exactly the FunctionDeclaration rotorNotYetSupported", ds)
+	if ds := s.Diags.Flush(); len(ds) != 0 {
+		t.Errorf("unexpected diagnostics: %v", ds)
 	}
 }
 
