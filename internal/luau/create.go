@@ -2,7 +2,6 @@ package luau
 
 import (
 	"math"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -112,18 +111,9 @@ func NewNumberLiteral(value string) *NumberLiteral { return &NumberLiteral{Value
 // Num mirrors upstream luau.number(): negatives become unary minus.
 func Num(value float64) Expression {
 	if value >= 0 {
-		return NewNumberLiteral(formatNum(value))
+		return NewNumberLiteral(JSNumberString(value))
 	}
 	return NewUnary("-", Num(math.Abs(value)))
-}
-
-// formatNum mirrors JS String(number) closely enough for the values the
-// compiler generates (integers and simple decimals).
-func formatNum(value float64) string {
-	if value == math.Trunc(value) && math.Abs(value) < 1e21 {
-		return strconv.FormatFloat(value, 'f', -1, 64)
-	}
-	return strconv.FormatFloat(value, 'g', -1, 64)
 }
 
 func Str(value string) *StringLiteral { return &StringLiteral{Value: value} }

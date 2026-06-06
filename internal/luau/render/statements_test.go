@@ -136,6 +136,11 @@ func TestRenderComment(t *testing.T) {
 	if got := RenderAST(stmts(luau.NewComment("line1\nline2"))); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+	// text containing "]]" forces the bracket padding up to "=" (--[=[ ... ]=])
+	wantEq := "--[=[\n\ta]]b\n\tc\n]=]\n"
+	if got := RenderAST(stmts(luau.NewComment("a]]b\nc"))); got != wantEq {
+		t.Errorf("got %q, want %q", got, wantEq)
+	}
 }
 
 func TestSemicolonAmbiguity(t *testing.T) {

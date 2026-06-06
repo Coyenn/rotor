@@ -1,7 +1,6 @@
 package render
 
 import (
-	"strconv"
 	"strings"
 
 	"rotor/internal/luau"
@@ -78,18 +77,12 @@ func renderNumberLiteral(s *RenderState, node *luau.NumberLiteral) string {
 		return node.Value
 	}
 	// upstream: String(Number(node.value.replace(/_/g, "")))
-	cleaned := strings.ReplaceAll(node.Value, "_", "")
-	f, err := strconv.ParseFloat(cleaned, 64)
+	f, err := luau.JSNumberParse(node.Value)
 	if err != nil {
-		// JS Number() also accepts 0o/0b/0x integer forms that Go's
-		// ParseFloat rejects.
-		i, err2 := strconv.ParseInt(cleaned, 0, 64)
-		if err2 != nil {
-			panic("invalid number literal: " + node.Value)
-		}
-		f = float64(i)
+		// JS Number(garbage) is NaN, and String(NaN) renders as "NaN".
+		return "NaN"
 	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
+	return luau.JSNumberString(f)
 }
 
 // renderStringLiteral.ts

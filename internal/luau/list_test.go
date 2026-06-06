@@ -72,6 +72,50 @@ func TestListUnshiftList(t *testing.T) {
 	}
 }
 
+func TestListSpliceEmptySource(t *testing.T) {
+	// splicing in an empty list is a no-op, but the source must still be
+	// marked readonly
+	a := NewList(id("1"), id("2"))
+	emptyPush := NewList[*Identifier]()
+	a.PushList(emptyPush)
+	if got := values(a); !eq(got, []string{"1", "2"}) {
+		t.Fatalf("after PushList(empty) got %v", got)
+	}
+	if !emptyPush.ReadOnly {
+		t.Error("empty source must be marked readonly after PushList")
+	}
+
+	b := NewList(id("1"), id("2"))
+	emptyUnshift := NewList[*Identifier]()
+	b.UnshiftList(emptyUnshift)
+	if got := values(b); !eq(got, []string{"1", "2"}) {
+		t.Fatalf("after UnshiftList(empty) got %v", got)
+	}
+	if !emptyUnshift.ReadOnly {
+		t.Error("empty source must be marked readonly after UnshiftList")
+	}
+}
+
+func TestListSpliceOntoEmptyDestination(t *testing.T) {
+	dst := NewList[*Identifier]()
+	dst.PushList(NewList(id("1"), id("2")))
+	if got := values(dst); !eq(got, []string{"1", "2"}) {
+		t.Fatalf("PushList onto empty got %v", got)
+	}
+	if dst.Tail == nil || dst.Tail.Value.Name != "2" {
+		t.Fatal("PushList onto empty must set Tail")
+	}
+
+	dst2 := NewList[*Identifier]()
+	dst2.UnshiftList(NewList(id("1"), id("2")))
+	if got := values(dst2); !eq(got, []string{"1", "2"}) {
+		t.Fatalf("UnshiftList onto empty got %v", got)
+	}
+	if dst2.Tail == nil || dst2.Tail.Value.Name != "2" {
+		t.Fatal("UnshiftList onto empty must set Tail")
+	}
+}
+
 func TestListSomeEvery(t *testing.T) {
 	l := NewList(id("1"), id("2"), id("3"))
 	if !l.Some(func(n *Identifier) bool { return n.Name == "2" }) {

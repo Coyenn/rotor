@@ -109,6 +109,30 @@ func TestRenderTables(t *testing.T) {
 	}
 }
 
+func TestRenderMixedTable(t *testing.T) {
+	if got := renderExpr(t, luau.NewMixedTable(luau.NewList[luau.Node]())); got != "{}" {
+		t.Errorf("empty mixed table got %q", got)
+	}
+	m := luau.NewMixedTable(luau.NewList[luau.Node](
+		luau.Num(1),
+		luau.NewMapField(luau.Str("foo"), luau.Num(2)),
+		luau.NewMapField(luau.Num(3), luau.Num(4)),
+	))
+	want := "{\n\t1,\n\tfoo = 2,\n\t[3] = 4,\n}"
+	if got := renderExpr(t, m); got != want {
+		t.Errorf("mixed table got %q, want %q", got, want)
+	}
+}
+
+func TestRenderIfExpressionElseifChain(t *testing.T) {
+	node := luau.NewIfExpression(luau.ID("a"), luau.Num(1),
+		luau.NewIfExpression(luau.ID("b"), luau.Num(2), luau.Num(3)))
+	want := "if a then 1 elseif b then 2 else 3"
+	if got := renderExpr(t, node); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestRenderInterpolatedString(t *testing.T) {
 	parts := luau.NewList[luau.Node](
 		luau.NewInterpolatedStringPart("a"),
@@ -116,6 +140,19 @@ func TestRenderInterpolatedString(t *testing.T) {
 		luau.NewInterpolatedStringPart(" {c} "),
 	)
 	want := "`a{b} \\{c\\} `"
+	if got := renderExpr(t, luau.NewInterpolatedString(parts)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRenderInterpolatedStringWithTable(t *testing.T) {
+	// table expressions are wrapped in parens inside the braces, since `{{}}`
+	// is invalid Luau
+	parts := luau.NewList[luau.Node](
+		luau.NewInterpolatedStringPart("x="),
+		luau.NewArray(exprList(luau.Num(1))),
+	)
+	want := "`x={({ 1 })}`"
 	if got := renderExpr(t, luau.NewInterpolatedString(parts)); got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

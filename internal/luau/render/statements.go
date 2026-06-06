@@ -127,7 +127,7 @@ func renderNumericForStatement(s *RenderState, node *luau.NumericForStatement) s
 	if node.Step != nil {
 		isOne := false
 		if lit, ok := node.Step.(*luau.NumberLiteral); ok {
-			if f, err := parseNumberValue(lit.Value); err == nil && f == 1 {
+			if f, err := luau.JSNumberParse(lit.Value); err == nil && f == 1 {
 				isOne = true
 			}
 		}
