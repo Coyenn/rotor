@@ -3,7 +3,6 @@ package transformer
 import (
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
-	"rotor/tsgo/checker"
 )
 
 func init() {
@@ -205,8 +204,8 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 // `tostring()` wrapped around any side that is not definitely a string; else
 // numeric `+`.
 func createBinaryAdd(s *State, expression *ast.BinaryExpression, left, right luau.Expression) luau.Expression {
-	leftIsString := isDefinitelyStringType(s.GetType(expression.Left))
-	rightIsString := isDefinitelyStringType(s.GetType(expression.Right))
+	leftIsString := IsDefinitelyType(s, s.GetType(expression.Left), IsStringType)
+	rightIsString := IsDefinitelyType(s, s.GetType(expression.Right), IsStringType)
 	if leftIsString || rightIsString {
 		if !leftIsString {
 			left = luau.NewCall(luau.GlobalID("tostring"), luau.NewList[luau.Expression](left))
@@ -217,28 +216,4 @@ func createBinaryAdd(s *State, expression *ast.BinaryExpression, left, right lua
 		return luau.NewBinary(left, "..", right)
 	}
 	return luau.NewBinary(left, "+", right)
-}
-
-// isDefinitelyStringType is the minimal isDefinitelyType(type, isStringType)
-// from util/types.ts: union -> every constituent, intersection -> some
-// constituent, leaf -> TypeFlags.StringLike. The full combinators (constraint
-// lookup, class/interface base-type recursion) land with Task 8.
-func isDefinitelyStringType(t *checker.Type) bool {
-	if t.IsUnion() {
-		for _, constituent := range t.Types() {
-			if !isDefinitelyStringType(constituent) {
-				return false
-			}
-		}
-		return true
-	}
-	if t.IsIntersection() {
-		for _, constituent := range t.Types() {
-			if isDefinitelyStringType(constituent) {
-				return true
-			}
-		}
-		return false
-	}
-	return t.Flags()&checker.TypeFlagsStringLike != 0
 }
