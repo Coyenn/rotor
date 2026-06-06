@@ -1,0 +1,36 @@
+const s = "Hello, World";
+print(s.size(), "abc".size());
+print(s.upper(), s.lower(), s.reverse());
+print(s.rep(2), s.sub(1, 5), s.sub(8));
+print("literal".sub(1, 3), "AbC".lower(), "hi".rep(3));
+print(s.split(", "));
+const [i1, j1] = s.find("World");
+print(i1, j1);
+const found = s.find("o", 2, true);
+print(found);
+const [replaced, count] = s.gsub("o", "0");
+print(replaced, count);
+const once = s.gsub("l", "L", 1);
+print(once);
+print("%d/%s".format(5, "x"));
+const m = s.match("(%a+)");
+print(m);
+const iter = s.gmatch("%a+");
+print(iter);
+const b = s.byte();
+print(b);
+const [b1, b2] = s.byte(1, 2);
+print(b1, b2);
+print(("a" + s).upper(), ("z" + s).size());
+let mut = "abcdef";
+let i = 1;
+print(mut.sub(i++, 4));
+print(s["upper"]());
+const arr = [1, 2, 3];
+print(arr.size());
+const total = arr.size() + s.size();
+print(total);
+for (let k = 0; k < arr.size(); k++) {
+	print(arr[k]);
+}
+export {};

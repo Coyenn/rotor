@@ -30,9 +30,12 @@ import (
 //     (include/macro_math.d.ts), not compiler-types, so the detection
 //     fallback misses them and `v.add(w)` would silently emit a wrong
 //     `v:add(w)` method call (found by the Phase 3a randomness re-smoke:
-//     damage-numbers.ts). The remaining method tables (Array.push, Map.set,
-//     String.*, Promise.then, ...) land in Phase 3b; all of those interfaces
-//     are compiler-types-declared, so the fallback below covers detection.
+//     damage-numbers.ts). Phase 3b Task 3 added the String/ArrayLike rows
+//     (stringmacros.go) — 12 of the 13 String methods are @rbxts/types-
+//     declared (include/lua.d.ts) and had the same silent-miss problem. The
+//     remaining method tables (Array.push, Map.set, Promise.then, ...) land
+//     in Phase 3b Tasks 4-5; those interfaces are compiler-types-declared,
+//     so the fallback below covers detection.
 //
 // Fallback semantics (the Phase 2 stand-ins, centralized): every macro
 // upstream registers is declared by @rbxts/compiler-types, so a
@@ -305,9 +308,9 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 	// each macro by its method symbol. Upstream keys by
 	// `getType(typeChecker, member).symbol` — the symbol of the method's
 	// function type — which is exactly what GetFirstDefinedSymbol yields for
-	// `a.b` at the call sites. Phase 3a registers the math-class rows only
-	// (propertycallmacros.go); the rest of the table is Phase 3b and covered
-	// by the compiler-types detection fallback.
+	// `a.b` at the call sites. Registered rows: math classes (Phase 3a) +
+	// String/ArrayLike (Phase 3b Task 3); the rest of the table is Phase 3b
+	// Tasks 4-5 and covered by the compiler-types detection fallback.
 	for className, methods := range propertyCallMacroTable {
 		symbol := chk.ResolveName(className, nil, ast.SymbolFlagsInterface, false)
 		if symbol == nil {
