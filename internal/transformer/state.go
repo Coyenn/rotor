@@ -41,9 +41,7 @@ type MultiState struct {
 // over the project's Rojo config, the input->output PathTranslator, the
 // RuntimeLib rbxPath computed once per compile (compileFiles.ts:86-98), and
 // the project path that noRojoData renders file paths relative to. Computed
-// once per CompileProject pass and shared by every file's State. Phase 3a
-// Task 4 adds the import-resolution members (pkgRojoResolvers,
-// nodeModulesPathMapping).
+// once per CompileProject pass and shared by every file's State.
 type RojoContext struct {
 	Resolver       *rojo.RojoResolver
 	PathTranslator *rojo.PathTranslator
@@ -52,6 +50,27 @@ type RojoContext struct {
 	RuntimeLibRbxPath rojo.RbxPath
 	// ProjectPath is upstream data.projectPath (the tsconfig.json directory).
 	ProjectPath string
+
+	// Import-resolution members (createImportExpression pipeline, digest §3):
+
+	// PkgRojoResolvers holds one RojoResolver.synthetic per typeRoot
+	// (compileFiles.ts:77) — Package projects resolve node_modules imports
+	// through these instead of the project resolver.
+	PkgRojoResolvers []*rojo.RojoResolver
+	// NodeModulesPathMapping maps the canonical types-entry path (.d.ts) of
+	// each typeRoot package to its shipped main (.lua) path
+	// (createNodeModulesPathMapping.ts). Keys are canonicalized via
+	// rojo.CanonicalFileName with UseCaseSensitiveFileNames.
+	NodeModulesPathMapping map[string]string
+	// NodeModulesPath is upstream data.nodeModulesPath:
+	// <package.json dir>/node_modules (createProjectData.ts:31).
+	NodeModulesPath string
+	// TypeRoots is compilerOptions.typeRoots as tsgo resolved them (absolute,
+	// slash-separated); validateModule checks npm scopes against these.
+	TypeRoots []string
+	// UseCaseSensitiveFileNames feeds the canonical-file-name lookups
+	// (Shared/util/getCanonicalFileName.ts).
+	UseCaseSensitiveFileNames bool
 }
 
 // NewMultiState returns an empty compilation-step cache container.
@@ -343,6 +362,28 @@ func (s *State) RuntimeLib(node *ast.Node, name string) luau.IndexableExpression
 		s.Diags.Add(DiagRuntimeLibUsedInReplicatedFirst(node))
 	}
 	return luau.GlobalProperty("TS", name)
+}
+
+// ---------------------------------------------------------------------------
+// Emit resolver (upstream state.resolver, TransformState.ts:61)
+// ---------------------------------------------------------------------------
+
+// EmitResolver returns the checker's emit resolver, the upstream
+// `state.resolver = typeChecker.getEmitResolver(sourceFile)`. Its only
+// consumer in this phase is IsReferencedAliasDeclaration (import/export
+// elision, digest §1.4).
+//
+// CHECKER-IDENTITY CONTRACT: `aliasSymbolLinks.referenced` marks are stored on
+// the checker INSTANCE that semantically checked the file (markAliasReferenced,
+// tsgo checker.go:28500). tsgo's built-in pool spreads files round-robin over
+// up to 4 checkers and GetSemanticDiagnostics uses the file-associated one, so
+// s.Checker MUST be that same instance or elision queries silently return
+// false. rotor guarantees this by pinning the pool to a single checker
+// (compilerOptions.Checkers = 1 in compile.newProjectProgram) and running
+// program.GetSemanticDiagnostics(ctx, file) before transforming each file —
+// proven by TestCompileProjectImports's elision cases.
+func (s *State) EmitResolver() *checker.EmitResolver {
+	return s.Checker.GetEmitResolver()
 }
 
 // ---------------------------------------------------------------------------

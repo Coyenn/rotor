@@ -1,0 +1,1 @@
+declare function print(...params: Array<unknown>): void;

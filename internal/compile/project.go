@@ -62,6 +62,26 @@ func newProjectProgram(projectDir string) (string, *compiler.Program, []string, 
 		return "", nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
 
+	// CHECKER-IDENTITY PIN (digest §7.3): `aliasSymbolLinks.referenced` marks
+	// — the data behind EmitResolver.IsReferencedAliasDeclaration, i.e.
+	// import/export elision — live on the checker INSTANCE that semantically
+	// checked a file. tsgo's built-in pool creates up to 4 checkers and
+	// assigns files round-robin (checkerpool.go: fileAssociations[file] =
+	// checkers[i%checkerCount]); GetSemanticDiagnostics(ctx, file) checks with
+	// the file-associated checker while Program.GetTypeChecker returns
+	// checkers[0] — so with the default pool the transformer would read
+	// elision marks from the WRONG checker for 3 of every 4 files. Pinning
+	// the pool to ONE checker makes both calls return the same instance,
+	// keeps every *ast.Symbol comparison (MacroManager registrations,
+	// MultiState caches) within a single checker, and matches upstream's
+	// one-typeChecker-per-Program model. The option is read exactly once, at
+	// pool construction (newCheckerPoolWithTracing), so mutating the parsed
+	// options before NewProgram is safe. Proven load-bearing: removing the
+	// pin makes TestCompileProjectImportsModel spuriously elide the imports
+	// of every file whose round-robin checker isn't checkers[0].
+	one := 1
+	parsed.CompilerOptions().Checkers = &one
+
 	program := compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,
 		Config: parsed,
@@ -169,6 +189,17 @@ func newProjectContext(dir string, program *compiler.Program) (*projectContext, 
 		return nil, checkDiags, errors.New("compile: project configuration diagnostics")
 	}
 
+	// Import-resolution context (compileFiles.ts L77-78): one synthetic
+	// resolver per typeRoot for Package-project node_modules imports, and the
+	// types-entry -> shipped-main mapping for everyone else. tsgo resolves
+	// compilerOptions.typeRoots to absolute slash paths during config parse.
+	useCaseSensitiveFileNames := osvfs.FS().UseCaseSensitiveFileNames()
+	typeRoots := options.TypeRoots
+	pkgRojoResolvers := make([]*rojo.RojoResolver, 0, len(typeRoots))
+	for _, typeRoot := range typeRoots {
+		pkgRojoResolvers = append(pkgRojoResolvers, rojo.Synthetic(filepath.FromSlash(typeRoot)))
+	}
+
 	return &projectContext{
 		dir:         dir,
 		projectType: projectType,
@@ -177,8 +208,69 @@ func newProjectContext(dir string, program *compiler.Program) (*projectContext, 
 			PathTranslator:    pathTranslator,
 			RuntimeLibRbxPath: runtimeLibRbxPath,
 			ProjectPath:       filepath.FromSlash(dir),
+
+			PkgRojoResolvers:          pkgRojoResolvers,
+			NodeModulesPathMapping:    createNodeModulesPathMapping(typeRoots, useCaseSensitiveFileNames),
+			NodeModulesPath:           nodeModulesPath,
+			TypeRoots:                 typeRoots,
+			UseCaseSensitiveFileNames: useCaseSensitiveFileNames,
 		},
 	}, nil, nil
+}
+
+// createNodeModulesPathMapping ports
+// Project/functions/createNodeModulesPathMapping.ts: for each package under
+// each typeRoot, map the canonical resolved types/typings entry (.d.ts) to
+// the resolved main entry (the shipped .lua) — only when main is present.
+func createNodeModulesPathMapping(typeRoots []string, useCaseSensitiveFileNames bool) map[string]string {
+	mapping := make(map[string]string)
+	for _, typeRoot := range typeRoots {
+		scopePath := filepath.FromSlash(typeRoot)
+		entries, err := os.ReadDir(scopePath)
+		if err != nil {
+			continue // fs.pathExistsSync guard
+		}
+		for _, entry := range entries {
+			pkgPath := filepath.Join(scopePath, entry.Name())
+			// realPathExistsSync: os.ReadFile follows symlinks; a missing or
+			// unreadable package.json just skips the package.
+			data, err := os.ReadFile(filepath.Join(pkgPath, "package.json"))
+			if err != nil {
+				continue
+			}
+			var pkg struct {
+				Main    string `json:"main"`
+				Typings string `json:"typings"`
+				Types   string `json:"types"`
+			}
+			if json.Unmarshal(data, &pkg) != nil {
+				continue
+			}
+			// both "types" and "typings" are valid
+			typesPath := pkg.Types
+			if typesPath == "" {
+				typesPath = pkg.Typings
+			}
+			if typesPath == "" {
+				typesPath = "index.d.ts"
+			}
+			if pkg.Main != "" {
+				key := rojo.CanonicalFileName(resolveAgainst(pkgPath, typesPath), useCaseSensitiveFileNames)
+				mapping[key] = resolveAgainst(pkgPath, pkg.Main)
+			}
+		}
+	}
+	return mapping
+}
+
+// resolveAgainst mirrors Node path.resolve(base, p) for the two-argument
+// case used above.
+func resolveAgainst(base, p string) string {
+	p = filepath.FromSlash(p)
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(base, p)
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —

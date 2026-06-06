@@ -562,3 +562,14 @@ func dirContains(dir, name string) bool {
 	}
 	return false
 }
+
+// CanonicalFileName ports Shared/util/getCanonicalFileName.ts: identity on a
+// case-sensitive filesystem, lowercase otherwise. Paths are normalized to the
+// OS separator first (upstream call sites pass path.normalize output).
+func CanonicalFileName(filePath string, useCaseSensitiveFileNames bool) string {
+	filePath = filepath.Clean(filepath.FromSlash(filePath))
+	if useCaseSensitiveFileNames {
+		return filePath
+	}
+	return strings.ToLower(filePath)
+}

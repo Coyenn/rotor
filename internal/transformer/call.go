@@ -198,9 +198,7 @@ func fixVoidArgumentsForRobloxFunctions(s *State, expType *checker.Type, args []
 // — plain `f(...)`.
 func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expression, nodeArguments []*ast.Node) luau.Expression {
 	if ast.IsImportCall(node) {
-		// transformImportExpression: dynamic import lands with the module task.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "dynamic `import()`"))
-		return luau.NewNone()
+		return transformImportExpression(s, node)
 	}
 
 	call := node.AsCallExpression()

@@ -133,12 +133,18 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformContinueStatement(s, node)
 	case ast.KindDoStatement:
 		return transformDoStatement(s, node)
+	case ast.KindExportDeclaration:
+		return transformExportDeclaration(s, node)
 	case ast.KindForStatement:
 		return transformForStatement(s, node)
 	case ast.KindForOfStatement:
 		return transformForOfStatement(s, node)
 	case ast.KindFunctionDeclaration:
 		return transformFunctionDeclaration(s, node)
+	case ast.KindImportDeclaration:
+		return transformImportDeclaration(s, node)
+	case ast.KindImportEqualsDeclaration:
+		return transformImportEqualsDeclaration(s, node)
 	case ast.KindIfStatement:
 		return transformIfStatement(s, node)
 	case ast.KindReturnStatement:
