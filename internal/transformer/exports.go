@@ -284,6 +284,30 @@ func (s *State) GetModuleExports(moduleSymbol *ast.Symbol) []*ast.Symbol {
 	return exports
 }
 
+// GetModuleExportsAliasMap ports TransformState.getModuleExportsAliasMap with
+// the multi-transform-state cache: original (alias-skipped) export symbol ->
+// the name it is exported under (`export { a as b }` -> "b").
+func (s *State) GetModuleExportsAliasMap(moduleSymbol *ast.Symbol) map[*ast.Symbol]string {
+	if cached, ok := s.Multi.GetModuleExportsAliasMapCache[moduleSymbol]; ok {
+		return cached
+	}
+	aliasMap := map[*ast.Symbol]string{}
+	for _, exportSymbol := range s.GetModuleExports(moduleSymbol) {
+		originalSymbol := checker.SkipAlias(exportSymbol, s.Checker)
+		var declaration *ast.Node
+		if len(exportSymbol.Declarations) > 0 {
+			declaration = exportSymbol.Declarations[0]
+		}
+		if declaration != nil && ast.IsExportSpecifier(declaration) {
+			aliasMap[originalSymbol] = declaration.Name().Text()
+		} else {
+			aliasMap[originalSymbol] = exportSymbol.Name
+		}
+	}
+	s.Multi.GetModuleExportsAliasMapCache[moduleSymbol] = aliasMap
+	return aliasMap
+}
+
 func exportSortKey(symbol *ast.Symbol) (file string, pos int, ok bool) {
 	decl := symbol.ValueDeclaration
 	if decl == nil && len(symbol.Declarations) > 0 {

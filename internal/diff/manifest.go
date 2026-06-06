@@ -6,5 +6,6 @@ package diff
 // reported as skipped, never silently ignored.
 var EnabledFixtures = []string{
 	"01_literals",
+	"02_variables",
 	"10_strings",
 }

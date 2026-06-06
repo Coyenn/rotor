@@ -312,3 +312,36 @@ func (s *State) GetModuleIDFromSymbol(moduleSymbol *ast.Symbol) luau.AnyIdentifi
 	}
 	return id
 }
+
+// getModuleSymbolFromNode ports TransformState.getModuleSymbolFromNode: the
+// export symbol of the nearest SourceFile or ModuleDeclaration ancestor
+// (traversal.ts getModuleAncestor).
+func (s *State) getModuleSymbolFromNode(node *ast.Node) *ast.Symbol {
+	moduleAncestor := ast.FindAncestor(node, func(n *ast.Node) bool {
+		return ast.IsSourceFile(n) || ast.IsModuleDeclaration(n)
+	})
+	location := moduleAncestor
+	if !ast.IsSourceFile(moduleAncestor) {
+		location = moduleAncestor.Name()
+	}
+	exportSymbol := s.Checker.GetSymbolAtLocation(location)
+	if exportSymbol == nil {
+		panic("transformer: getModuleSymbolFromNode: no module symbol") // upstream assert
+	}
+	return exportSymbol
+}
+
+// GetModuleIDPropertyAccess ports TransformState.getModuleIdPropertyAccess:
+// `exports.<name>` (or the namespace container's id) when idSymbol is exported
+// from its module, else nil. This is how `export let x` reads/writes become
+// `exports.x` (transformIdentifier.ts:161-171, transformVariableStatement.ts:
+// 26-40).
+func (s *State) GetModuleIDPropertyAccess(idSymbol *ast.Symbol) *luau.PropertyAccessExpression {
+	if idSymbol.ValueDeclaration != nil {
+		moduleSymbol := s.getModuleSymbolFromNode(idSymbol.ValueDeclaration)
+		if alias, ok := s.GetModuleExportsAliasMap(moduleSymbol)[idSymbol]; ok {
+			return luau.NewPropertyAccess(s.GetModuleIDFromSymbol(moduleSymbol), alias)
+		}
+	}
+	return nil
+}
