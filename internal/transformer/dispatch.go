@@ -120,12 +120,28 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return luau.NewList[luau.Statement]()
 
 	// regular transforms
+	case ast.KindBlock:
+		return transformBlock(s, node)
+	case ast.KindBreakStatement:
+		return transformBreakStatement(s, node)
+	case ast.KindContinueStatement:
+		return transformContinueStatement(s, node)
+	case ast.KindDoStatement:
+		return transformDoStatement(s, node)
+	case ast.KindForStatement:
+		return transformForStatement(s, node)
+	case ast.KindIfStatement:
+		return transformIfStatement(s, node)
+	case ast.KindReturnStatement:
+		return transformReturnStatement(s, node)
+	case ast.KindThrowStatement:
+		return transformThrowStatement(s, node)
 	case ast.KindVariableStatement:
 		return transformVariableStatement(s, node)
 	case ast.KindExpressionStatement:
 		return transformExpressionStatement(s, node)
-	case ast.KindIfStatement:
-		return transformIfStatement(s, node)
+	case ast.KindWhileStatement:
+		return transformWhileStatement(s, node)
 	}
 
 	// Remaining upstream-supported statements (blocks, control flow,

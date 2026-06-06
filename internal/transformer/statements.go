@@ -277,3 +277,110 @@ func wrapExpressionStatement(expression luau.Expression) *luau.List[luau.Stateme
 	}
 	return luau.NewList[luau.Statement](luau.NewVariableDeclaration(luau.TempID(""), expression))
 }
+
+// ---------------------------------------------------------------------------
+// Blocks — statements/transformBlock.ts
+// ---------------------------------------------------------------------------
+
+// transformBlock ports transformBlock.ts (L6-12): a free-standing `{ ... }`
+// becomes `do ... end`, preserving scoping.
+func transformBlock(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	return luau.NewList[luau.Statement](luau.NewDo(
+		TransformStatementList(s, node, node.AsBlock().Statements.Nodes, nil),
+	))
+}
+
+// ---------------------------------------------------------------------------
+// Return statements — statements/transformReturnStatement.ts
+// ---------------------------------------------------------------------------
+
+// NOTE on isReturnBlockedByTryStatement / isBreakBlockedByTryStatement
+// (util/isBlockedByTryStatement.ts): both reroute through `return
+// TS.TRY_RETURN/TRY_BREAK/TRY_CONTINUE` when the nearest relevant ancestor is
+// a TryStatement. rotor Phase 2 raises rotorNotYetSupported for TryStatement
+// itself WITHOUT descending into its blocks, so no return/break/continue is
+// ever transformed inside a try — the blocked branches are documented no-ops
+// until the try transform lands.
+
+// isTupleReturningCall ports transformReturnStatement.ts isTupleReturningCall
+// (L10-16): a call expression whose own type (at the call site, intentionally
+// NOT via s.GetType which uses SkipUpwards) is a LuaTuple — its multi-returns
+// propagate through `return` unchanged.
+func isTupleReturningCall(s *State, tsExpression *ast.Node, luaExpression luau.Expression) bool {
+	return luau.IsCall(luaExpression) &&
+		IsLuaTupleType(s).Check(s.Checker.GetTypeAtLocation(SkipDownwards(tsExpression)))
+}
+
+// transformReturnStatementInner ports transformReturnStatementInner (L28-69)
+// minus the $tuple macro returns (L36-39, macro tables: Phase 3 — a `$tuple`
+// call flows into TransformExpression and hits the call-macro stand-in
+// diagnostic) and the try-block wrapping (L51-63, see NOTE above). Returning
+// a LuaTuple VALUE (array literal or variable) must spread into a
+// multi-value return — array members inline (`return a, b`), anything else
+// through `return unpack(exp)`.
+func transformReturnStatementInner(s *State, returnExp *ast.Node) *luau.List[luau.Statement] {
+	var expression luau.NodeOrList = TransformExpression(s, SkipDownwards(returnExp))
+	if IsLuaTupleType(s).Check(s.GetType(returnExp)) &&
+		!isTupleReturningCall(s, returnExp, expression.(luau.Expression)) {
+		if array, ok := expression.(*luau.Array); ok {
+			expression = array.Members
+		} else {
+			expression = luau.NewCall(luau.GlobalID("unpack"),
+				luau.NewList[luau.Expression](expression.(luau.Expression)))
+		}
+	}
+	return luau.NewList[luau.Statement](luau.NewReturn(expression))
+}
+
+// transformReturnStatement ports transformReturnStatement (L71-84): a bare
+// `return` emits an explicit `return nil` (preserving JS `undefined`), never
+// a bare Luau `return`.
+func transformReturnStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	expression := node.AsReturnStatement().Expression
+	if expression == nil {
+		return luau.NewList[luau.Statement](luau.NewReturn(luau.Nil()))
+	}
+	return transformReturnStatementInner(s, expression)
+}
+
+// ---------------------------------------------------------------------------
+// Break / continue — statements/transformBreakStatement.ts,
+// transformContinueStatement.ts
+// ---------------------------------------------------------------------------
+
+// transformBreakStatement ports transformBreakStatement.ts (L8-25). Labeled
+// break is banned; try-blocked rerouting is a no-op (see NOTE above).
+func transformBreakStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	if label := node.AsBreakStatement().Label; label != nil {
+		s.Diags.Add(DiagNoLabeledStatement(label))
+		return luau.NewList[luau.Statement]()
+	}
+	return luau.NewList[luau.Statement](luau.NewBreak())
+}
+
+// transformContinueStatement ports transformContinueStatement.ts (L8-25):
+// identical shape — Luau has native `continue`.
+func transformContinueStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	if label := node.AsContinueStatement().Label; label != nil {
+		s.Diags.Add(DiagNoLabeledStatement(label))
+		return luau.NewList[luau.Statement]()
+	}
+	return luau.NewList[luau.Statement](luau.NewContinue())
+}
+
+// ---------------------------------------------------------------------------
+// Throw statements — statements/transformThrowStatement.ts
+// ---------------------------------------------------------------------------
+
+// transformThrowStatement ports transformThrowStatement.ts (L6-16):
+// `throw x` -> `error(x)`; a (grammatically impossible in modern TS) bare
+// `throw` would emit `error()`. No type checks, no validateNotAny upstream.
+func transformThrowStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	args := luau.NewList[luau.Expression]()
+	if expression := node.AsThrowStatement().Expression; expression != nil {
+		args.Push(TransformExpression(s, expression))
+	}
+	return luau.NewList[luau.Statement](luau.NewCallStatement(
+		luau.NewCall(luau.GlobalID("error"), args),
+	))
+}
