@@ -24,4 +24,5 @@ var EnabledFixtures = []string{
 	"17_forof",
 	"18_switch",
 	"19_closures",
+	"20_mixed2b",
 }

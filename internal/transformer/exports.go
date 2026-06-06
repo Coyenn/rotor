@@ -257,18 +257,23 @@ func IsSymbolMutable(s *State, idSymbol *ast.Symbol) bool {
 //
 // DIVERGENCE: tsgo's Checker.GetExportsOfModule materializes a Go map
 // (ast.SymbolTable) whose iteration order is nondeterministic, while
-// upstream's JS Map preserves binder insertion order (declaration order),
-// which fixes the order of emitted export assignments/fields. rotor restores
-// declaration order by sorting on the first declaration's position
-// (file path, then offset); declaration-less symbols sort last by name.
+// upstream's JS Map preserves binder insertion order, which fixes the order
+// of emitted export assignments/fields. rotor reconstructs insertion order:
+// the binder binds a container's FunctionDeclaration statements before all
+// other statements (binder.ts bindEachFunctionsFirst; same in tsgo
+// binder.go:1776), so function symbols enter the exports table first — in
+// source order — followed by everything else in source order. Verified
+// against rbxtsc 3.0.0: `export const A = 6; export function z() {}` returns
+// `{ z = z, A = A }`, function first. Sort key: (file, functions-first pass,
+// offset); declaration-less symbols sort last by name.
 func (s *State) GetModuleExports(moduleSymbol *ast.Symbol) []*ast.Symbol {
 	if cached, ok := s.Multi.GetModuleExportsCache[moduleSymbol]; ok {
 		return cached
 	}
 	exports := s.Checker.GetExportsOfModule(moduleSymbol)
 	sort.SliceStable(exports, func(i, j int) bool {
-		fi, pi, oki := exportSortKey(exports[i])
-		fj, pj, okj := exportSortKey(exports[j])
+		fi, gi, pi, oki := exportSortKey(exports[i])
+		fj, gj, pj, okj := exportSortKey(exports[j])
 		if oki != okj {
 			return oki // symbols with declarations first
 		}
@@ -277,6 +282,9 @@ func (s *State) GetModuleExports(moduleSymbol *ast.Symbol) []*ast.Symbol {
 		}
 		if fi != fj {
 			return fi < fj
+		}
+		if gi != gj {
+			return gi < gj // binder pass: function declarations first
 		}
 		return pi < pj
 	})
@@ -308,16 +316,32 @@ func (s *State) GetModuleExportsAliasMap(moduleSymbol *ast.Symbol) map[*ast.Symb
 	return aliasMap
 }
 
-func exportSortKey(symbol *ast.Symbol) (file string, pos int, ok bool) {
-	decl := symbol.ValueDeclaration
-	if decl == nil && len(symbol.Declarations) > 0 {
-		decl = symbol.Declarations[0]
+// exportSortKey returns the binder-insertion-order key for an export symbol:
+// pass 0 with the first FunctionDeclaration's position when the symbol has
+// one (bound in the binder's functions-first pass), otherwise pass 1 with the
+// first-bound declaration's position. tsgo appends Symbol.Declarations in
+// binding order, so Declarations[0] is the insertion-defining declaration.
+func exportSortKey(symbol *ast.Symbol) (file string, pass int, pos int, ok bool) {
+	var decl *ast.Node
+	for _, d := range symbol.Declarations {
+		if ast.IsFunctionDeclaration(d) {
+			decl = d
+			break
+		}
 	}
 	if decl == nil {
-		return "", 0, false
+		pass = 1
+		if len(symbol.Declarations) > 0 {
+			decl = symbol.Declarations[0]
+		} else {
+			decl = symbol.ValueDeclaration
+		}
+	}
+	if decl == nil {
+		return "", 0, 0, false
 	}
 	if sf := ast.GetSourceFileOfNode(decl); sf != nil {
 		file = sf.FileName()
 	}
-	return file, decl.Pos(), true
+	return file, pass, decl.Pos(), true
 }
