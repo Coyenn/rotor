@@ -97,11 +97,12 @@ func createBinaryFromOperator(s *State, left luau.Expression, leftType *checker.
 }
 
 // transformBinaryExpression ports transformBinaryExpression.ts (L113-253).
-// validateNotAnyType on both operands: needs the isArrayType macro-symbol
-// predicate — Task 10.
 func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 	expression := node.AsBinaryExpression()
 	operatorKind := expression.OperatorToken.Kind
+
+	validateNotAnyType(s, expression.Left)
+	validateNotAnyType(s, expression.Right)
 
 	// banned
 	if operatorKind == ast.KindEqualsEqualsToken {

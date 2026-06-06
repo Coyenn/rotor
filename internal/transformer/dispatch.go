@@ -46,6 +46,10 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformBinaryExpression(s, node)
 	case ast.KindCallExpression:
 		return transformCallExpression(s, node)
+	case ast.KindElementAccessExpression:
+		return transformElementAccessExpression(s, node)
+	case ast.KindPropertyAccessExpression:
+		return transformPropertyAccessExpression(s, node)
 	case ast.KindFalseKeyword:
 		return luau.Bool(false)
 	case ast.KindTrueKeyword:
@@ -79,8 +83,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 	}
 
 	// Upstream-supported kinds awaiting their port (functions, classes, JSX,
-	// unary, access, new, await, conditional, ...) and genuinely unknown
-	// kinds both fail loudly.
+	// new, await, conditional, delete, ...) and genuinely unknown kinds both
+	// fail loudly.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewNone()
 }
@@ -128,36 +132,4 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 	// functions, classes, imports/exports, ...) land with Tasks 8-13.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewList[luau.Statement]()
-}
-
-// ---------------------------------------------------------------------------
-// Calls (minimal path — full call support: Task 10)
-// ---------------------------------------------------------------------------
-
-// transformCallExpression handles bare `f(args)` where the callee is an
-// Identifier — enough for `print(...)` in the literal fixtures.
-// full call support: Task 10 (optional chains, method calls a.b(...), call
-// macros, isMethod, expressionMightMutate callee pinning, LuaTuple wrapping,
-// fixVoidArgumentsForRobloxFunctions).
-func transformCallExpression(s *State, node *ast.Node) luau.Expression {
-	call := node.AsCallExpression()
-	callee := SkipDownwards(call.Expression)
-	if !ast.IsIdentifier(callee) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, kindName(call.Expression.Kind)+" calls"))
-		return luau.NewNone()
-	}
-
-	expression := TransformExpression(s, callee)
-	args := luau.NewList[luau.Expression](ensureTransformOrder(s, call.Arguments.Nodes)...)
-	return luau.NewCall(convertToIndexableExpression(expression), args)
-}
-
-// convertToIndexableExpression ports util/convertToIndexableExpression.ts:
-// wrap non-indexable expressions in parentheses so they can be indexed or
-// called.
-func convertToIndexableExpression(expression luau.Expression) luau.IndexableExpression {
-	if luau.IsIndexableExpression(expression) {
-		return expression.(luau.IndexableExpression)
-	}
-	return luau.NewParenthesized(expression)
 }

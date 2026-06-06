@@ -113,22 +113,32 @@ type State struct {
 	// module's exports table (source file symbol -> `exports`; namespaces ->
 	// their container id).
 	moduleIDBySymbol map[*ast.Symbol]luau.AnyIdentifier
+
+	// ambientSymbolCache memoizes AmbientSymbol lookups (nil results too —
+	// presence in the map marks "resolved").
+	ambientSymbolCache map[string]*ast.Symbol
+
+	// luaTupleNominal caches the `_nominal_LuaTuple` property symbol resolved
+	// from the ambient LuaTuple<T> alias (see LuaTupleNominalSymbol).
+	luaTupleNominal         *ast.Symbol
+	luaTupleNominalResolved bool
 }
 
 // NewState constructs the per-file transform state. program/chk/sourceFile may
 // be nil for checker-free prereq-mechanics tests (see NewTestState).
 func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.SourceFile, diags *DiagService, multi *MultiState) *State {
 	s := &State{
-		Program:           program,
-		Checker:           chk,
-		SourceFile:        sourceFile,
-		Diags:             diags,
-		Multi:             multi,
-		getTypeCache:      make(map[*ast.Node]*checker.Type),
-		HoistsByStatement: make(map[*ast.Node][]*ast.Node),
-		IsHoisted:         make(map[*ast.Symbol]bool),
-		SymbolToID:        make(map[*ast.Symbol]*luau.TemporaryIdentifier),
-		moduleIDBySymbol:  make(map[*ast.Symbol]luau.AnyIdentifier),
+		Program:            program,
+		Checker:            chk,
+		SourceFile:         sourceFile,
+		Diags:              diags,
+		Multi:              multi,
+		getTypeCache:       make(map[*ast.Node]*checker.Type),
+		HoistsByStatement:  make(map[*ast.Node][]*ast.Node),
+		IsHoisted:          make(map[*ast.Symbol]bool),
+		SymbolToID:         make(map[*ast.Symbol]*luau.TemporaryIdentifier),
+		moduleIDBySymbol:   make(map[*ast.Symbol]luau.AnyIdentifier),
+		ambientSymbolCache: make(map[string]*ast.Symbol),
 	}
 	if sourceFile != nil {
 		s.SourceFileText = sourceFile.Text()
@@ -290,6 +300,49 @@ func (s *State) RuntimeLib(node *ast.Node, name string) luau.IndexableExpression
 		s.Diags.Add(DiagRuntimeLibUsedInReplicatedFirst(node))
 	}
 	return luau.GlobalProperty("TS", name)
+}
+
+// ---------------------------------------------------------------------------
+// Ambient symbols (upstream MacroManager SYMBOL_NAMES registration)
+// ---------------------------------------------------------------------------
+
+// NominalLuaTupleName ports Shared/constants.ts NOMINAL_LUA_TUPLE_NAME.
+const NominalLuaTupleName = "_nominal_LuaTuple"
+
+// AmbientSymbol resolves a global ambient symbol by name, memoized (including
+// misses). Ports the MacroManager SYMBOL_NAMES table population:
+// `typeChecker.resolveName(symbolName, undefined, ts.SymbolFlags.All, false)`.
+// Upstream throws when @rbxts/compiler-types is missing; rotor returns nil so
+// checker-light test projects keep working (callers nil-guard).
+func (s *State) AmbientSymbol(name string) *ast.Symbol {
+	if symbol, ok := s.ambientSymbolCache[name]; ok {
+		return symbol
+	}
+	symbol := s.Checker.ResolveName(name, nil, ast.SymbolFlagsAll, false)
+	s.ambientSymbolCache[name] = symbol
+	return symbol
+}
+
+// LuaTupleNominalSymbol resolves the `_nominal_LuaTuple` property symbol from
+// the ambient LuaTuple<T> type alias, memoized. Ports the MacroManager
+// constructor tail: find the LuaTuple TypeAliasDeclaration, take the type at
+// that location, and grab its NOMINAL_LUA_TUPLE_NAME property. nil when the
+// project has no @rbxts/compiler-types.
+func (s *State) LuaTupleNominalSymbol() *ast.Symbol {
+	if s.luaTupleNominalResolved {
+		return s.luaTupleNominal
+	}
+	s.luaTupleNominalResolved = true
+	if luaTupleSymbol := s.AmbientSymbol("LuaTuple"); luaTupleSymbol != nil {
+		for _, declaration := range luaTupleSymbol.Declarations {
+			if ast.IsTypeAliasDeclaration(declaration) {
+				t := s.Checker.GetTypeAtLocation(declaration)
+				s.luaTupleNominal = s.Checker.GetPropertyOfType(t, NominalLuaTupleName)
+				break
+			}
+		}
+	}
+	return s.luaTupleNominal
 }
 
 // ---------------------------------------------------------------------------

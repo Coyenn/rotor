@@ -8,8 +8,7 @@ import (
 // This file ports expressions/transformUnaryExpression.ts. The ++/-- forms
 // here are the EXPRESSION positions (temps capture the old/new value); the
 // statement specialization without temps lives in statements.go
-// (transformUnaryExpressionStatement). validateNotAnyType on the operand:
-// needs the isArrayType macro-symbol predicate — Task 10.
+// (transformUnaryExpressionStatement).
 
 // transformPostfixUnaryExpression ports transformPostfixUnaryExpression
 // (L13-40): `i++` in expression position captures the ORIGINAL value:
@@ -19,6 +18,8 @@ import (
 //	-> _original
 func transformPostfixUnaryExpression(s *State, node *ast.Node) luau.Expression {
 	expression := node.AsPostfixUnaryExpression()
+
+	validateNotAnyType(s, expression.Operand)
 
 	writable := transformWritableExpression(s, expression.Operand, true)
 	origValue := luau.TempID("original")
@@ -43,6 +44,8 @@ func transformPostfixUnaryExpression(s *State, node *ast.Node) luau.Expression {
 // (L42-71).
 func transformPrefixUnaryExpression(s *State, node *ast.Node) luau.Expression {
 	expression := node.AsPrefixUnaryExpression()
+
+	validateNotAnyType(s, expression.Operand)
 
 	switch expression.Operator {
 	case ast.KindPlusPlusToken, ast.KindMinusMinusToken:

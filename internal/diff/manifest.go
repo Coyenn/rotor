@@ -9,6 +9,8 @@ var EnabledFixtures = []string{
 	"02_variables",
 	"03_arithmetic",
 	"04_logic",
+	"06_globals",
+	"07_access",
 	"09_unary",
 	"10_strings",
 }

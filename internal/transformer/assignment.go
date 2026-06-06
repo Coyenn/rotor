@@ -88,20 +88,40 @@ func createCompoundAssignmentExpression(s *State, writable luau.WritableExpressi
 }
 
 // transformWritableExpression ports transformWritable.ts
-// transformWritableExpression (L13-41) for identifier lvalues. The
-// PropertyAccessExpression branch (pushToVarIfNonId base pinning) and
-// ElementAccessExpression branch (ensureTransformOrder + addOneIfArrayType
-// index offsetting + index pinning) need the access transforms: Task 10 —
-// until then property/element lvalues raise rotorNotYetSupported and a
-// discardable temp stands in for the writable.
+// transformWritableExpression (L13-41): identifier, property-access, and
+// element-access lvalues. readAfterWrite pins the base object (and the index)
+// into temps so re-reads observe the same target; the element-access index
+// goes through addOneIfArrayType (NOTE upstream passes the RAW
+// state.getType(node.expression) here, without getNonOptionalType — the
+// isUndefinedType predicate inside addOneIfArrayType absorbs the
+// `| undefined` members instead).
 func transformWritableExpression(s *State, node *ast.Node, readAfterWrite bool) luau.WritableExpression {
 	if ast.IsPrototypeAccess(node) {
 		s.Diags.Add(DiagNoPrototype(node))
 	}
-	if ast.IsPropertyAccessExpression(node) || ast.IsElementAccessExpression(node) {
-		// property/element access lvalues: Task 10.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "assignment to "+kindName(node.Kind)))
-		return luau.TempID("")
+	if ast.IsPropertyAccessExpression(node) {
+		propertyAccess := node.AsPropertyAccessExpression()
+		expression := TransformExpression(s, propertyAccess.Expression)
+		var base luau.IndexableExpression
+		if readAfterWrite {
+			base = s.PushToVarIfNonID(expression, "exp")
+		} else {
+			base = convertToIndexableExpression(expression)
+		}
+		return luau.NewPropertyAccess(base, propertyAccess.Name().Text())
+	} else if ast.IsElementAccessExpression(node) {
+		elementAccess := node.AsElementAccessExpression()
+		ordered := ensureTransformOrder(s, []*ast.Node{elementAccess.Expression, elementAccess.ArgumentExpression})
+		expression, index := ordered[0], ordered[1]
+		indexExp := addOneIfArrayType(s, s.GetType(elementAccess.Expression), index)
+		var base luau.IndexableExpression
+		if readAfterWrite {
+			base = s.PushToVarIfNonID(expression, "exp")
+			indexExp = s.PushToVarIfComplex(indexExp, "index")
+		} else {
+			base = convertToIndexableExpression(expression)
+		}
+		return luau.NewComputedIndex(base, indexExp)
 	}
 	transformed := TransformExpression(s, SkipDownwards(node))
 	writable, ok := transformed.(luau.WritableExpression)
