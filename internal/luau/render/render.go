@@ -92,3 +92,10 @@ func Render(s *RenderState, node luau.Node) string {
 	}
 	panic("render: no renderer for " + node.Kind().String())
 }
+
+// RenderAST mirrors upstream renderAST(): solve temp ids, then render.
+func RenderAST(ast *luau.List[luau.Statement]) string {
+	s := NewRenderState()
+	solveTempIDs(s, ast)
+	return renderStatements(s, ast)
+}
