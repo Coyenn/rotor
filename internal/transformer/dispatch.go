@@ -46,6 +46,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformBinaryExpression(s, node)
 	case ast.KindCallExpression:
 		return transformCallExpression(s, node)
+	case ast.KindConditionalExpression:
+		return transformConditionalExpression(s, node)
 	case ast.KindElementAccessExpression:
 		return transformElementAccessExpression(s, node)
 	case ast.KindPropertyAccessExpression:
@@ -83,8 +85,7 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 	}
 
 	// Upstream-supported kinds awaiting their port (functions, classes, JSX,
-	// new, await, conditional, delete, ...) and genuinely unknown kinds both
-	// fail loudly.
+	// new, await, delete, ...) and genuinely unknown kinds both fail loudly.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewNone()
 }

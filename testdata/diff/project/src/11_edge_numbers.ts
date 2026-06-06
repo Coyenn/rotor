@@ -1,0 +1,10 @@
+const big = 1e21;
+const tiny = 0.00001;
+const sci = 1.5e-7;
+const negLit = -42;
+const negExpr = -big;
+const modFloat = 7.5 % 2.25;
+const div = 1 / 3;
+const hexMath = 0xff + 0b101;
+const underscored = 1_000_000 * 2;
+print(big, tiny, sci, negLit, negExpr, modFloat, div, hexMath, underscored);

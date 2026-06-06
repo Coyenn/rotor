@@ -15,4 +15,7 @@ var EnabledFixtures = []string{
 	"08_exports",
 	"09_unary",
 	"10_strings",
+	"11_edge_numbers",
+	"12_edge_strings",
+	"13_mixed",
 }

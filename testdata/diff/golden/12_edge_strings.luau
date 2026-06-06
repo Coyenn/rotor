@@ -1,0 +1,10 @@
+-- Compiled with roblox-ts v3.0.0
+local brackets = "contains ]] double brackets"
+local bothQuotes = `has "double" and 'single'`
+local newlines = "line1\nline2"
+local tabs = "col1\tcol2"
+local braces = `template with {"literal"} and \{braces\}`
+local nested = `outer {`inner {1 + 1}`} end`
+local unicode = "héllo wörld"
+print(brackets, bothQuotes, newlines, tabs, braces, nested, unicode)
+return nil
