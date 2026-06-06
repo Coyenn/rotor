@@ -130,49 +130,27 @@ func TestCompileFileReturnMapShape(t *testing.T) {
 	}
 }
 
-// TestCompileFilePanicBecomesError: transformer panics (here the deliberate
-// loop-closure-capture panic in loops.go, reachable from ordinary user input)
-// must come back from CompileFile as an "internal compiler error" — the CLI
-// must never crash on a user's source file.
+// TestCompileFilePanicBecomesError: a transformer panic must come back from
+// CompileFile as an "internal compiler error" — the CLI must never crash on
+// a user's source file. Phase 2's deliberate loop-closure-capture panic is
+// gone (the copy machinery landed in Phase 2b), so the boundary — which still
+// guards genuine internal errors — is exercised with a synthetic panic
+// injected through the dispatch func var.
 func TestCompileFilePanicBecomesError(t *testing.T) {
-	dir := t.TempDir()
-	typeRoots := filepath.ToSlash(filepath.Join(fixtureProjectDir(t), "node_modules", "@rbxts"))
-	tsconfig := fmt.Sprintf(`{
-	"compilerOptions": {
-		"module": "commonjs",
-		"moduleResolution": "Node",
-		"noLib": true,
-		"forceConsistentCasingInFileNames": true,
-		"moduleDetection": "force",
-		"strict": true,
-		"target": "ESNext",
-		"typeRoots": [%q],
-		"rootDir": "src",
-		"outDir": "out"
-	},
-	"include": ["src"]
-}`, typeRoots)
-	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
-		t.Fatal(err)
+	prev := transformer.TransformStatement
+	transformer.TransformStatement = func(s *transformer.State, node *ast.Node) *luau.List[luau.Statement] {
+		panic("synthetic transformer panic (test)")
 	}
-	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// A non-optimized for loop whose body closes over the loop variable hits
-	// the deliberate panic in loops.go (per-iteration capture is Phase 3).
-	src := "for (let i = 0; i !== 3; i++) {\n\tconst f = () => i;\n\tprint(f());\n}\n"
-	if err := os.WriteFile(filepath.Join(dir, "src", "capture.ts"), []byte(src), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() { transformer.TransformStatement = prev })
 
-	_, _, err := CompileFile(dir, filepath.Join("src", "capture.ts"))
+	_, _, err := CompileFile(fixtureProjectDir(t), filepath.Join("src", "01_literals.ts"))
 	if err == nil {
 		t.Fatal("expected an error from the recovered panic, got nil")
 	}
 	if !strings.Contains(err.Error(), "internal compiler error: ") {
 		t.Errorf("error missing 'internal compiler error: ' prefix: %v", err)
 	}
-	if !strings.Contains(err.Error(), "loop closure capture") {
+	if !strings.Contains(err.Error(), "synthetic transformer panic") {
 		t.Errorf("error missing panic message: %v", err)
 	}
 }

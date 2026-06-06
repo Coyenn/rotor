@@ -69,9 +69,9 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 }
 
 // transformAndRender runs the transformer and renderer behind a recover
-// boundary: the transformer deliberately panics on some user-reachable inputs
-// (e.g. the loop closure capture fallback in loops.go), and a user's source
-// must surface as an error, never crash the process.
+// boundary: the transformer panics on internal invariant violations (ported
+// upstream asserts — missing symbols, prereq-stack misuse), and a user's
+// source must surface as an error, never crash the process.
 func transformAndRender(state *transformer.State) (text string, diags []string, err error) {
 	defer func() {
 		if r := recover(); r != nil {

@@ -57,3 +57,9 @@ type base struct{ parent Node }
 func (b *base) Parent() Node     { return b.parent }
 func (b *base) setParent(p Node) { b.parent = p }
 func (b *base) nodeOrList()      {}
+
+// SetParent reparents node without cloning. Upstream transform code mutates
+// `.parent` directly in places (e.g. transformForStatement.ts addFinalizers
+// L47 fixes the parents of finalizer clones spliced before `continue`
+// statements); this is the Go surface for those parent fixups.
+func SetParent(node Node, parent Node) { node.setParent(parent) }

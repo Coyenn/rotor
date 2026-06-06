@@ -81,66 +81,138 @@ func transformDoStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 // C-style for statements — statements/transformForStatement.ts
 // ---------------------------------------------------------------------------
 
-// panicOnLoopClosureCapture is the Phase 2 stand-in for the fallback path's
-// per-iteration let-capture copy machinery (transformForStatement.ts
-// isIdWriteOrAsyncRead L78-100 / canSkipClone L73-76, both built on
-// ts.FindAllReferences): upstream emits `local _i = ...` outer copies,
-// per-iteration `local i = _i` headers and `_i = i` finalizers (cloned before
-// every `continue` via addFinalizers L35-71) so closures capture each
-// iteration's binding. Function transforms have not landed, so any loop whose
-// closure would need that machinery cannot compile correctly — fail loudly.
-//
-// Conservative trigger (documented simplification): any function-like node
-// anywhere inside the for statement that references a loop-declared symbol.
-// Upstream's other copy trigger — a WRITE to the loop variable outside the
-// incrementor with no closure involved — is deliberately NOT reproduced: the
-// copies are semantically inert without capture (byte divergence from rbxtsc
-// for such loops is a known Phase 3 gap, never wrong behavior).
-func panicOnLoopClosureCapture(s *State, forStatementNode *ast.Node, declarationList *ast.Node) {
-	symbols := map[*ast.Symbol]struct{}{}
-	for _, declaration := range declarationList.AsVariableDeclarationList().Declarations.Nodes {
-		name := declaration.AsVariableDeclaration().Name()
-		// Binding patterns raise rotorNotYetSupported in
-		// transformVariableDeclaration before any capture could matter.
-		if ast.IsIdentifier(name) {
-			if symbol := s.Checker.GetSymbolAtLocation(name); symbol != nil {
-				symbols[symbol] = struct{}{}
+// getDeclaredVariablesFromBindingName ports util/getDeclaredVariables.ts
+// getDeclaredVariablesFromBindingName (L3-17): flatten every declared
+// identifier out of a binding name, recursing object/array binding patterns
+// and skipping omitted array elements.
+func getDeclaredVariablesFromBindingName(node *ast.Node, list *[]*ast.Node) {
+	if ast.IsIdentifier(node) {
+		*list = append(*list, node)
+	} else if ast.IsObjectBindingPattern(node) {
+		for _, element := range node.AsBindingPattern().Elements.Nodes {
+			getDeclaredVariablesFromBindingName(element.Name(), list)
+		}
+	} else if ast.IsArrayBindingPattern(node) {
+		for _, element := range node.AsBindingPattern().Elements.Nodes {
+			if !ast.IsOmittedExpression(element) {
+				getDeclaredVariablesFromBindingName(element.Name(), list)
 			}
 		}
 	}
-	if len(symbols) == 0 {
-		return
+}
+
+// getDeclaredVariables ports util/getDeclaredVariables.ts (L19-29) for the
+// VariableDeclarationList input shape transformForStatementFallback uses.
+func getDeclaredVariables(declarationList *ast.Node) []*ast.Node {
+	list := []*ast.Node{}
+	for _, declaration := range declarationList.AsVariableDeclarationList().Declarations.Nodes {
+		getDeclaredVariablesFromBindingName(declaration.AsVariableDeclaration().Name(), &list)
+	}
+	return list
+}
+
+// canSkipClone ports transformForStatement.ts canSkipClone (L73-76): when the
+// loop variable is not referenced inside its own declaration list (`let i =
+// 0`, unlike `let i = 0, j = i`), the outer loop-carried slot can BE the
+// declared temp — no separate `_iCopy` indirection is needed.
+func canSkipClone(s *State, initializer *ast.Node, id *ast.Node) bool {
+	// is symbol used in initializer (besides its definition)
+	return !IsSymbolReferenced(s.Checker, id, initializer)
+}
+
+// isIdWriteOrAsyncRead ports transformForStatement.ts isIdWriteOrAsyncRead
+// (L78-100): does this loop variable need the per-iteration copy treatment?
+// True when any reference inside the ForStatement is (a) a write anywhere
+// except (solely) inside the incrementor, or (b) a read from inside a
+// function-like nested in the loop (closure capture — the "async read").
+func isIdWriteOrAsyncRead(s *State, forStatementNode *ast.Node, id *ast.Node) bool {
+	incrementor := forStatementNode.AsForStatement().Incrementor
+	return ForEachSymbolReference(s.Checker, id, forStatementNode, func(token *ast.Node) bool {
+		// write
+		if ast.IsWriteAccess(token) && (incrementor == nil || !isAncestorOf(incrementor, token)) {
+			return true
+		}
+
+		// async read
+		ancestor := ast.FindAncestor(token, func(v *ast.Node) bool {
+			return v == forStatementNode || ast.IsFunctionLike(v)
+		})
+		if ancestor != nil && ancestor != forStatementNode {
+			return true
+		}
+		return false
+	})
+}
+
+// addFinalizersToIfStatement ports transformForStatement.ts
+// addFinalizersToIfStatement (L22-33): recurse into both branches, following
+// else-if chains.
+func addFinalizersToIfStatement(node *luau.IfStatement, finalizers *luau.List[luau.Statement]) {
+	if node.Statements.IsNonEmpty() {
+		addFinalizers(node.Statements, node.Statements.Head, finalizers)
+	}
+	if elseList, ok := node.ElseBody.(*luau.List[luau.Statement]); ok {
+		if elseList.IsNonEmpty() {
+			addFinalizers(elseList, elseList.Head, finalizers)
+		}
+	} else if elseIf, ok := node.ElseBody.(*luau.IfStatement); ok {
+		addFinalizersToIfStatement(elseIf, finalizers)
+	}
+}
+
+// addFinalizers ports transformForStatement.ts addFinalizers (L35-71): walk
+// the emitted Luau statement list, splicing a CLONE of the finalizer list
+// (`_i = i` write-backs) before every ContinueStatement so `continue` carries
+// the current iteration's values into the next condition test. Recurses into
+// DoStatement bodies and IfStatement branches but NOT into nested loops —
+// their `continue` targets the inner loop, which has its own finalizers (or
+// none). Parent fixups mirror upstream L47; upstream leaves the clone head's
+// prev pointer dangling (only forward links are repaired) — ported verbatim,
+// rendering only walks forward.
+func addFinalizers(list *luau.List[luau.Statement], node *luau.ListNode[luau.Statement], finalizers *luau.List[luau.Statement]) {
+	if list.IsEmpty() {
+		panic("transformer: addFinalizers on empty list") // upstream assert
 	}
 
-	var referencesLoopVar func(node *ast.Node) bool
-	referencesLoopVar = func(node *ast.Node) bool {
-		if ast.IsIdentifier(node) {
-			if symbol := s.Checker.GetSymbolAtLocation(node); symbol != nil {
-				if _, ok := symbols[symbol]; ok {
-					return true
-				}
-			}
+	statement := node.Value
+	if _, ok := statement.(*luau.ContinueStatement); ok {
+		finalizersClone := finalizers.Clone()
+
+		// fix node parents
+		finalizersClone.ForEach(func(stmt luau.Statement) { luau.SetParent(stmt, statement.Parent()) })
+
+		if node.Prev != nil {
+			node.Prev.Next = finalizersClone.Head
+		} else if node == list.Head {
+			list.Head = finalizersClone.Head
 		}
-		return node.ForEachChild(referencesLoopVar)
+
+		node.Prev = finalizersClone.Tail
+
+		finalizersClone.Tail.Next = node
 	}
-	var visit func(node *ast.Node) bool
-	visit = func(node *ast.Node) bool {
-		if ast.IsFunctionLike(node) {
-			return referencesLoopVar(node)
+
+	if doStatement, ok := statement.(*luau.DoStatement); ok {
+		if doStatement.Statements.IsNonEmpty() {
+			addFinalizers(doStatement.Statements, doStatement.Statements.Head, finalizers)
 		}
-		return node.ForEachChild(visit)
+	} else if ifStatement, ok := statement.(*luau.IfStatement); ok {
+		addFinalizersToIfStatement(ifStatement, finalizers)
 	}
-	if forStatementNode.ForEachChild(visit) {
-		panic("rotor: loop closure capture not yet supported (phase 3)")
+
+	if node.Next != nil {
+		addFinalizers(list, node.Next, finalizers)
 	}
 }
 
 // transformForStatementFallback ports transformForStatementFallback
-// (L102-297), the fully general while-loop desugaring, minus the
-// per-iteration let-capture copies (see panicOnLoopClosureCapture). With the
-// copies gone the finalizer list is always empty, so addFinalizers (L35-71,
-// the continue-statement writeback cloning) and the finalizer tail-push
-// (L278-284) are deferred to Phase 3 alongside them.
+// (L102-297), the fully general while-loop desugaring, including the
+// per-iteration let-capture copy machinery: loop variables that are written
+// in the body or captured by a closure get an outer loop-carried slot
+// (`local _i = 0`), a per-iteration copy at the body head (`local i = _i`),
+// and `_i = i` finalizers at the body tail and before every `continue`, so
+// closures capture each iteration's binding (TS per-iteration `let`
+// semantics) and writes survive into the next condition test.
 func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	forStatement := node.AsForStatement()
 	initializer, condition, incrementor := forStatement.Initializer, forStatement.Condition, forStatement.Incrementor
@@ -148,6 +220,33 @@ func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Sta
 
 	result := luau.NewList[luau.Statement]()
 	whileStatements := luau.NewList[luau.Statement]()
+	finalizerStatements := luau.NewList[luau.Statement]()
+
+	// Reference analyses (L109-124): which declared variables need copies,
+	// and which can collapse the Copy indirection.
+	var variables []*ast.Node
+	hasWriteOrAsyncRead := map[*ast.Symbol]bool{}
+	skipClone := map[*ast.Symbol]bool{}
+	symbolOf := func(id *ast.Node) *ast.Symbol {
+		symbol := s.Checker.GetSymbolAtLocation(id)
+		if symbol == nil {
+			panic("transformer: transformForStatementFallback: no symbol") // upstream assert
+		}
+		return symbol
+	}
+
+	if initializer != nil && ast.IsVariableDeclarationList(initializer) {
+		variables = getDeclaredVariables(initializer)
+		for _, id := range variables {
+			symbol := symbolOf(id)
+			if isIdWriteOrAsyncRead(s, node, id) {
+				hasWriteOrAsyncRead[symbol] = true
+			}
+			if canSkipClone(s, initializer, id) {
+				skipClone[symbol] = true
+			}
+		}
+	}
 
 	if initializer != nil {
 		if ast.IsVariableDeclarationList(initializer) {
@@ -155,7 +254,20 @@ func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Sta
 				s.Diags.Add(DiagNoVar(node))
 			}
 
-			panicOnLoopClosureCapture(s, node, initializer)
+			// Pre-bind needs-copy symbols to temp ids (L132-143) so the
+			// declaration transform below emits `local _i = 0` (skipClone) or
+			// `local _iCopy = 0` instead of `local i = 0` —
+			// transformIdentifierDefined consults SymbolToID.
+			for _, id := range variables {
+				symbol := symbolOf(id)
+				if hasWriteOrAsyncRead[symbol] {
+					if skipClone[symbol] {
+						s.SymbolToID[symbol] = luau.TempID(id.Text())
+					} else {
+						s.SymbolToID[symbol] = luau.TempID(id.Text() + "Copy")
+					}
+				}
+			}
 
 			// transformVariableDeclaration per declaration (L145-157): each
 			// declaration's prereqs land before its statements.
@@ -166,6 +278,38 @@ func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Sta
 				})
 				result.PushList(decPrereqs)
 				result.PushList(decStatements)
+			}
+
+			// Copies + finalizers per needs-copy symbol (L159-203).
+			for _, id := range variables {
+				symbol := symbolOf(id)
+				if !hasWriteOrAsyncRead[symbol] {
+					continue
+				}
+				var tempID *luau.TemporaryIdentifier
+				if skipClone[symbol] {
+					tempID = s.SymbolToID[symbol]
+					if tempID == nil {
+						panic("transformer: transformForStatementFallback: missing temp id") // upstream assert
+					}
+				} else {
+					tempID = luau.TempID(id.Text())
+					copyID := s.SymbolToID[symbol]
+					if copyID == nil {
+						panic("transformer: transformForStatementFallback: missing copy id") // upstream assert
+					}
+
+					// local _i = _iCopy
+					result.Push(luau.NewVariableDeclaration(tempID, copyID))
+				}
+				delete(s.SymbolToID, symbol)
+				realID := TransformIdentifierDefined(s, id)
+
+				// local i = _i
+				whileStatements.Push(luau.NewVariableDeclaration(realID, tempID))
+
+				// _i = i
+				finalizerStatements.Push(luau.NewAssignment(tempID, "=", realID))
 			}
 		} else {
 			// Expression initializer (L204-208).
@@ -235,6 +379,18 @@ func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Sta
 	}
 
 	whileStatements.PushList(TransformStatementList(s, statement, getStatements(statement), nil))
+
+	// Finalizer placement (L278-284): splice clones before every `continue`
+	// (without descending into nested loops), then append at the tail unless
+	// the body already ends in a final statement (return/break/continue —
+	// the continue case got its splice above).
+	if whileStatements.IsNonEmpty() && finalizerStatements.IsNonEmpty() {
+		addFinalizers(whileStatements, whileStatements.Head, finalizerStatements)
+	}
+
+	if whileStatements.Tail == nil || !luau.IsFinalStatement(whileStatements.Tail.Value) {
+		whileStatements.PushList(finalizerStatements)
+	}
 
 	result.Push(luau.NewWhile(conditionExp, whileStatements))
 
@@ -320,29 +476,24 @@ func isUnaryExpressionWithWrite(node *ast.Node) bool {
 
 // isMutatedInBody ports isMutatedInBody (L348-366): true when any reference
 // to the loop variable inside the body is an assignment target or a ++/--
-// operand. Upstream walks references with ts.FindAllReferences; rotor walks
-// the body resolving each identifier's symbol — equivalent within one file.
-func isMutatedInBody(s *State, idSymbol *ast.Symbol, body *ast.Node) bool {
-	var visit func(node *ast.Node) bool
-	visit = func(node *ast.Node) bool {
-		if ast.IsIdentifier(node) && s.Checker.GetSymbolAtLocation(node) == idSymbol {
-			parent := SkipUpwards(node).Parent
-			if parent != nil {
-				if ast.IsAssignmentExpression(parent, false) && SkipDownwards(parent.AsBinaryExpression().Left) == node {
-					return true
-				}
-				if isUnaryExpressionWithWrite(parent) {
-					operand, _ := unaryOperandAndOperator(parent)
-					if SkipDownwards(operand) == node {
-						return true
-					}
-				}
-			}
+// operand.
+func isMutatedInBody(s *State, identifier *ast.Node, body *ast.Node) bool {
+	return ForEachSymbolReference(s.Checker, identifier, body, func(token *ast.Node) bool {
+		parent := SkipUpwards(token).Parent
+		if parent == nil {
 			return false
 		}
-		return node.ForEachChild(visit)
-	}
-	return visit(body)
+		if ast.IsAssignmentExpression(parent, false) && SkipDownwards(parent.AsBinaryExpression().Left) == token {
+			return true
+		}
+		if isUnaryExpressionWithWrite(parent) {
+			operand, _ := unaryOperandAndOperator(parent)
+			if SkipDownwards(operand) == token {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // isProbablyInteger ports isProbablyInteger (L368-390): integer numeric
@@ -468,7 +619,7 @@ func transformForStatementOptimized(s *State, node *ast.Node) *luau.List[luau.St
 		return nil
 	}
 
-	if isMutatedInBody(s, idSymbol, statement) {
+	if isMutatedInBody(s, decName, statement) {
 		return nil
 	}
 

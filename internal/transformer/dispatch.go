@@ -42,6 +42,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 	// regular transforms
 	case ast.KindArrayLiteralExpression:
 		return transformArrayLiteralExpression(s, node)
+	case ast.KindArrowFunction, ast.KindFunctionExpression:
+		return transformFunctionExpression(s, node)
 	case ast.KindBinaryExpression:
 		return transformBinaryExpression(s, node)
 	case ast.KindCallExpression:

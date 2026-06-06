@@ -52,14 +52,40 @@ func transformVariable(s *State, identifier *ast.Node, right luau.Expression) lu
 	return left.(luau.WritableExpression)
 }
 
-// checkVariableHoist ports util/checkVariableHoist.ts (L6-39): hoisting for
-// variables declared directly inside a switch CaseClause but referenced
-// outside their clause, detected upstream with
-// ts.FindAllReferences.Core.eachSymbolReferenceInFile. Switch statements are
-// outside Phase 2 scope (they raise rotorNotYetSupported before any CaseClause
-// declaration can exist), so this is a documented no-op.
-// switch-case FindAllReferences hoisting: lands with the switch transform.
+// checkVariableHoist ports util/checkVariableHoist.ts (L6-39): a let/const
+// declared directly inside a switch CaseClause is block-scoped to the whole
+// case BLOCK in TS, so a reference from a sibling clause needs a `local x`
+// hoisted to the top of the declaring clause (before its `if`) and the
+// declaration demoted to an assignment (transformVariable sees IsHoisted).
+// Runs at DECLARATIONS, distinct from checkIdentifierHoist (use-before-
+// declare, at references). Keyed on the CaseClause in HoistsByStatement —
+// consumed by the switch transform's createHoistDeclaration (Task 6 wires
+// switch; until then no CaseClause-scoped declaration reaches a transform).
 func checkVariableHoist(s *State, identifier *ast.Node, symbol *ast.Symbol) {
+	if _, decided := s.IsHoisted[symbol]; decided {
+		return
+	}
+
+	statement := ast.FindAncestor(identifier, ast.IsStatement)
+	if statement == nil {
+		return
+	}
+
+	caseClause := statement.Parent
+	if caseClause == nil || !ast.IsCaseClause(caseClause) {
+		return
+	}
+	caseBlock := caseClause.Parent
+
+	isUsedOutsideOfCaseClause := ForEachSymbolReference(s.Checker, identifier, caseBlock,
+		func(token *ast.Node) bool {
+			return !isAncestorOf(caseClause, token)
+		})
+
+	if isUsedOutsideOfCaseClause {
+		s.HoistsByStatement[caseClause] = append(s.HoistsByStatement[caseClause], identifier)
+		s.IsHoisted[symbol] = true
+	}
 }
 
 // transformVariableDeclaration ports transformVariableStatement.ts
