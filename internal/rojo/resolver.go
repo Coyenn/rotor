@@ -1,0 +1,564 @@
+// Package rojo ports @roblox-ts/rojo-resolver 1.1.0 and
+// @roblox-ts/path-translator 1.1.0 to Go (vendored at
+// reference/rojo-resolver and reference/path-translator; all line references
+// are into those src/*.ts files). This code decides require paths, so it is
+// byte-parity-critical downstream — quirks are ported verbatim.
+package rojo
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Extension constants (RojoResolver.ts L7-19, constants.ts).
+const (
+	luaExt  = ".lua"
+	luauExt = ".luau"
+	jsonExt = ".json"
+	tomlExt = ".toml"
+
+	initName = "init"
+
+	serverSubExt = ".server"
+	clientSubExt = ".client"
+	moduleSubExt = ""
+)
+
+var rojoModuleExts = map[string]bool{luauExt: true, jsonExt: true, tomlExt: true}
+var rojoScriptExts = map[string]bool{luauExt: true}
+
+// Config file names (RojoResolver.ts L47-49).
+var rojoFileRegex = regexp.MustCompile(`^.+\.project\.json$`)
+
+const (
+	rojoDefaultName = "default.project.json"
+	rojoOldName     = "roblox-project.json"
+)
+
+// RbxType classifies an output file (RojoResolver.ts L51-56).
+type RbxType int
+
+const (
+	RbxTypeModuleScript RbxType = iota
+	RbxTypeScript
+	RbxTypeLocalScript
+	RbxTypeUnknown
+)
+
+var subExtTypeMap = map[string]RbxType{
+	moduleSubExt: RbxTypeModuleScript,
+	serverSubExt: RbxTypeScript,
+	clientSubExt: RbxTypeLocalScript,
+}
+
+// FileRelation describes isolated-container containment of an import edge
+// (RojoResolver.ts L87-92).
+type FileRelation int
+
+const (
+	FileRelationOutToOut FileRelation = iota // absolute
+	FileRelationOutToIn                      // error
+	FileRelationInToOut                      // absolute
+	FileRelationInToIn                       // relative
+)
+
+// NetworkType describes server/client-only containers (RojoResolver.ts L94-98).
+type NetworkType int
+
+const (
+	NetworkTypeUnknown NetworkType = iota
+	NetworkTypeClient
+	NetworkTypeServer
+)
+
+// Isolated/network container tables (RojoResolver.ts L64-74).
+var defaultIsolatedContainers = []RbxPath{
+	{"StarterPack"},
+	{"StarterGui"},
+	{"StarterPlayer", "StarterPlayerScripts"},
+	{"StarterPlayer", "StarterCharacterScripts"},
+	{"StarterPlayer", "StarterCharacter"},
+	{"PluginDebugService"},
+}
+
+var clientContainers = []RbxPath{{"StarterPack"}, {"StarterGui"}, {"StarterPlayer"}}
+var serverContainers = []RbxPath{{"ServerStorage"}, {"ServerScriptService"}}
+
+// RbxPath is a Roblox instance tree path (RojoResolver.ts L79).
+type RbxPath = []string
+
+// RelativeRbxPathSegment is one segment of a RelativeRbxPath: either the
+// Parent sentinel or an instance name (upstream string | RbxPathParent).
+type RelativeRbxPathSegment struct {
+	Parent bool
+	Name   string
+}
+
+// RbxPathParent is the Parent sentinel segment (RojoResolver.ts L160).
+var RbxPathParent = RelativeRbxPathSegment{Parent: true}
+
+// RelativeRbxPath is the result of Relative (RojoResolver.ts L80).
+type RelativeRbxPath = []RelativeRbxPathSegment
+
+// PartitionInfo maps a filesystem subtree to an rbx path (RojoResolver.ts L82-85).
+type PartitionInfo struct {
+	RbxPath RbxPath
+	FsPath  string
+}
+
+// RojoResolver resolves filesystem paths to Roblox instance tree paths from
+// a Rojo project configuration.
+type RojoResolver struct {
+	warnings             []string
+	rbxPath              []string
+	partitions           []PartitionInfo
+	filePathToRbxPathMap map[string]RbxPath
+	isolatedContainers   []RbxPath
+	// IsGame is true when the tree declares $className "DataModel".
+	IsGame bool
+}
+
+func newRojoResolver() *RojoResolver {
+	return &RojoResolver{
+		filePathToRbxPathMap: make(map[string]RbxPath),
+		isolatedContainers:   slices.Clone(defaultIsolatedContainers),
+	}
+}
+
+// FindRojoConfigFilePath finds the Rojo config for a project directory:
+// default.project.json wins, else candidates by name with a warning when
+// multiple exist (RojoResolver.ts L164-183). Returns "" when none is found.
+// Note upstream readdirSync returns OS order; os.ReadDir sorts by name,
+// which makes candidate selection deterministic.
+func FindRojoConfigFilePath(projectPath string) (string, []string) {
+	var warnings []string
+
+	defaultPath := filepath.Join(projectPath, rojoDefaultName)
+	if pathExists(defaultPath) {
+		return defaultPath, warnings
+	}
+
+	var candidates []string
+	entries, err := os.ReadDir(projectPath)
+	if err == nil {
+		for _, entry := range entries {
+			fileName := entry.Name()
+			if fileName != rojoDefaultName && (fileName == rojoOldName || rojoFileRegex.MatchString(fileName)) {
+				candidates = append(candidates, filepath.Join(projectPath, fileName))
+			}
+		}
+	}
+
+	if len(candidates) > 1 {
+		warnings = append(warnings, fmt.Sprintf("Multiple *.project.json files found, using %s", candidates[0]))
+	}
+	if len(candidates) == 0 {
+		return "", warnings
+	}
+	return candidates[0], warnings
+}
+
+// GetWarnings returns warnings accumulated while parsing configs.
+func (r *RojoResolver) GetWarnings() []string {
+	return r.warnings
+}
+
+func (r *RojoResolver) warn(str string) {
+	r.warnings = append(r.warnings, str)
+}
+
+// FromPath parses the given Rojo config file (RojoResolver.ts L197-201). The
+// project name is NOT pushed onto rbx paths (doNotPush).
+func FromPath(rojoConfigFilePath string) *RojoResolver {
+	r := newRojoResolver()
+	abs, err := filepath.Abs(rojoConfigFilePath)
+	if err != nil {
+		abs = rojoConfigFilePath
+	}
+	r.parseConfig(abs, true)
+	return r
+}
+
+// Synthetic creates a resolver for ProjectType.Package that forces all
+// imports to be relative (RojoResolver.ts L203-211): one partition mapping
+// basePath to the rbx root.
+func Synthetic(basePath string) *RojoResolver {
+	r := newRojoResolver()
+	p := basePath
+	r.parseTree(basePath, "", &Tree{Path: &p}, true)
+	return r
+}
+
+// FromTree creates a resolver from an in-memory tree (RojoResolver.ts L213-217).
+func FromTree(basePath string, tree *Tree) *RojoResolver {
+	r := newRojoResolver()
+	r.parseTree(basePath, "", tree, true)
+	return r
+}
+
+// parseConfig reads + validates a project file and walks its tree
+// (RojoResolver.ts L225-241). Where upstream's realpathSync would throw for
+// a missing file, we fall through to the "Path does not exist" warning; a
+// JSON.parse failure produces the "Invalid configuration!" warning (the
+// try/finally validates undefined) and, unlike upstream, does not re-throw.
+func (r *RojoResolver) parseConfig(rojoConfigFilePath string, doNotPush bool) {
+	realPath, err := filepath.EvalSymlinks(rojoConfigFilePath)
+	if err != nil || !pathExists(realPath) {
+		r.warn(`RojoResolver: Path does not exist "` + rojoConfigFilePath + `"`)
+		return
+	}
+	configJSON := jsonValue{kind: jsonInvalid}
+	if data, err := os.ReadFile(realPath); err == nil {
+		configJSON = parseJSON(data)
+	}
+	if msg := validateConfig(configJSON); msg != "" {
+		r.warn("RojoResolver: Invalid configuration! " + msg)
+		return
+	}
+	name, tree := configFromJSON(configJSON)
+	r.parseTree(filepath.Dir(rojoConfigFilePath), name, tree, doNotPush)
+}
+
+// parseTree walks a tree node (RojoResolver.ts L243-259).
+func (r *RojoResolver) parseTree(basePath, name string, tree *Tree, doNotPush bool) {
+	if !doNotPush {
+		r.rbxPath = append(r.rbxPath, name)
+	}
+
+	if tree.Path != nil {
+		r.parsePath(resolvePath(basePath, *tree.Path))
+	}
+
+	if tree.ClassName == "DataModel" {
+		r.IsGame = true
+	}
+
+	for _, child := range tree.Children {
+		r.parseTree(basePath, child.Name, child.Tree, false)
+	}
+
+	if !doNotPush {
+		r.rbxPath = r.rbxPath[:len(r.rbxPath)-1]
+	}
+}
+
+// parsePath handles one $path target (RojoResolver.ts L261-282): module-ext
+// files map exactly; directories containing default.project.json nest; all
+// else becomes a partition, UNSHIFTED so later/deeper partitions match first.
+func (r *RojoResolver) parsePath(itemPath string) {
+	itemPath = convertToLuau(itemPath)
+	realPath := itemPath
+	if pathExists(itemPath) {
+		realPath = realpathOr(itemPath)
+	}
+	ext := extname(itemPath)
+	if rojoModuleExts[ext] {
+		r.filePathToRbxPathMap[itemPath] = slices.Clone(r.rbxPath)
+	} else {
+		isDirectory := false
+		if st, err := os.Stat(realPath); err == nil && st.IsDir() {
+			isDirectory = true
+		}
+		if isDirectory && dirContains(realPath, rojoDefaultName) {
+			r.parseConfig(filepath.Join(itemPath, rojoDefaultName), true)
+		} else {
+			r.partitions = append([]PartitionInfo{{
+				FsPath:  itemPath,
+				RbxPath: slices.Clone(r.rbxPath),
+			}}, r.partitions...)
+
+			if isDirectory {
+				r.searchDirectory(itemPath, "")
+			}
+		}
+	}
+}
+
+// searchDirectory recursively discovers nested project files inside a
+// partition (RojoResolver.ts L284-314). A default.project.json found while
+// walking is parsed WITH its name pushed (doNotPush=false), replacing the
+// directory's own name.
+func (r *RojoResolver) searchDirectory(directory, item string) {
+	realPath := realpathOr(directory)
+	entries, err := os.ReadDir(realPath)
+	if err != nil {
+		return
+	}
+	children := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		children = append(children, entry.Name())
+	}
+
+	if slices.Contains(children, rojoDefaultName) {
+		r.parseConfig(filepath.Join(directory, rojoDefaultName), false)
+		return
+	}
+
+	if item != "" {
+		r.rbxPath = append(r.rbxPath, item)
+	}
+
+	// *.project.json
+	for _, child := range children {
+		childPath := filepath.Join(directory, child)
+		if st, err := os.Stat(childPath); err == nil && st.Mode().IsRegular() &&
+			child != rojoDefaultName && rojoFileRegex.MatchString(child) {
+			r.parseConfig(childPath, false)
+		}
+	}
+
+	// folders
+	for _, child := range children {
+		childPath := filepath.Join(directory, child)
+		if st, err := os.Stat(childPath); err == nil && st.IsDir() {
+			r.searchDirectory(childPath, child)
+		}
+	}
+
+	if item != "" {
+		r.rbxPath = r.rbxPath[:len(r.rbxPath)-1]
+	}
+}
+
+// GetRbxPathFromFilePath resolves an OUTPUT file path to its rbx path
+// (RojoResolver.ts L316-337): exact map hit first, then the first matching
+// partition (LIFO). Returns ok=false when no Rojo data covers the file.
+func (r *RojoResolver) GetRbxPathFromFilePath(filePath string) (RbxPath, bool) {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, false
+	}
+	filePath = convertToLuau(abs)
+
+	if rbxPath, ok := r.filePathToRbxPathMap[filePath]; ok {
+		return slices.Clone(rbxPath), true
+	}
+
+	ext := extname(filePath)
+	for _, partition := range r.partitions {
+		if isPathDescendantOf(filePath, partition.FsPath) {
+			stripped := stripRojoExts(filePath)
+			relativePath, err := filepath.Rel(partition.FsPath, stripped)
+			if err != nil {
+				continue
+			}
+			var relativeParts []string
+			if relativePath != "" && relativePath != "." {
+				relativeParts = strings.Split(relativePath, string(filepath.Separator))
+			}
+			if rojoScriptExts[ext] && len(relativeParts) > 0 && relativeParts[len(relativeParts)-1] == initName {
+				relativeParts = relativeParts[:len(relativeParts)-1]
+			}
+			result := make(RbxPath, 0, len(partition.RbxPath)+len(relativeParts))
+			result = append(result, partition.RbxPath...)
+			result = append(result, relativeParts...)
+			return result, true
+		}
+	}
+	return nil, false
+}
+
+// GetRbxTypeFromFilePath classifies a file by sub-extension
+// (RojoResolver.ts L339-349).
+func (r *RojoResolver) GetRbxTypeFromFilePath(filePath string) RbxType {
+	filePath = convertToLuau(filePath)
+	ext := extname(filePath)
+	subext := extname(strings.TrimSuffix(filepath.Base(filePath), ext))
+	if rojoScriptExts[ext] {
+		if t, ok := subExtTypeMap[subext]; ok {
+			return t
+		}
+		return RbxTypeUnknown
+	}
+	// non-script exts cannot use .server, .client, etc.
+	return RbxTypeModuleScript
+}
+
+// getContainer returns the first container that prefixes rbxPath; only games
+// have containers (RojoResolver.ts L351-361).
+func (r *RojoResolver) getContainer(from []RbxPath, rbxPath RbxPath) RbxPath {
+	if r.IsGame {
+		for _, container := range from {
+			if arrayStartsWith(rbxPath, container) {
+				return container
+			}
+		}
+	}
+	return nil
+}
+
+// GetFileRelation classifies an import edge against the isolated containers
+// (RojoResolver.ts L363-380).
+func (r *RojoResolver) GetFileRelation(fileRbxPath, moduleRbxPath RbxPath) FileRelation {
+	fileContainer := r.getContainer(r.isolatedContainers, fileRbxPath)
+	moduleContainer := r.getContainer(r.isolatedContainers, moduleRbxPath)
+	switch {
+	case fileContainer != nil && moduleContainer != nil:
+		if slices.Equal(fileContainer, moduleContainer) {
+			return FileRelationInToIn
+		}
+		return FileRelationOutToIn
+	case fileContainer != nil:
+		return FileRelationInToOut
+	case moduleContainer != nil:
+		return FileRelationOutToIn
+	default:
+		return FileRelationOutToOut
+	}
+}
+
+// IsIsolated reports whether rbxPath is inside an isolated container
+// (RojoResolver.ts L382-384).
+func (r *RojoResolver) IsIsolated(rbxPath RbxPath) bool {
+	return r.getContainer(r.isolatedContainers, rbxPath) != nil
+}
+
+// GetNetworkType reports server/client-only containment; server containers
+// are checked before client (RojoResolver.ts L386-394).
+func (r *RojoResolver) GetNetworkType(rbxPath RbxPath) NetworkType {
+	if r.getContainer(serverContainers, rbxPath) != nil {
+		return NetworkTypeServer
+	}
+	if r.getContainer(clientContainers, rbxPath) != nil {
+		return NetworkTypeClient
+	}
+	return NetworkTypeUnknown
+}
+
+// Relative computes the path from rbxFrom to rbxTo: one Parent per remaining
+// `from` segment past the first difference, then the `to` tail
+// (RojoResolver.ts L396-418).
+func Relative(rbxFrom, rbxTo RbxPath) RelativeRbxPath {
+	maxLength := max(len(rbxFrom), len(rbxTo))
+	diffIndex := maxLength
+	for i := 0; i < maxLength; i++ {
+		// Out-of-range reads compare as undefined in JS: any in-range value
+		// differs from it.
+		if i >= len(rbxFrom) || i >= len(rbxTo) || rbxFrom[i] != rbxTo[i] {
+			diffIndex = i
+			break
+		}
+	}
+
+	result := RelativeRbxPath{}
+	if diffIndex < len(rbxFrom) {
+		for i := 0; i < len(rbxFrom)-diffIndex; i++ {
+			result = append(result, RbxPathParent)
+		}
+	}
+
+	for i := diffIndex; i < len(rbxTo); i++ {
+		result = append(result, RelativeRbxPathSegment{Name: rbxTo[i]})
+	}
+
+	return result
+}
+
+// GetPartitions exposes the partition list, front = highest precedence
+// (RojoResolver.ts L420-422).
+func (r *RojoResolver) GetPartitions() []PartitionInfo {
+	return r.partitions
+}
+
+// --- helpers (RojoResolver.ts L100-158) ---
+
+// stripRojoExts removes a module ext and, for script exts, a .server/.client
+// sub-extension beneath it (RojoResolver.ts L100-112).
+func stripRojoExts(filePath string) string {
+	ext := extname(filePath)
+	if rojoModuleExts[ext] {
+		filePath = filePath[:len(filePath)-len(ext)]
+		if rojoScriptExts[ext] {
+			subext := extname(filePath)
+			if subext == serverSubExt || subext == clientSubExt {
+				filePath = filePath[:len(filePath)-len(subext)]
+			}
+		}
+	}
+	return filePath
+}
+
+func arrayStartsWith(a, b RbxPath) bool {
+	minLength := min(len(a), len(b))
+	for i := 0; i < minLength; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isPathDescendantOf mirrors RojoResolver.ts L124-126, including the quirk
+// that a direct child whose name starts with ".." is treated as outside.
+func isPathDescendantOf(filePath, dirPath string) bool {
+	if dirPath == filePath {
+		return true
+	}
+	rel, err := filepath.Rel(dirPath, filePath)
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(rel, "..")
+}
+
+// convertToLuau renames a .lua path to .luau (RojoResolver.ts L154-158).
+func convertToLuau(filePath string) string {
+	if extname(filePath) == luaExt {
+		return filePath[:len(filePath)-len(luaExt)] + luauExt
+	}
+	return filePath
+}
+
+// extname mirrors Node path.extname: the basename's last "."-suffix, unless
+// the dot is its first character ("" for dotfiles and for "."/"..").
+func extname(p string) string {
+	base := filepath.Base(p)
+	if base == ".." {
+		return ""
+	}
+	idx := strings.LastIndexByte(base, '.')
+	if idx <= 0 {
+		return ""
+	}
+	return base[idx:]
+}
+
+// resolvePath mirrors Node path.resolve(basePath, p) for an absolute basePath.
+func resolvePath(basePath, p string) string {
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Join(basePath, p)
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+// realpathOr resolves symlinks, falling back to the input on failure.
+func realpathOr(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	return p
+}
+
+// dirContains mirrors fs.readdirSync(dir).includes(name): an exact,
+// case-sensitive entry-name match.
+func dirContains(dir, name string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Name() == name {
+			return true
+		}
+	}
+	return false
+}
