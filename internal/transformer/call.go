@@ -1,6 +1,8 @@
 package transformer
 
 import (
+	"fmt"
+
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/checker"
@@ -11,10 +13,12 @@ import (
 // util/convertToIndexableExpression.ts, util/expressionMightMutate.ts,
 // util/wrapReturnIfLuaTuple.ts, util/arrayBindingPatternContainsHoists.ts.
 //
-// Macro hook points query the MacroManager (macromanager.go); registered
-// entries with a nil Macro are known upstream macros rotor has not
-// implemented yet and raise rotorNotYetSupported instead of silently-wrong
-// output. full macro tables (runCallMacro): Phase 3b.
+// Macro hook points query the MacroManager (macromanager.go); entries with a
+// real Macro run through runCallMacro (the math-operation property-call
+// macros as of Phase 3a); registered entries with a nil Macro are known
+// upstream macros rotor has not implemented yet and raise
+// rotorNotYetSupported instead of silently-wrong output. The remaining macro
+// tables land in Phase 3b.
 
 // convertToIndexableExpression ports util/convertToIndexableExpression.ts:
 // wrap non-indexable expressions in parentheses so they can be indexed or
@@ -172,6 +176,95 @@ func wrapReturnIfLuaTuple(s *State, node *ast.Node, exp luau.Expression) luau.Ex
 }
 
 // ---------------------------------------------------------------------------
+// runCallMacro — transformCallExpression.ts L21-83
+// ---------------------------------------------------------------------------
+
+// runCallMacro ports runCallMacro: transform the arguments (expanding a
+// trailing tuple-typed spread into temp ids; vararg macros reject spreads),
+// push mutable arguments and the base expression to temps when prereqs
+// intervene, then run the macro. The macro parameter is an unnamed func type
+// so both CallMacro and PropertyCallMacro values convert implicitly (upstream
+// types the parameter `CallMacro | PropertyCallMacro`).
+func runCallMacro(
+	macro func(*State, *ast.Node, luau.Expression, []luau.Expression) luau.Expression,
+	s *State,
+	node *ast.Node,
+	expression luau.Expression,
+	nodeArguments []*ast.Node,
+) luau.Expression {
+	call := node.AsCallExpression()
+
+	var args []luau.Expression
+	prereqs := s.CaptureStatements(func() {
+		args = ensureTransformOrder(s, nodeArguments)
+		if len(nodeArguments) > 0 {
+			if lastArg := nodeArguments[len(nodeArguments)-1]; ast.IsSpreadElement(lastArg) {
+				signature := s.Checker.GetSignaturesOfType(s.GetType(call.Expression), checker.SignatureKindCall)[0]
+				parameters := signature.Parameters()
+
+				lastParameter := parameters[len(parameters)-1].ValueDeclaration
+				if lastParameter != nil && ast.IsParameterDeclaration(lastParameter) && lastParameter.AsParameterDeclaration().DotDotDotToken != nil {
+					s.Diags.Add(DiagNoVarArgsMacroSpread(lastArg))
+					return
+				}
+
+				// use .expression for the tuple type, simply `lastArg` would
+				// give the tuple's element type
+				tupleArgType := s.GetType(lastArg.AsSpreadElement().Expression)
+				// Since we've excluded vararg macros, TS will have ensured
+				// that the spread is from a tuple type
+				if !tupleArgType.IsTupleType() {
+					panic("transformer: runCallMacro spread argument is not a tuple type") // upstream assert
+				}
+				argumentCount := len(tupleArgType.TargetTupleType().ElementFlags())
+
+				spread := args[len(args)-1]
+				args = args[:len(args)-1]
+				tempIds := luau.NewList[luau.AnyIdentifier]()
+				for i := len(args); i < argumentCount; i++ {
+					tempID := luau.TempID(fmt.Sprintf("spread%d", i))
+					args = append(args, tempID)
+					tempIds.Push(tempID)
+				}
+				s.Prereq(luau.NewVariableDeclaration(tempIds, spread))
+			}
+		}
+
+		for i := range args {
+			// spread-expanded args extend past nodeArguments; upstream indexes
+			// past the array end (undefined), Go passes nil.
+			var nodeArg *ast.Node
+			if i < len(nodeArguments) {
+				nodeArg = nodeArguments[i]
+			}
+			if expressionMightMutate(s, args[i], nodeArg) {
+				name := ValueToIdStr(args[i])
+				if name == "" {
+					name = fmt.Sprintf("arg%d", i)
+				}
+				args[i] = s.PushToVar(args[i], name)
+			}
+		}
+	})
+
+	nodeExpression := call.Expression
+	if ast.IsPropertyAccessExpression(nodeExpression) || ast.IsElementAccessExpression(nodeExpression) {
+		nodeExpression = nodeExpression.Expression()
+	}
+
+	if prereqs.IsNonEmpty() && expressionMightMutate(s, expression, nodeExpression) {
+		name := ValueToIdStr(expression)
+		if name == "" {
+			name = "exp"
+		}
+		expression = s.PushToVar(expression, name)
+	}
+	s.PrereqList(prereqs)
+
+	return wrapReturnIfLuaTuple(s, node, macro(s, node, expression, args))
+}
+
+// ---------------------------------------------------------------------------
 // fixVoidArgumentsForRobloxFunctions — transformCallExpression.ts L96-113
 // ---------------------------------------------------------------------------
 
@@ -214,11 +307,12 @@ func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expr
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
 	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
-		if macro := s.Macros().GetCallMacro(symbol); macro != nil {
-			// upstream: runCallMacro(macro, state, node, expression,
-			// nodeArguments) — lands with the Phase 3b macro tables; every
-			// registered entry is a sentinel until then.
-			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+		if entry := s.Macros().GetCallMacro(symbol); entry != nil {
+			if entry.Macro != nil {
+				return runCallMacro(entry.Macro, s, node, expression, nodeArguments)
+			}
+			// nil Macro: known upstream macro not yet ported (Phase 3b).
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+entry.Name+"`"))
 			return luau.NewNone()
 		}
 	}
@@ -256,10 +350,12 @@ func transformPropertyCallExpressionInner(s *State, node *ast.Node, expression *
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
 	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
-		if macro := s.Macros().GetPropertyCallMacro(symbol); macro != nil {
-			// upstream: runCallMacro(macro, state, node, baseExpression,
-			// nodeArguments) — Phase 3b; sentinel until then.
-			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+		if entry := s.Macros().GetPropertyCallMacro(symbol); entry != nil {
+			if entry.Macro != nil {
+				return runCallMacro(entry.Macro, s, node, baseExpression, nodeArguments)
+			}
+			// nil Macro: known upstream macro not yet ported (Phase 3b).
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+entry.Name+"`"))
 			return luau.NewNone()
 		}
 	}
@@ -320,10 +416,12 @@ func transformElementCallExpressionInner(s *State, node *ast.Node, expression *a
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
 	if symbol := GetFirstDefinedSymbol(s, expType); symbol != nil {
-		if macro := s.Macros().GetPropertyCallMacro(symbol); macro != nil {
-			// upstream: runCallMacro(macro, state, node, baseExpression,
-			// nodeArguments) — Phase 3b; sentinel until then.
-			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
+		if entry := s.Macros().GetPropertyCallMacro(symbol); entry != nil {
+			if entry.Macro != nil {
+				return runCallMacro(entry.Macro, s, node, baseExpression, nodeArguments)
+			}
+			// nil Macro: known upstream macro not yet ported (Phase 3b).
+			s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+entry.Name+"`"))
 			return luau.NewNone()
 		}
 	}

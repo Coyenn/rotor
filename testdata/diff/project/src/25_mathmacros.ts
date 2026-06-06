@@ -1,0 +1,30 @@
+const a = new Vector3(1, 2, 3);
+const b = new Vector3(4, 5, 6);
+const c = new Vector3(7, 8, 9);
+print(a.add(b), a.sub(b), a.mul(b), a.div(b), a.idiv(b));
+print(a.mul(2), a.div(0.5), a.idiv(2));
+print(a.add(b).mul(c));
+print(a.mul(b.add(c)));
+print(a.add(b).mul(c.sub(a)));
+print(a.sub(b).sub(c), a.sub(b.sub(c)));
+const cf = new CFrame(a);
+const cf2 = new CFrame(b);
+print(cf.add(b), cf.sub(b), cf.mul(cf2), cf.mul(b));
+print(cf.mul(cf2).mul(cf2));
+const u = new UDim(0.5, 10);
+const u2 = new UDim2(u, u);
+print(u.add(u), u.sub(u), u2.add(u2), u2.sub(u2));
+const v2 = new Vector2(1, 2);
+print(v2.add(v2), v2.sub(v2), v2.mul(3), v2.div(v2), v2.idiv(2));
+const v2i = new Vector2int16(1, 2);
+print(v2i.add(v2i), v2i.sub(v2i), v2i.mul(v2i), v2i.div(v2i));
+const v3i = new Vector3int16(1, 2, 3);
+print(v3i.add(v3i), v3i.sub(v3i), v3i.mul(v3i), v3i.div(v3i));
+const n = 7;
+print(n.idiv(2));
+function getOffset(): Vector3 {
+	return new Vector3(1, 1, 1);
+}
+print(a.add(getOffset()));
+print(a.mul(b.X));
+export {};

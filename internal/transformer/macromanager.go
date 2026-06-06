@@ -21,16 +21,17 @@ import (
 //     macro, not implemented in rotor yet" — call sites raise
 //     rotorNotYetSupported with the macro name instead of emitting
 //     silently-wrong output.
-//   - PROPERTY_CALL_MACROS method tables (Array.push, Map.set, ...) land in
-//     Phase 3b; until then the compiler-types fallbacks below cover detection
-//     — EXCEPT the math-operation macros (propertyCallMacros.ts makeMathSet:
-//     add/sub/mul/div/idiv on CFrame/UDim/UDim2/Vector2/Vector2int16/Vector3/
-//     Vector3int16, compiled to Luau operators). Those methods are declared
-//     by @rbxts/types, not compiler-types, so the fallback misses them and
-//     `v.add(w)` currently emits a silently-wrong `v:add(w)` method call
-//     (found by the Phase 3a randomness re-smoke: damage-numbers.ts). The 3b
-//     table registration must cover @rbxts/types math interfaces, not just
-//     compiler-types.
+//   - PROPERTY_CALL_MACROS: the math-operation macros (propertyCallMacros.ts
+//     makeMathSet: add/sub/mul/div/idiv on CFrame/UDim/UDim2/Vector2/
+//     Vector2int16/Vector3/Vector3int16/Number, compiled to Luau binary
+//     operators) are fully implemented (propertycallmacros.go) — they MUST
+//     be, because those methods are declared by @rbxts/types
+//     (include/macro_math.d.ts), not compiler-types, so the detection
+//     fallback misses them and `v.add(w)` would silently emit a wrong
+//     `v:add(w)` method call (found by the Phase 3a randomness re-smoke:
+//     damage-numbers.ts). The remaining method tables (Array.push, Map.set,
+//     String.*, Promise.then, ...) land in Phase 3b; all of those interfaces
+//     are compiler-types-declared, so the fallback below covers detection.
 //
 // Fallback semantics (the Phase 2 stand-ins, centralized): every macro
 // upstream registers is declared by @rbxts/compiler-types, so a
@@ -199,9 +200,45 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 		}
 	}
 
-	// PROPERTY_CALL_MACROS registration (className -> method symbol maps)
-	// lands with the Phase 3b macro tables; m.propertyCallMacros stays empty
-	// and GetPropertyCallMacro's compiler-types fallback covers detection.
+	// PROPERTY_CALL_MACROS registration (MacroManager.ts L119-144): resolve
+	// the global interface, collect its method-signature member symbols across
+	// ALL interface declarations (the math interfaces merge @rbxts/types
+	// macro_math.d.ts into roblox.d.ts / compiler-types core.d.ts), then key
+	// each macro by its method symbol. Upstream keys by
+	// `getType(typeChecker, member).symbol` — the symbol of the method's
+	// function type — which is exactly what GetFirstDefinedSymbol yields for
+	// `a.b` at the call sites. Phase 3a registers the math-class rows only
+	// (propertycallmacros.go); the rest of the table is Phase 3b and covered
+	// by the compiler-types detection fallback.
+	for className, methods := range propertyCallMacroTable {
+		symbol := chk.ResolveName(className, nil, ast.SymbolFlagsInterface, false)
+		if symbol == nil {
+			continue
+		}
+
+		methodMap := make(map[string]*ast.Symbol)
+		for _, declaration := range symbol.Declarations {
+			if !ast.IsInterfaceDeclaration(declaration) {
+				continue
+			}
+			for _, member := range declaration.AsInterfaceDeclaration().Members.Nodes {
+				if ast.IsMethodSignatureDeclaration(member) && member.Name() != nil && ast.IsIdentifier(member.Name()) {
+					// upstream getType: typeChecker.getTypeAtLocation(skipUpwards(member)).symbol
+					if methodSymbol := chk.GetTypeAtLocation(SkipUpwards(member)).Symbol(); methodSymbol != nil {
+						methodMap[member.Name().Text()] = methodSymbol
+					}
+				}
+			}
+		}
+
+		for methodName, macro := range methods {
+			// upstream throws ProjectError when the method is missing; rotor
+			// skips (same checker-light-project divergence as the other tables).
+			if methodSymbol := methodMap[methodName]; methodSymbol != nil {
+				m.propertyCallMacros[methodSymbol] = &PropertyCallMacroEntry{Name: className + "." + methodName, Macro: macro}
+			}
+		}
+	}
 
 	return m
 }

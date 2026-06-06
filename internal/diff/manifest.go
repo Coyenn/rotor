@@ -33,4 +33,5 @@ var EnabledFixtures = []string{
 	"24a_shared",
 	"24b_middle",
 	"24_mixed3a",
+	"25_mathmacros",
 }
