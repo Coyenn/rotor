@@ -2,25 +2,15 @@ package luau
 
 import "testing"
 
-// placeholder until nodes.go lands (Task 8); Task 8 deletes this and rewrites
-// these tests on *Identifier.
-type testNode struct {
-	base
-	v int
-}
+func id(name string) *Identifier { return &Identifier{Name: name} }
 
-func (*testNode) Kind() SyntaxKind     { return KindIdentifier }
-func (n *testNode) shallowClone() Node { c := *n; return &c }
-
-func tn(v int) *testNode { return &testNode{v: v} }
-
-func values(l *List[*testNode]) []int {
-	out := []int{}
-	l.ForEach(func(n *testNode) { out = append(out, n.v) })
+func values(l *List[*Identifier]) []string {
+	out := []string{}
+	l.ForEach(func(n *Identifier) { out = append(out, n.Name) })
 	return out
 }
 
-func eq(a, b []int) bool {
+func eq(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -33,33 +23,33 @@ func eq(a, b []int) bool {
 }
 
 func TestListPushShiftUnshift(t *testing.T) {
-	l := NewList[*testNode]()
+	l := NewList[*Identifier]()
 	if !l.IsEmpty() {
 		t.Fatal("new list not empty")
 	}
-	l.Push(tn(2))
-	l.Push(tn(3))
-	l.Unshift(tn(1))
-	if got := values(l); !eq(got, []int{1, 2, 3}) {
+	l.Push(id("2"))
+	l.Push(id("3"))
+	l.Unshift(id("1"))
+	if got := values(l); !eq(got, []string{"1", "2", "3"}) {
 		t.Fatalf("got %v", got)
 	}
 	if l.Size() != 3 {
 		t.Fatalf("size %d", l.Size())
 	}
 	first, ok := l.Shift()
-	if !ok || first.v != 1 {
+	if !ok || first.Name != "1" {
 		t.Fatalf("shift got %v %v", first, ok)
 	}
-	if got := values(l); !eq(got, []int{2, 3}) {
+	if got := values(l); !eq(got, []string{"2", "3"}) {
 		t.Fatalf("after shift got %v", got)
 	}
 }
 
 func TestListPushListMarksReadonly(t *testing.T) {
-	a := NewList(tn(1), tn(2))
-	b := NewList(tn(3), tn(4))
+	a := NewList(id("1"), id("2"))
+	b := NewList(id("3"), id("4"))
 	a.PushList(b)
-	if got := values(a); !eq(got, []int{1, 2, 3, 4}) {
+	if got := values(a); !eq(got, []string{"1", "2", "3", "4"}) {
 		t.Fatalf("got %v", got)
 	}
 	if !b.ReadOnly {
@@ -70,24 +60,24 @@ func TestListPushListMarksReadonly(t *testing.T) {
 			t.Error("pushing to readonly list must panic")
 		}
 	}()
-	b.Push(tn(5))
+	b.Push(id("5"))
 }
 
 func TestListUnshiftList(t *testing.T) {
-	a := NewList(tn(3), tn(4))
-	b := NewList(tn(1), tn(2))
+	a := NewList(id("3"), id("4"))
+	b := NewList(id("1"), id("2"))
 	a.UnshiftList(b)
-	if got := values(a); !eq(got, []int{1, 2, 3, 4}) {
+	if got := values(a); !eq(got, []string{"1", "2", "3", "4"}) {
 		t.Fatalf("got %v", got)
 	}
 }
 
 func TestListSomeEvery(t *testing.T) {
-	l := NewList(tn(1), tn(2), tn(3))
-	if !l.Some(func(n *testNode) bool { return n.v == 2 }) {
+	l := NewList(id("1"), id("2"), id("3"))
+	if !l.Some(func(n *Identifier) bool { return n.Name == "2" }) {
 		t.Error("Some failed")
 	}
-	if l.Every(func(n *testNode) bool { return n.v < 3 }) {
+	if l.Every(func(n *Identifier) bool { return n.Name < "3" }) {
 		t.Error("Every failed")
 	}
 }
