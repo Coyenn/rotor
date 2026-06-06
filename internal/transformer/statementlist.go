@@ -1,0 +1,157 @@
+package transformer
+
+import (
+	"rotor/internal/luau"
+	"rotor/tsgo/ast"
+	"rotor/tsgo/scanner"
+)
+
+// TransformStatement dispatches one TS statement to its transform, returning
+// the resulting Luau statements (upstream nodes/statements/transformStatement.ts).
+// Task 6 assigns the dispatch table; until then TransformStatementList panics
+// when it is consulted.
+var TransformStatement func(s *State, node *ast.Node) *luau.List[luau.Statement]
+
+// ExportInfo carries namespace-export assignment info into a statement list
+// (upstream transformStatementList exportInfo parameter): after a statement
+// that declares exported names, `containerId.<name> = <name>` assignments are
+// appended per the mapping.
+type ExportInfo struct {
+	ID      luau.AnyIdentifier
+	Mapping map[*ast.Node][]string
+}
+
+// TransformStatementList ports nodes/transformStatementList.ts: the generic
+// statement-list driver used by TransformSourceFile and every block.
+//
+// Ordering invariant per statement: leading comments -> hoisted `local a, b`
+// -> prereq statements -> transformed statement(s) -> namespace export
+// assignments. Iteration stops after a final statement (break/continue/
+// return) — trailing dead code is elided.
+func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, exportInfo *ExportInfo) *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+
+	for _, statement := range statements {
+		// Capture prerequisite statements for the ts.Statement while
+		// transforming it. transformStatement runs BEFORE
+		// createHoistDeclaration is consulted, so hoists registered while
+		// transforming statement N (a use-before-declare inside N) are
+		// picked up for N itself.
+		var transformed *luau.List[luau.Statement]
+		prereqs := s.CaptureStatements(func() {
+			if TransformStatement == nil {
+				panic("transformer: statement dispatch not wired")
+			}
+			transformed = TransformStatement(s, statement)
+		})
+
+		if !s.RemoveComments() {
+			result.PushList(s.GetLeadingComments(statement))
+		}
+
+		if hoist := createHoistDeclaration(s, statement); hoist != nil {
+			result.Push(hoist)
+		}
+
+		result.PushList(prereqs)
+		lastNode := transformed.Tail
+		result.PushList(transformed)
+
+		if lastNode != nil && luau.IsFinalStatement(lastNode.Value) {
+			break
+		}
+
+		if exportInfo != nil {
+			for _, exportName := range exportInfo.Mapping[statement] {
+				result.Push(luau.NewAssignment(
+					luau.NewPropertyAccess(exportInfo.ID, exportName),
+					"=",
+					luau.ID(exportName),
+				))
+			}
+		}
+	}
+
+	if !s.RemoveComments() {
+		if lastToken := getLastToken(parent, statements); lastToken != nil {
+			result.PushList(s.GetLeadingComments(lastToken))
+		}
+	}
+
+	return result
+}
+
+// getLastToken ports transformStatementList.ts getLastToken: the trailing
+// `}`/EOF token whose leading trivia holds the block's trailing comments.
+// Phase 2 only transforms source-file statement lists, so only the
+// EndOfFileToken case is wired; block-level last tokens (`}` of a Block etc.)
+// land with the block transforms (Phase 2b).
+func getLastToken(parent *ast.Node, statements []*ast.Node) *ast.Node {
+	if len(statements) > 0 {
+		lastStatement := statements[len(statements)-1]
+		if p := lastStatement.Parent; p != nil && ast.IsSourceFile(p) {
+			// The EOF token always follows the last statement (it is never
+			// a descendant of it), matching upstream's isNodeDescendantOf
+			// guard.
+			return p.AsSourceFile().EndOfFileToken
+		}
+		return nil
+	}
+	if parent != nil && ast.IsSourceFile(parent) {
+		return parent.AsSourceFile().EndOfFileToken
+	}
+	return nil
+}
+
+// RemoveComments reports compilerOptions.removeComments === true, the gate
+// upstream transformStatementList checks before emitting leading comments.
+// Checker-free test states (nil Program) emit comments, matching the
+// upstream default of removeComments being unset.
+func (s *State) RemoveComments() bool {
+	return s.Program != nil && s.Program.Options().RemoveComments.IsTrue()
+}
+
+// GetLeadingComments ports TransformState.getLeadingComments (upstream lines
+// 139-153): scan the leading trivia of node for comment ranges and convert
+// each to a luau comment. `// foo` -> text " foo" (keeps the space, drops
+// "//"); `/* foo */` -> " foo " (drops both delimiters; multi-line text
+// renders as a --[[ ... ]] block).
+func (s *State) GetLeadingComments(node *ast.Node) *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+	var factory ast.NodeFactory
+	for commentRange := range scanner.GetLeadingCommentRanges(&factory, s.SourceFileText, node.Pos()) {
+		end := commentRange.End()
+		if commentRange.Kind != ast.KindSingleLineCommentTrivia {
+			end -= 2 // strip trailing "*/"
+		}
+		result.Push(luau.NewComment(s.SourceFileText[commentRange.Pos()+2 : end]))
+	}
+	return result
+}
+
+// createHoistDeclaration ports util/createHoistDeclaration.ts: when prior
+// transforms recorded use-before-declaration identifiers against statement,
+// emit a `local a, b` declaration (no initializer) immediately before it.
+func createHoistDeclaration(s *State, statement *ast.Node) luau.Statement {
+	hoists := s.HoistsByStatement[statement]
+	if len(hoists) == 0 {
+		return nil
+	}
+	left := luau.NewList[luau.AnyIdentifier]()
+	for _, hoist := range hoists {
+		ValidateIdentifier(s, hoist)
+		left.Push(TransformIdentifierDefined(s, hoist))
+	}
+	return luau.NewVariableDeclaration(left, nil)
+}
+
+// ValidateIdentifier ports util/validateIdentifier.ts: reserved-word /
+// invalid-Luau-identifier diagnostics.
+func ValidateIdentifier(s *State, node *ast.Node) {
+	text := node.Text()
+	if !luau.IsValidIdentifier(text) {
+		s.Diags.Add(DiagNoInvalidIdentifier(node))
+	} else if luau.IsReservedIdentifier(text) {
+		s.Diags.Add(DiagNoReservedIdentifier(node))
+	}
+}
