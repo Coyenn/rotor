@@ -24,6 +24,15 @@ import (
 // relPath. Semantic diagnostics fail the test to keep fixtures honest.
 func buildState(t *testing.T, projDir, relPath string) *transformer.State {
 	t.Helper()
+	return buildStateTolerating(t, projDir, relPath, nil)
+}
+
+// buildStateTolerating is buildState with an escape hatch: a semantic
+// diagnostic whose message satisfies tolerated does not fail the test. Used
+// by fixtures that are valid rbxtsc input but trip a known TS5->TS7 checker
+// divergence (see forof_test.go); every other diagnostic still fails.
+func buildStateTolerating(t *testing.T, projDir, relPath string, tolerated func(msg string) bool) *transformer.State {
+	t.Helper()
 
 	dir, err := filepath.Abs(projDir)
 	if err != nil {
@@ -47,6 +56,9 @@ func buildState(t *testing.T, projDir, relPath string) *transformer.State {
 		t.Fatalf("source file not in program: %s", relPath)
 	}
 	for _, d := range program.GetSemanticDiagnostics(ctx, sourceFile) {
+		if tolerated != nil && tolerated(d.String()) {
+			continue
+		}
 		t.Errorf("unexpected semantic diagnostic: %s", d.String())
 	}
 	if t.Failed() {

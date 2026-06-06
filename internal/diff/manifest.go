@@ -21,5 +21,6 @@ var EnabledFixtures = []string{
 	"14_functions",
 	"15_arrows",
 	"16_destructuring",
+	"17_forof",
 	"19_closures",
 }
