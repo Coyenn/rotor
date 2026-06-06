@@ -119,6 +119,12 @@ func TestPrependHeader(t *testing.T) {
 }
 
 func TestTransformStatementListPanicsWithoutDispatch(t *testing.T) {
+	// dispatch.go wires TransformStatement in init(); simulate the unwired
+	// state to keep the guard covered.
+	prev := TransformStatement
+	TransformStatement = nil
+	defer func() { TransformStatement = prev }()
+
 	defer func() {
 		r := recover()
 		if r == nil {

@@ -385,6 +385,24 @@ func DiagRojoPathInSrc(partitionPath, suggestedPath string) Diagnostic {
 }
 
 // ----------------------------------------------------------------------------
+// rotor-specific (no upstream counterpart)
+// ----------------------------------------------------------------------------
+
+// DiagRotorNotYetSupported marks a construct that upstream compiles but rotor
+// has not ported yet. Deliberately distinct from upstream banned-kind
+// diagnostics (which reproduce rbxtsc messages byte-exact) so unsupported
+// input always fails loudly instead of producing silently wrong output.
+func DiagRotorNotYetSupported(node *ast.Node, what string) Diagnostic {
+	return errorDiag("rotorNotYetSupported", node, fmt.Sprintf("rotor: %s not yet supported (phase 2)", what))
+}
+
+// kindName strips tsgo's stringer prefix: KindCallExpression -> "CallExpression"
+// (matches upstream getKindName output for diagnostics/debugging).
+func kindName(kind ast.Kind) string {
+	return strings.TrimPrefix(kind.String(), "Kind")
+}
+
+// ----------------------------------------------------------------------------
 // warnings
 // ----------------------------------------------------------------------------
 

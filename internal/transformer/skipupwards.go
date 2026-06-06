@@ -30,3 +30,13 @@ func SkipUpwards(node *ast.Node) *ast.Node {
 	}
 	return node
 }
+
+// SkipDownwards ports util/traversal.ts skipDownwards: the inverse — unwraps
+// the same wrapper kinds by following `.expression`, so `(x as Foo)!`
+// resolves to `x`.
+func SkipDownwards(node *ast.Node) *ast.Node {
+	for isUpwardsSkipKind(node.Kind) {
+		node = node.Expression()
+	}
+	return node
+}
