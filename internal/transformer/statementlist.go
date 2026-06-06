@@ -8,8 +8,8 @@ import (
 
 // TransformStatement dispatches one TS statement to its transform, returning
 // the resulting Luau statements (upstream nodes/statements/transformStatement.ts).
-// Task 6 assigns the dispatch table; until then TransformStatementList panics
-// when it is consulted.
+// dispatch.go assigns the real dispatch at init; it stays a func var so tests
+// can stub it (see withStubDispatch in internal/compile).
 var TransformStatement func(s *State, node *ast.Node) *luau.List[luau.Statement]
 
 // ExportInfo carries namespace-export assignment info into a statement list

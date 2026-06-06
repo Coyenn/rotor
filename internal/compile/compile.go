@@ -65,13 +65,28 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	defer release()
 
 	state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), transformer.NewMultiState())
+	return transformAndRender(state)
+}
+
+// transformAndRender runs the transformer and renderer behind a recover
+// boundary: the transformer deliberately panics on some user-reachable inputs
+// (e.g. the loop closure capture fallback in loops.go), and a user's source
+// must surface as an error, never crash the process.
+func transformAndRender(state *transformer.State) (text string, diags []string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			text = ""
+			diags = nil
+			err = fmt.Errorf("internal compiler error: %v", r)
+		}
+	}()
+
 	luauAST, err := transformer.TransformSourceFile(state)
 	if err != nil {
 		return "", nil, err
 	}
 
 	hasErrors := state.Diags.HasErrors()
-	var diags []string
 	for _, d := range state.Diags.Flush() {
 		diags = append(diags, d.Message)
 	}

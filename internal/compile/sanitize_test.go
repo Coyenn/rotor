@@ -3,6 +3,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -132,5 +133,20 @@ func TestSanitizeFSOnlyTouchesTSConfig(t *testing.T) {
 	}
 	if strings.Contains(cfg, "downlevelIteration") {
 		t.Error("tsconfig.json read through SanitizeFS still contains downlevelIteration")
+	}
+
+	// Only files named exactly "tsconfig.json" are intercepted: a file whose
+	// name merely ends in "tsconfig.json" must pass through untouched.
+	tmp := filepath.ToSlash(t.TempDir())
+	raw := `{"compilerOptions": {"downlevelIteration": true}}`
+	if err := os.WriteFile(filepath.Join(tmp, "my-tsconfig.json"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = wrapped.ReadFile(tmp + "/my-tsconfig.json")
+	if !ok {
+		t.Fatal("my-tsconfig.json unreadable through SanitizeFS")
+	}
+	if got != raw {
+		t.Errorf("my-tsconfig.json was sanitized; got %q, want %q", got, raw)
 	}
 }

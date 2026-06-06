@@ -145,8 +145,9 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformWhileStatement(s, node)
 	}
 
-	// Remaining upstream-supported statements (blocks, control flow,
-	// functions, classes, imports/exports, ...) land with Tasks 8-13.
+	// Statement kinds not yet ported (functions, classes, imports/exports,
+	// switch, try/catch, for-of, ...) report a not-yet-supported diagnostic
+	// rather than emitting wrong output.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewList[luau.Statement]()
 }

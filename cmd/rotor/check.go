@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"rotor/internal/compile"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/bundled"
 	"rotor/tsgo/compiler"
@@ -97,7 +98,11 @@ func runCheck(dir string, out io.Writer) checkResult {
 	start := time.Now()
 	slashDir := filepath.ToSlash(dir)
 
-	fs := bundled.WrapFS(osvfs.FS())
+	// SanitizeFS rewrites rbxts-required tsconfig options that tsgo (TS7)
+	// rejects (downlevelIteration, baseUrl, moduleResolution=node10) so
+	// standard roblox-ts projects check cleanly — same wrapping as
+	// compile.CompileFile.
+	fs := compile.SanitizeFS(bundled.WrapFS(osvfs.FS()))
 	host := compiler.NewCompilerHost(slashDir, fs, bundled.LibPath(), nil, nil)
 
 	formatOpts := &diagnosticwriter.FormattingOptions{
@@ -129,10 +134,24 @@ func runCheck(dir string, out io.Writer) checkResult {
 	})
 
 	// Same collection order as tsgo's own CLI: config parse, syntactic,
-	// program (options), global, then semantic diagnostics.
+	// program (options), global, then semantic diagnostics. Semantic checking
+	// is scoped to the project's own files, mirroring rbxtsc — upstream calls
+	// getPreEmitDiagnostics(program, sourceFile) per compiled file
+	// (compileFiles.ts:156), so node_modules type packages are resolved
+	// against, never themselves checked. (The fixture @rbxts/types, for one,
+	// has internal errors that tsc only avoids via skipLibCheck.)
 	ctx := context.Background()
+	semanticProjectFilesOnly := func(ctx context.Context, _ *ast.SourceFile) []*ast.Diagnostic {
+		var out []*ast.Diagnostic
+		for _, name := range parsed.FileNames() {
+			if sf := program.GetSourceFile(name); sf != nil {
+				out = append(out, program.GetSemanticDiagnostics(ctx, sf)...)
+			}
+		}
+		return out
+	}
 	diags := compiler.GetDiagnosticsOfAnyProgram(ctx, program, nil, false,
-		program.GetBindDiagnostics, program.GetSemanticDiagnostics)
+		program.GetBindDiagnostics, semanticProjectFilesOnly)
 	diags = compiler.SortAndDeduplicateDiagnostics(diags)
 
 	writeDiagnostics(out, diags, formatOpts)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rotor/internal/luau"
@@ -126,6 +127,53 @@ func TestCompileFileReturnMapShape(t *testing.T) {
 		"}\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestCompileFilePanicBecomesError: transformer panics (here the deliberate
+// loop-closure-capture panic in loops.go, reachable from ordinary user input)
+// must come back from CompileFile as an "internal compiler error" — the CLI
+// must never crash on a user's source file.
+func TestCompileFilePanicBecomesError(t *testing.T) {
+	dir := t.TempDir()
+	typeRoots := filepath.ToSlash(filepath.Join(fixtureProjectDir(t), "node_modules", "@rbxts"))
+	tsconfig := fmt.Sprintf(`{
+	"compilerOptions": {
+		"module": "commonjs",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"forceConsistentCasingInFileNames": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"typeRoots": [%q],
+		"rootDir": "src",
+		"outDir": "out"
+	},
+	"include": ["src"]
+}`, typeRoots)
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A non-optimized for loop whose body closes over the loop variable hits
+	// the deliberate panic in loops.go (per-iteration capture is Phase 3).
+	src := "for (let i = 0; i !== 3; i++) {\n\tconst f = () => i;\n\tprint(f());\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "src", "capture.ts"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := CompileFile(dir, filepath.Join("src", "capture.ts"))
+	if err == nil {
+		t.Fatal("expected an error from the recovered panic, got nil")
+	}
+	if !strings.Contains(err.Error(), "internal compiler error: ") {
+		t.Errorf("error missing 'internal compiler error: ' prefix: %v", err)
+	}
+	if !strings.Contains(err.Error(), "loop closure capture") {
+		t.Errorf("error missing panic message: %v", err)
 	}
 }
 

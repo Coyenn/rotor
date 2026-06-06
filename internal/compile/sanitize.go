@@ -8,7 +8,7 @@ import (
 	"rotor/tsgo/vfs/wrapvfs"
 )
 
-// SanitizeFS wraps an FS so that any ReadFile of a path ending in
+// SanitizeFS wraps an FS so that any ReadFile of a file named exactly
 // "tsconfig.json" returns sanitized config text (see SanitizeTSConfig). The
 // wrapper is general: it applies to every tsconfig.json the compiler host
 // touches (the project's own config plus anything reached via "extends").
@@ -16,12 +16,19 @@ func SanitizeFS(inner vfs.FS) vfs.FS {
 	return wrapvfs.Wrap(inner, wrapvfs.Replacements{
 		ReadFile: func(path string) (string, bool) {
 			contents, ok := inner.ReadFile(path)
-			if !ok || !strings.HasSuffix(path, "tsconfig.json") {
+			if !ok || !isTSConfigPath(path) {
 				return contents, ok
 			}
 			return SanitizeTSConfig(contents), true
 		},
 	})
+}
+
+// isTSConfigPath reports whether path's basename is exactly "tsconfig.json"
+// (vfs paths are slash-separated). A bare suffix match would also intercept
+// unrelated files like "my-tsconfig.json".
+func isTSConfigPath(path string) bool {
+	return path == "tsconfig.json" || strings.HasSuffix(path, "/tsconfig.json")
 }
 
 // SanitizeTSConfig rewrites a tsconfig.json that rbxtsc requires into one
