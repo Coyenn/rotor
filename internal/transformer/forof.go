@@ -7,8 +7,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// for-of — statements/transformForOfStatement.ts (COMPLETE dispatch;
-// Phase 2b ships the ARRAY builder live)
+// for-of — statements/transformForOfStatement.ts (COMPLETE)
 // ---------------------------------------------------------------------------
 
 // loopBuilder ports `type LoopBuilder` (L34-39): statements is the
@@ -25,6 +24,29 @@ func makeForLoopBuilder(callback func(s *State, initializer *ast.Node, exp luau.
 		expression := callback(s, initializer, exp, ids, initializers)
 		statements.UnshiftList(initializers)
 		return luau.NewList[luau.Statement](luau.NewFor(ids, expression, statements))
+	}
+}
+
+// transformForInitializerExpressionDirect ports
+// transformForInitializerExpressionDirect (L59-92): bind a KNOWN value
+// expression through the initializer (used by the Map and generator builders,
+// whose loop bindings are protocol temps rather than the user's binding).
+// Array/object literal targets destructure a `_binding` temp pushed to var
+// from the value; any other writable target gets a direct assignment.
+func transformForInitializerExpressionDirect(s *State, initializer *ast.Node, initializers *luau.List[luau.Statement], value luau.Expression) {
+	if ast.IsArrayLiteralExpression(initializer) {
+		initializers.PushList(s.CaptureStatements(func() {
+			parentID := s.PushToVar(value, "binding")
+			transformArrayAssignmentPattern(s, initializer, parentID)
+		}))
+	} else if ast.IsObjectLiteralExpression(initializer) {
+		initializers.PushList(s.CaptureStatements(func() {
+			parentID := s.PushToVar(value, "binding")
+			transformObjectAssignmentPattern(s, initializer, parentID)
+		}))
+	} else {
+		expression := transformWritableExpression(s, initializer, false)
+		initializers.Push(luau.NewAssignment(expression, "=", value))
 	}
 }
 
@@ -67,52 +89,333 @@ var buildArrayLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, ex
 	return exp
 })
 
+// buildSetLoop ports buildSetLoop (L136-139): `for x in exp do` — Luau's
+// generic iteration over a Set yields the element as the first binding.
+var buildSetLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+	ids.Push(transformForInitializer(s, initializer, initializers))
+	return exp
+})
+
+// transformInLineArrayBindingPattern ports transformInLineArrayBindingPattern
+// (L141-160): the `for (const [k, v] of map)` fast path — each pattern
+// element becomes a generic-for binding DIRECTLY (no `_binding` temp).
+// Omitted elements get an unnamed temp; defaults are nil-checked in the body;
+// nested patterns route through transformBindingName (which introduces a
+// `_binding` temp just for that slot). NOTE upstream tests
+// ts.isSpreadElement, which never matches ArrayBindingPattern elements (rest
+// arrives as a BindingElement with dotDotDotToken) — the rest check is dead
+// upstream and a rest element falls through to transformBindingName; ported
+// verbatim.
+func transformInLineArrayBindingPattern(s *State, pattern *ast.Node, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) {
+	for _, element := range pattern.AsBindingPattern().Elements.Nodes {
+		if isOmittedBindingElement(element) {
+			ids.Push(luau.TempID(""))
+		} else if ast.IsSpreadElement(element) {
+			s.Diags.Add(DiagNoSpreadDestructuring(element))
+		} else {
+			bindingElement := element.AsBindingElement()
+			id := transformBindingName(s, bindingElement.Name(), initializers)
+			if bindingElement.Initializer != nil {
+				initializers.Push(transformInitializer(s, id.(luau.WritableExpression), bindingElement.Initializer))
+			}
+			ids.Push(id)
+		}
+	}
+}
+
+// transformInLineArrayAssignmentPattern ports
+// transformInLineArrayAssignmentPattern (L162-222): the `for ([a, b] of map)`
+// assignment-form fast path — each slot gets a `_binding` temp as the
+// generic-for binding, with `target = _binding` assignments / nested
+// destructures / defaults captured into initializers (writables computed with
+// readAfterWrite = initializer-present).
+func transformInLineArrayAssignmentPattern(s *State, assignmentPattern *ast.Node, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) {
+	initializers.PushList(s.CaptureStatements(func() {
+		for _, element := range assignmentPattern.AsArrayLiteralExpression().Elements.Nodes {
+			if ast.IsOmittedExpression(element) {
+				ids.Push(luau.TempID(""))
+			} else if ast.IsSpreadElement(element) {
+				s.Diags.Add(DiagNoSpreadDestructuring(element))
+			} else {
+				var initializer *ast.Node
+				if ast.IsBinaryExpression(element) {
+					binary := element.AsBinaryExpression()
+					initializer = SkipDownwards(binary.Right)
+					element = SkipDownwards(binary.Left)
+				}
+
+				valueID := luau.TempID("binding")
+				if ast.IsIdentifier(element) || ast.IsElementAccessExpression(element) || ast.IsPropertyAccessExpression(element) {
+					id := transformWritableExpression(s, element, initializer != nil)
+					s.Prereq(luau.NewAssignment(id, "=", valueID))
+					if initializer != nil {
+						s.Prereq(transformInitializer(s, id, initializer))
+					}
+				} else if ast.IsArrayLiteralExpression(element) {
+					if initializer != nil {
+						s.Prereq(transformInitializer(s, valueID, initializer))
+					}
+					transformArrayAssignmentPattern(s, element, valueID)
+				} else if ast.IsObjectLiteralExpression(element) {
+					if initializer != nil {
+						s.Prereq(transformInitializer(s, valueID, initializer))
+					}
+					transformObjectAssignmentPattern(s, element, valueID)
+				} else {
+					panic("transformer: transformInLineArrayAssignmentPattern invalid element: " + kindName(element.Kind)) // upstream assert
+				}
+
+				ids.Push(valueID)
+			}
+		}
+	}))
+}
+
+// buildMapLoop ports buildMapLoop (L224-257): `for _k, _v in exp do` with the
+// inline `[k, v]`-destructure fast path (loop ids bind directly, no temp).
+// The fallback (a plain id or object pattern over a Map) binds `_k, _v` and
+// reconstitutes the entry: declaration form `local pair = { _k, _v }` +
+// pattern bindings; expression form assigns `{ _k, _v }` through the target.
+var buildMapLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+	if ast.IsVariableDeclarationList(initializer) {
+		name := initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name()
+		if ast.IsArrayBindingPattern(name) {
+			transformInLineArrayBindingPattern(s, name, ids, initializers)
+			return exp
+		}
+	} else if ast.IsArrayLiteralExpression(initializer) {
+		transformInLineArrayAssignmentPattern(s, initializer, ids, initializers)
+		return exp
+	}
+
+	keyID := luau.TempID("k")
+	valueID := luau.TempID("v")
+	ids.Push(keyID)
+	ids.Push(valueID)
+
+	if ast.IsVariableDeclarationList(initializer) {
+		bindingList := luau.NewList[luau.Statement]()
+		initializers.Push(luau.NewVariableDeclaration(
+			transformForInitializer(s, initializer, bindingList),
+			luau.NewArray(luau.NewList[luau.Expression](keyID, valueID)),
+		))
+		initializers.PushList(bindingList)
+	} else {
+		transformForInitializerExpressionDirect(s, initializer, initializers,
+			luau.NewArray(luau.NewList[luau.Expression](keyID, valueID)))
+	}
+
+	return exp
+})
+
+// buildStringLoop ports buildStringLoop (L259-262):
+// `for c in string.gmatch(exp, utf8.charpattern) do`.
+var buildStringLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+	ids.Push(transformForInitializer(s, initializer, initializers))
+	return luau.NewCall(luau.GlobalProperty("string", "gmatch"),
+		luau.NewList[luau.Expression](exp, luau.GlobalProperty("utf8", "charpattern")))
+})
+
+// buildIterableFunctionLoop ports buildIterableFunctionLoop (L264-267):
+// `for x in exp do` — Luau calls the function each iteration; nil terminates.
+var buildIterableFunctionLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+	ids.Push(transformForInitializer(s, initializer, initializers))
+	return exp
+})
+
+// makeIterableFunctionLuaTupleShorthand ports
+// makeIterableFunctionLuaTupleShorthand (L269-284): the array-pattern fast
+// path for IterableFunction<LuaTuple<T>> — inline bindings become the
+// generic-for ids (`for a, b in exp do`), no tuple table is built.
+func makeIterableFunctionLuaTupleShorthand(s *State, array *ast.Node, statements *luau.List[luau.Statement], expression luau.Expression) *luau.List[luau.Statement] {
+	ids := luau.NewList[luau.AnyIdentifier]()
+	initializers := luau.NewList[luau.Statement]()
+	if ast.IsArrayBindingPattern(array) {
+		transformInLineArrayBindingPattern(s, array, ids, initializers)
+	} else {
+		transformInLineArrayAssignmentPattern(s, array, ids, initializers)
+	}
+	statements.UnshiftList(initializers)
+	return luau.NewList[luau.Statement](luau.NewFor(ids, expression, statements))
+}
+
+// tupleCombinedFlags reproduces upstream's
+// `(tupleArgType as ts.TupleTypeReference).target.combinedFlags` read: tsgo
+// keeps combinedFlags unexported, but createTupleTypeWorker computes it as
+// the bitwise OR of every element's flags (checker.go L24656), so OR-ing the
+// exported ElementInfos is identity-equivalent.
+func tupleCombinedFlags(target *checker.TupleType) checker.ElementFlags {
+	var combined checker.ElementFlags
+	for _, info := range target.ElementInfos() {
+		combined |= info.TupleElementFlags()
+	}
+	return combined
+}
+
+// buildIterableFunctionLuaTupleLoop ports buildIterableFunctionLuaTupleLoop
+// (L286-382). Three shapes, in order:
+//  1. array-pattern initializer (binding or assignment form) — the inline
+//     fast path (makeIterableFunctionLuaTupleShorthand);
+//  2. declaration-list initializer whose LuaTuple<T> argument is a tuple type
+//     WITHOUT rest elements — tuple-arity introspection: one generic-for temp
+//     per tuple slot (named from the tuple labels when valid identifiers,
+//     else "element"), reassembled into `local t = { _el1, _el2 }`;
+//  3. otherwise (unknown arity / expression initializer) — the while-true
+//     protocol: `local _v = { _iterFunc() } if #_v == 0 then break end`.
+//
+// tsgo mapping for the CHECKER introspection (upstream L303-327):
+//
+//	type.getCallSignatures()[0].getReturnType() -> Checker.GetReturnTypeOfSignature(Checker.GetCallSignatures(t)[0])
+//	luaTupleType.aliasTypeArguments             -> Type.Alias().TypeArguments()
+//	typeChecker.isTupleType(t)                  -> Type.IsTupleType()
+//	(t as TupleTypeReference).target            -> Type.TargetTupleType()
+//	target.combinedFlags & ElementFlags.Rest    -> tupleCombinedFlags(target) & checker.ElementFlagsRest
+//	target.elementFlags.length                  -> len(target.ElementInfos())
+//	target.labeledElementDeclarations[i]        -> target.ElementInfos()[i].LabeledDeclaration()
+func buildIterableFunctionLuaTupleLoop(t *checker.Type) loopBuilder {
+	return func(s *State, statements *luau.List[luau.Statement], initializer *ast.Node, exp luau.Expression) *luau.List[luau.Statement] {
+		if ast.IsVariableDeclarationList(initializer) {
+			// for (const [a, b] of iter())
+			name := initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name()
+			if ast.IsArrayBindingPattern(name) {
+				return makeIterableFunctionLuaTupleShorthand(s, name, statements, exp)
+			}
+		} else if ast.IsArrayLiteralExpression(initializer) {
+			// for ([a, b] of iter())
+			return makeIterableFunctionLuaTupleShorthand(s, initializer, statements, exp)
+		}
+
+		var iteratorReturnIds []*luau.TemporaryIdentifier
+
+		// get call signature of IterableFunction<T> which is `(): T`
+		// and get return type of call signature which is `T`
+		luaTupleType := s.Checker.GetReturnTypeOfSignature(s.Checker.GetCallSignatures(t)[0])
+		if luaTupleType == nil || luaTupleType.Alias() == nil || len(luaTupleType.Alias().TypeArguments()) != 1 {
+			panic("transformer: Incorrect LuaTuple<T> type arguments") // upstream assert
+		}
+		tupleArgType := luaTupleType.Alias().TypeArguments()[0]
+		// if initializer is a variable declaration `for (const a of iter())`
+		// and LuaTuple has defined element amount, and no rest elements
+		// then use lua for-in loop, specifying all elements and putting them in table
+		if ast.IsVariableDeclarationList(initializer) &&
+			tupleArgType.IsTupleType() &&
+			tupleCombinedFlags(tupleArgType.TargetTupleType())&checker.ElementFlagsRest == 0 {
+			tupleType := tupleArgType.TargetTupleType()
+			for _, info := range tupleType.ElementInfos() {
+				name := "element"
+				if label := info.LabeledDeclaration(); label != nil {
+					if labelName := label.Name(); labelName != nil && ast.IsIdentifier(labelName) && luau.IsValidIdentifier(labelName.Text()) {
+						name = labelName.Text()
+					}
+				}
+				iteratorReturnIds = append(iteratorReturnIds, luau.TempID(name))
+			}
+		} else {
+			nameHint := ValueToIdStr(exp)
+			if nameHint == "" {
+				nameHint = "iterFunc"
+			}
+			iterFuncID := s.PushToVar(exp, nameHint)
+			loopStatements := luau.NewList[luau.Statement]()
+
+			initializerStatements := luau.NewList[luau.Statement]()
+			valueID := transformForInitializer(s, initializer, initializerStatements)
+
+			loopStatements.Push(luau.NewVariableDeclaration(
+				valueID,
+				luau.NewArray(luau.NewList[luau.Expression](
+					luau.NewCall(iterFuncID, luau.NewList[luau.Expression]()),
+				)),
+			))
+
+			loopStatements.Push(luau.NewIf(
+				luau.NewBinary(luau.NewUnary("#", valueID), "==", luau.Num(0)),
+				luau.NewList[luau.Statement](luau.NewBreak()),
+				nil,
+			))
+
+			loopStatements.PushList(initializerStatements)
+
+			loopStatements.PushList(statements)
+
+			return luau.NewList[luau.Statement](luau.NewWhile(luau.Bool(true), loopStatements))
+		}
+
+		tupleID := transformForInitializer(s, initializer, statements)
+
+		builder := makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+			members := luau.NewList[luau.Expression]()
+			for _, id := range iteratorReturnIds {
+				ids.Push(id)
+				members.Push(id)
+			}
+
+			initializers.Push(luau.NewVariableDeclaration(tupleID, luau.NewArray(members)))
+			return exp
+		})
+
+		return builder(s, statements, initializer, exp)
+	}
+}
+
+// buildGeneratorLoop ports buildGeneratorLoop (L384-412): the .next()/.done/
+// .value protocol —
+//
+//	for _result in exp.next do
+//	    if _result.done then break end
+//	    local x = _result.value
+//	    <body>
+//	end
+var buildGeneratorLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
+	loopID := luau.TempID("result")
+	ids.Push(loopID)
+
+	initializers.Push(luau.NewIf(
+		luau.NewPropertyAccess(loopID, "done"),
+		luau.NewList[luau.Statement](luau.NewBreak()),
+		nil,
+	))
+
+	if ast.IsVariableDeclarationList(initializer) {
+		bindingList := luau.NewList[luau.Statement]()
+		initializers.Push(luau.NewVariableDeclaration(
+			transformForInitializer(s, initializer, bindingList),
+			luau.NewPropertyAccess(loopID, "value"),
+		))
+		initializers.PushList(bindingList)
+	} else {
+		transformForInitializerExpressionDirect(s, initializer, initializers,
+			luau.NewPropertyAccess(loopID, "value"))
+	}
+
+	return luau.NewPropertyAccess(convertToIndexableExpression(exp), "next")
+})
+
 // emptyLoopBuilder stands in for upstream's `() => luau.list.make()` builder
-// returned after a diagnostic was raised at dispatch, and for the
-// not-yet-ported builders after their rotorNotYetSupported diagnostic.
+// returned after a diagnostic was raised at dispatch.
 func emptyLoopBuilder(s *State, statements *luau.List[luau.Statement], initializer *ast.Node, exp luau.Expression) *luau.List[luau.Statement] {
 	return luau.NewList[luau.Statement]()
 }
 
 // getLoopBuilder ports getLoopBuilder (L414-438): the isDefinitelyType
-// dispatch, in upstream order. Phase 2b implements the array builder; the
-// Set/Map/string/IterableFunction/generator builders are pure-Luau emissions
-// that land with their Phase 3 types and raise rotorNotYetSupported here
-// (from the dispatch, once per loop). Iterable<T> and union keep upstream's
-// own noIterableIteration / noMacroUnion errors (both return a builder that
-// emits nothing). The fallthrough is upstream's `assert(false, ...)`.
+// dispatch, in upstream order. Iterable<T> and union keep upstream's own
+// noIterableIteration / noMacroUnion errors (both return a builder that emits
+// nothing). The fallthrough is upstream's `assert(false, ...)`.
 func getLoopBuilder(s *State, node *ast.Node, t *checker.Type) loopBuilder {
 	if IsDefinitelyType(s, t, IsArrayType(s)) {
 		return buildArrayLoop
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
-		// buildSetLoop (L136-139): `for x in exp do`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over `Set<T>`"))
-		return emptyLoopBuilder
+		return buildSetLoop
 	} else if IsDefinitelyType(s, t, IsMapType(s)) {
-		// buildMapLoop (L224-257): `for _k, _v in exp do` with the inline
-		// `[k, v]`-destructure fast path (transformInLineArrayBindingPattern /
-		// transformInLineArrayAssignmentPattern, L141-222).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over `Map<K, V>`"))
-		return emptyLoopBuilder
+		return buildMapLoop
 	} else if IsDefinitelyType(s, t, IsStringType) {
-		// buildStringLoop (L259-262):
-		// `for c in string.gmatch(exp, utf8.charpattern) do`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over `string`"))
-		return emptyLoopBuilder
+		return buildStringLoop
 	} else if IsDefinitelyType(s, t, IsIterableFunctionLuaTupleType(s)) {
-		// buildIterableFunctionLuaTupleLoop (L286-382): inline-binding fast
-		// path, tuple-arity introspection, or the while-true protocol.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over `IterableFunction<LuaTuple<T>>`"))
-		return emptyLoopBuilder
+		return buildIterableFunctionLuaTupleLoop(t)
 	} else if IsDefinitelyType(s, t, IsIterableFunctionType(s)) {
-		// buildIterableFunctionLoop (L264-267): `for x in exp do`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over `IterableFunction<T>`"))
-		return emptyLoopBuilder
+		return buildIterableFunctionLoop
 	} else if IsDefinitelyType(s, t, IsGeneratorType(s)) {
-		// buildGeneratorLoop (L384-412): `for _result in exp.next do` with the
-		// done/value protocol.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "for-of over generators"))
-		return emptyLoopBuilder
+		return buildGeneratorLoop
 	} else if IsDefinitelyType(s, t, IsIterableType(s)) {
 		s.Diags.Add(DiagNoIterableIteration(node))
 		return emptyLoopBuilder
@@ -143,6 +446,49 @@ func findRangeMacro(s *State, node *ast.Node) *ast.Node {
 	return nil
 }
 
+// transformForOfRangeMacro ports transformForOfRangeMacro (L450-477):
+// `for (const i of $range(start, end[, step]))` becomes a Luau numeric for.
+// The macro arguments transform via ensureTransformOrder (prereqs land before
+// the loop); a non-literal step expression gets `or 1` appended to match
+// `Number()` defaulting (a number-literal step passes through — the renderer
+// drops a literal step of exactly 1).
+func transformForOfRangeMacro(s *State, node *ast.Node, macroCall *ast.Node) *luau.List[luau.Statement] {
+	forOf := node.AsForInOrOfStatement()
+	result := luau.NewList[luau.Statement]()
+
+	statements := luau.NewList[luau.Statement]()
+	id := transformForInitializer(s, forOf.Initializer, statements)
+
+	var args []luau.Expression
+	prereqs := s.CaptureStatements(func() {
+		args = ensureTransformOrder(s, macroCall.AsCallExpression().Arguments.Nodes)
+	})
+	result.PushList(prereqs)
+	// [start, end, step] destructure — missing slots are nil (upstream
+	// undefined); the checker enforces the two-argument minimum.
+	var start, end, step luau.Expression
+	if len(args) > 0 {
+		start = args[0]
+	}
+	if len(args) > 1 {
+		end = args[1]
+	}
+	if len(args) > 2 {
+		step = args[2]
+	}
+
+	statements.PushList(TransformStatementList(s, forOf.Statement, getStatements(forOf.Statement), nil))
+
+	if step != nil {
+		if _, isNumberLiteral := step.(*luau.NumberLiteral); !isNumberLiteral {
+			step = luau.NewBinary(step, "or", luau.Num(1))
+		}
+	}
+	result.Push(luau.NewNumericFor(id, start, end, step, statements))
+
+	return result
+}
+
 // transformForOfStatement ports transformForOfStatement (L479-508). The body
 // is transformed BEFORE the loop shape is built; builders prepend initializer
 // statements.
@@ -161,10 +507,7 @@ func transformForOfStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 	}
 
 	if rangeMacroCall := findRangeMacro(s, node); rangeMacroCall != nil {
-		// transformForOfRangeMacro (L450-477): the NumericForStatement
-		// emission lands with the Phase 3 macro tables.
-		s.Diags.Add(DiagRotorNotYetSupported(rangeMacroCall, "macro `$range`"))
-		return luau.NewList[luau.Statement]()
+		return transformForOfRangeMacro(s, node, rangeMacroCall)
 	}
 
 	result := luau.NewList[luau.Statement]()

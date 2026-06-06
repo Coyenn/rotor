@@ -47,8 +47,7 @@ func isOmittedBindingElement(element *ast.Node) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Accessor table — util/binding/getAccessorForBindingType.ts (COMPLETE table;
-// Phase 2b ships the ARRAY accessor live)
+// Accessor table — util/binding/getAccessorForBindingType.ts (COMPLETE)
 // ---------------------------------------------------------------------------
 
 // bindingAccessor ports the BindingAccessor signature: produce the expression
@@ -64,54 +63,146 @@ func arrayAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]
 	return luau.NewComputedIndex(parentID, luau.Num(float64(index+1)))
 }
 
-// noneAccessor stands in for the not-yet-ported accessors after their
-// diagnostic was raised at dispatch (mirrors upstream's `() => luau.none()`
-// for the noIterableIteration entry).
+// peekIDStack returns the last identifier on the idStack (upstream peek), or
+// nil when empty.
+func peekIDStack(idStack *[]luau.AnyIdentifier) luau.AnyIdentifier {
+	if len(*idStack) == 0 {
+		return nil
+	}
+	return (*idStack)[len(*idStack)-1]
+}
+
+// stringAccessor ports the string entry (L39-63): the FIRST element pushes a
+// `local _matcher = string.gmatch(parentId, utf8.charpattern)` temp onto the
+// idStack; every element reads `_matcher()`. An omitted element still calls
+// the matcher (as a statement) so iteration advances.
+func stringAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	var id luau.AnyIdentifier
+	if len(*idStack) == 0 {
+		id = s.PushToVar(
+			luau.NewCall(luau.GlobalProperty("string", "gmatch"),
+				luau.NewList[luau.Expression](parentID, luau.GlobalProperty("utf8", "charpattern"))),
+			"matcher",
+		)
+		*idStack = append(*idStack, id)
+	} else {
+		id = (*idStack)[0]
+	}
+
+	callExp := luau.NewCall(id, luau.NewList[luau.Expression]())
+
+	if isOmitted {
+		s.Prereq(luau.NewCallStatement(callExp))
+		return luau.NewNone()
+	}
+	return callExp
+}
+
+// setAccessor ports the Set entry (L65-84): `next(parentId[, lastValue])`
+// continuation — each bound element lands in a `_value` temp pushed onto the
+// idStack so the NEXT element continues from it. NOTE (upstream verbatim): an
+// omitted element calls next as a statement but does NOT push, so the
+// following element re-reads from the same key.
+func setAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	args := luau.NewList[luau.Expression](parentID)
+	if lastID := peekIDStack(idStack); lastID != nil {
+		args.Push(lastID)
+	}
+	callExp := luau.NewCall(luau.GlobalID("next"), args)
+	if isOmitted {
+		s.Prereq(luau.NewCallStatement(callExp))
+		return luau.NewNone()
+	}
+	id := s.PushToVar(callExp, "value")
+	*idStack = append(*idStack, id)
+	return id
+}
+
+// mapAccessor ports the Map entry (L86-103):
+// `local _k, _v = next(parentId[, lastK])`, value = `{ _k, _v }`. The key
+// temp continues the iteration via the idStack. NOTE (upstream verbatim): the
+// accessor ignores isOmitted — an omitted element still declares its `_k, _v`
+// pair (which advances iteration), it just binds nothing.
+func mapAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	args := luau.NewList[luau.Expression](parentID)
+	if lastID := peekIDStack(idStack); lastID != nil {
+		args.Push(lastID)
+	}
+	keyID := luau.TempID("k")
+	valueID := luau.TempID("v")
+	s.Prereq(luau.NewVariableDeclaration(
+		luau.NewList[luau.AnyIdentifier](keyID, valueID),
+		luau.NewCall(luau.GlobalID("next"), args),
+	))
+	*idStack = append(*idStack, keyID)
+	return luau.NewArray(luau.NewList[luau.Expression](keyID, valueID))
+}
+
+// iterableFunctionLuaTupleAccessor ports the IterableFunction<LuaTuple<T>>
+// entry (L105-117): value = `{ parentId() }` (the call's multiple returns
+// packed); an omitted element calls the function as a statement to advance.
+func iterableFunctionLuaTupleAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	callExp := luau.NewCall(parentID, luau.NewList[luau.Expression]())
+	if isOmitted {
+		s.Prereq(luau.NewCallStatement(callExp))
+		return luau.NewNone()
+	}
+	return luau.NewArray(luau.NewList[luau.Expression](callExp))
+}
+
+// iterableFunctionAccessor ports the IterableFunction<T> entry (L119-131):
+// value = `parentId()`; an omitted element calls as a statement to advance.
+func iterableFunctionAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	callExp := luau.NewCall(parentID, luau.NewList[luau.Expression]())
+	if isOmitted {
+		s.Prereq(luau.NewCallStatement(callExp))
+		return luau.NewNone()
+	}
+	return callExp
+}
+
+// iterAccessor ports the generator/iterator-object entry (L133-141): value =
+// `parentId.next().value`; an omitted element calls `.next()` as a statement
+// to advance.
+func iterAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
+	callExp := luau.NewCall(luau.NewPropertyAccess(parentID, "next"), luau.NewList[luau.Expression]())
+	if isOmitted {
+		s.Prereq(luau.NewCallStatement(callExp))
+		return luau.NewNone()
+	}
+	return luau.NewPropertyAccess(callExp, "value")
+}
+
+// noneAccessor stands in for upstream's `() => luau.none()` accessor returned
+// after the noIterableIteration diagnostic was raised at dispatch.
 func noneAccessor(s *State, parentID luau.AnyIdentifier, index int, idStack *[]luau.AnyIdentifier, isOmitted bool) luau.Expression {
 	return luau.NewNone()
 }
 
 // getAccessorForBindingType ports getAccessorForBindingType (L143-167): the
-// 8-entry isDefinitelyType dispatch, in upstream order. Phase 2b implements
-// the array accessor; the string/Set/Map/IterableFunction/generator-object
-// accessors are pure-Luau emissions that land with their Phase 3 types and
-// raise rotorNotYetSupported here (from the dispatch, once per pattern — not
-// per element). Iterable<T> keeps upstream's own noIterableIteration error.
-// The fallthrough is upstream's `assert(false, ...)`.
+// 8-entry isDefinitelyType dispatch, in upstream order. Iterable<T> keeps
+// upstream's own noIterableIteration error. The fallthrough is upstream's
+// `assert(false, ...)`.
 func getAccessorForBindingType(s *State, node *ast.Node, t *checker.Type) bindingAccessor {
 	if IsDefinitelyType(s, t, IsArrayType(s)) {
 		return arrayAccessor
 	} else if IsDefinitelyType(s, t, IsStringType) {
-		// stringAccessor (L39-63): string.gmatch(parentId, utf8.charpattern)
-		// matcher pushed to idStack, value = `_matcher()`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring `string`"))
-		return noneAccessor
+		return stringAccessor
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
-		// setAccessor (L65-84): `next(parentId[, lastValue])` continuation.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring `Set<T>`"))
-		return noneAccessor
+		return setAccessor
 	} else if IsDefinitelyType(s, t, IsMapType(s)) {
-		// mapAccessor (L86-103): `local _k, _v = next(parentId[, lastK])`,
-		// value = `{ _k, _v }`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring `Map<K, V>`"))
-		return noneAccessor
+		return mapAccessor
 	} else if IsDefinitelyType(s, t, IsIterableFunctionLuaTupleType(s)) {
-		// iterableFunctionLuaTupleAccessor (L105-117): value = `{ parentId() }`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring `IterableFunction<LuaTuple<T>>`"))
-		return noneAccessor
+		return iterableFunctionLuaTupleAccessor
 	} else if IsDefinitelyType(s, t, IsIterableFunctionType(s)) {
-		// iterableFunctionAccessor (L119-131): value = `parentId()`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring `IterableFunction<T>`"))
-		return noneAccessor
+		return iterableFunctionAccessor
 	} else if IsDefinitelyType(s, t, IsIterableType(s)) {
 		s.Diags.Add(DiagNoIterableIteration(node))
 		return noneAccessor
 	} else if IsDefinitelyType(s, t, IsGeneratorType(s)) ||
 		IsDefinitelyType(s, t, IsObjectType) ||
 		node.Kind == ast.KindThisKeyword {
-		// iterAccessor (L133-141): value = `parentId.next().value`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring iterator objects"))
-		return noneAccessor
+		return iterAccessor
 	}
 	panic("transformer: Destructuring not supported for type: " + s.Checker.TypeToString(t)) // upstream assert(false)
 }
