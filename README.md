@@ -37,7 +37,7 @@ Your existing project — `tsconfig.json`, `default.project.json`, `node_modules
 
 ## Try it today
 
-What works right now is the foundation: **native typechecking of real rbxts projects**, with watch mode.
+rotor already **compiles straight-line TypeScript to byte-identical Luau** (verified continuously against real `rbxtsc` output — 13/13 differential fixtures), and **natively typechecks real rbxts projects** with watch mode:
 
 ```powershell
 git clone <this repo> && cd rotor
@@ -55,8 +55,8 @@ Requires Go 1.25+. Your project needs `node_modules` installed (rotor reads the 
 |:-----:|-------|:------:|
 | **0** | Foundation — Go module, vendored typescript-go mirror, TypeChecker driven from Go | ✅ |
 | **1** | Luau AST + renderer — full port of `@roblox-ts/luau-ast` (40 node kinds, temp-id solver, byte-exact formatting) | ✅ |
-| **2** | Transformer core — `TransformState`, prereq statement stack, core expression/statement transforms, **differential harness vs rbxtsc** | 🚧 |
-| **3** | Type-directed layer — type predicates, `for...of` shapes, truthiness, all macros (`Array.map`, `string.format`, …), JSX, classes, async/generators/try | ⬜ |
+| **2** | Transformer core — `TransformState`, prereq statement stack, core expression/statement transforms, **differential harness vs rbxtsc** | ✅ |
+| **3** | Type-directed layer — type predicates, `for...of` shapes, truthiness, all macros (`Array.map`, `string.format`, …), JSX, classes, async/generators/try | 🚧 |
 | **4** | Project layer — Rojo resolution, path translation, imports, `.d.ts` emit, incremental builds, watch, full `rbxtsc` CLI, transformer-plugin sidecar | ⬜ |
 | **5** | Conformance — full upstream behavioral suite under Lune, diagnostics corpus, byte-identical builds of real games | ⬜ |
 | | **v1.0** — drop-in `rbxtsc` replacement | 🎯 |
