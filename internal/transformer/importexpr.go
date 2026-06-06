@@ -241,12 +241,14 @@ func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.N
 		return []luau.Expression{luau.NewNone()}
 	}
 
-	// TODO(phase-3 symlinks): upstream consults state.guessVirtualPath first
-	// (TransformState.ts:367-385, reverse-symlink lookup over the program's
-	// symlink cache for pnpm-style node_modules); its `|| fileName` fallback
-	// is the unconditional behavior here until tsgo's symlinks package is
-	// wired (digest §3.1.2: "Port later; fallback is safe default").
+	// createImportExpression.ts:191: `const virtualPath =
+	// state.guessVirtualPath(moduleFile.fileName) || moduleFile.fileName;` —
+	// everything below (node_modules detection, the path mapping lookup, and
+	// the output-path translation) operates on the VIRTUAL path.
 	virtualPath := moduleFile.FileName()
+	if guessed := s.GuessVirtualPath(virtualPath); guessed != "" {
+		virtualPath = guessed
+	}
 
 	if isInsideNodeModules(virtualPath) {
 		mappedPath := virtualPath

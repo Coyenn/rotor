@@ -1,11 +1,14 @@
 package transformer
 
 import (
+	"strings"
+
 	"rotor/internal/luau"
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/checker"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/tspath"
 )
 
 // ProjectType ports Shared/constants.ts ProjectType.
@@ -362,6 +365,63 @@ func (s *State) RuntimeLib(node *ast.Node, name string) luau.IndexableExpression
 		s.Diags.Add(DiagRuntimeLibUsedInReplicatedFirst(node))
 	}
 	return luau.GlobalProperty("TS", name)
+}
+
+// ---------------------------------------------------------------------------
+// guessVirtualPath (upstream lines 365-384)
+// ---------------------------------------------------------------------------
+
+// GuessVirtualPath ports TransformState.guessVirtualPath: attempts a reverse
+// symlink lookup so a realpathed node_modules file (pnpm installs the real
+// files under node_modules/.pnpm/... and symlinks node_modules/<pkg> to them;
+// tsgo realpaths such resolutions) maps back onto its symlink-side "virtual"
+// path. Walks the realpath's ancestor directories from innermost out; the
+// first ancestor present in the symlink cache's realpath->symlink reverse map
+// rebases the file onto the symlink side. Returns "" when no ancestor is
+// known to the cache (upstream returns undefined; the caller falls back to
+// the realpath).
+func (s *State) GuessVirtualPath(fsPath string) string {
+	// s.Program may be nil in mechanics tests; upstream's optional chain on
+	// getSymlinkCache covers the analogous TS-version probe.
+	if s.Program == nil {
+		return ""
+	}
+	byRealpath := s.Program.GetSymlinkCache().DirectoriesByRealpath()
+	original := fsPath
+	for {
+		// reverseSymlinkMap always has trailing slashes as it is constructed
+		// from `SymlinkedDirectory.real` (upstream comment; tsgo's
+		// KnownDirectoryLink.RealPath keys are EnsureTrailingDirectorySeparator
+		// canonical paths, and ToPath of a trailing-separator string keeps the
+		// separator).
+		parent := tspath.EnsureTrailingDirectorySeparator(tspath.GetDirectoryPath(fsPath))
+		if fsPath == parent {
+			break
+		}
+		fsPath = parent
+		key := tspath.ToPath(fsPath, s.Program.GetCurrentDirectory(), s.Program.UseCaseSensitiveFileNames())
+		if set, ok := byRealpath.Load(key); ok {
+			// DIVERGENCE: strada's map value is an insertion-ordered array and
+			// upstream takes element [0]; tsgo stores a SyncSet whose
+			// iteration order is nondeterministic. In practice each pnpm
+			// realpath directory has exactly one symlink; for the >1 case
+			// pick the lexicographic minimum so output stays deterministic.
+			symlink := ""
+			for candidate := range set.Keys() {
+				if symlink == "" || candidate < symlink {
+					symlink = candidate
+				}
+			}
+			if symlink != "" {
+				// path.join(symlink, path.relative(fsPath, original)): fsPath
+				// is an ancestor of original (built by repeated dirname, same
+				// casing) with a trailing separator, so the relative part is
+				// the prefix-stripped remainder.
+				return tspath.CombinePaths(symlink, strings.TrimPrefix(original, fsPath))
+			}
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

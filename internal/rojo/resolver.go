@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // Extension constants (RojoResolver.ts L7-19, constants.ts).
@@ -206,8 +208,8 @@ func FromTree(basePath string, tree *Tree) *RojoResolver {
 // JSON.parse failure produces the "Invalid configuration!" warning (the
 // try/finally validates undefined) and, unlike upstream, does not re-throw.
 func (r *RojoResolver) parseConfig(rojoConfigFilePath string, doNotPush bool) {
-	realPath, err := filepath.EvalSymlinks(rojoConfigFilePath)
-	if err != nil || !pathExists(realPath) {
+	realPath := realpathOr(rojoConfigFilePath)
+	if !pathExists(realPath) {
 		r.warn(`RojoResolver: Path does not exist "` + rojoConfigFilePath + `"`)
 		return
 	}
@@ -540,12 +542,18 @@ func pathExists(p string) bool {
 	return err == nil
 }
 
-// realpathOr resolves symlinks, falling back to the input on failure.
+// realpathOr mirrors the reference's fs.realpathSync calls (RojoResolver.ts
+// L226/263/285/298/307), falling back to the input on failure. Node's
+// realpath resolves Windows junctions — pnpm's node_modules link strategy —
+// but filepath.EvalSymlinks does NOT: since Go 1.23 a junction is neither a
+// symlink nor a regular directory to Lstat, so EvalSymlinks fails on any
+// path through one, which silently hid packages' nested default.project.json
+// files from the resolver (wrong rbxPaths for pnpm installs). tsgo's osvfs
+// Realpath is modeled on Node's fs.realpath.native (GetFinalPathNameByHandle
+// on Windows, resolving all reparse points) and already returns the input
+// unchanged on failure.
 func realpathOr(p string) string {
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return real
-	}
-	return p
+	return filepath.FromSlash(osvfs.FS().Realpath(filepath.ToSlash(p)))
 }
 
 // dirContains mirrors fs.readdirSync(dir).includes(name): an exact,
