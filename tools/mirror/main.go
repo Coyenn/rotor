@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	srcModule = "github.com/microsoft/typescript-go/internal/"
-	dstModule = "rotor/tsgo/"
-	outDir    = "tsgo"
+	srcModule  = "github.com/microsoft/typescript-go/internal/"
+	dstModule  = "rotor/tsgo/"
+	outDir     = "tsgo"
+	overlayDir = "tools/mirror/overlay"
 )
 
 func main() {
@@ -78,6 +79,13 @@ func main() {
 	// Apache-2.0 obligations: license, notice, statement of changes.
 	copyFile(filepath.Join(tmp, "LICENSE"), filepath.Join(outDir, "LICENSE"))
 	copyFile(filepath.Join(tmp, "NOTICE.txt"), filepath.Join(outDir, "NOTICE"))
+
+	// Rotor shims (e.g. checker/rotor_exports.go) live in tools/mirror/overlay
+	// and are re-applied on every regeneration.
+	if err := applyOverlay(outDir); err != nil {
+		log.Fatal(err)
+	}
+
 	mirrorMD := fmt.Sprintf(`# Mirror of microsoft/typescript-go internals
 
 - Source: %s
@@ -85,15 +93,46 @@ func main() {
 - Vendored: %s
 - Changes: files copied from internal/ with import paths rewritten
   ("%s" -> "%s"); *_test.go files and testdata/ directories omitted.
-  No other modifications. Regenerate with: go run ./tools/mirror
-- Rotor additions (NOT from the mirror; re-add after regenerating —
-  the build fails loudly if forgotten): checker/rotor_exports.go
+  No other modifications to mirrored files. Regenerate with:
+  go run ./tools/mirror
+- Rotor additions (NOT from the mirror): overlay shims from
+  tools/mirror/overlay (e.g. checker/rotor_exports.go) are applied
+  automatically by tools/mirror after regenerating.
 `, *repo, sha, time.Now().UTC().Format(time.RFC3339), srcModule, dstModule)
 	if err := os.WriteFile(filepath.Join(outDir, "MIRROR.md"), []byte(mirrorMD), 0o644); err != nil {
 		log.Fatal(err)
 	}
 
 	fmt.Printf("mirrored %d files at %s\nnow run: go mod tidy && go build ./tsgo/...\n", nFiles, sha)
+}
+
+// applyOverlay copies every *.tmpl file under overlayDir into dst at its
+// relative path minus the ".tmpl" suffix. Overlay files are rotor-owned shims
+// (e.g. checker/rotor_exports.go) that must survive regeneration; they are
+// stored with the .tmpl suffix so `go build ./...` does not try to compile
+// them in place.
+func applyOverlay(dst string) error {
+	return filepath.WalkDir(overlayDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".tmpl") {
+			return nil
+		}
+		rel, err := filepath.Rel(overlayDir, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, strings.TrimSuffix(rel, ".tmpl"))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 func run(dir string, name string, args ...string) {
