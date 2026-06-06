@@ -89,10 +89,21 @@ func checkVariableHoist(s *State, identifier *ast.Node, symbol *ast.Symbol) {
 }
 
 // transformVariableDeclaration ports transformVariableStatement.ts
-// transformVariableDeclaration (L101-167) for Identifier names. The
-// initializer is transformed BEFORE the name "so references inside of value
-// can be hoisted" (upstream comment). Binding patterns (destructuring,
-// including the LuaTuple/inline-array optimized paths): later task.
+// transformVariableDeclaration (L101-167). The initializer is transformed
+// BEFORE the name "so references inside of value can be hoisted" (upstream
+// comment) — and before any arrayBindingPatternContainsHoists check, for the
+// same reason. Array binding patterns have three paths:
+//
+//	a. LuaTuple direct unpack — `local a, b = f()` (the call was NOT
+//	   array-wrapped thanks to shouldWrapLuaTuple);
+//	b. literal-array RHS — `local a, b = x, y` (members inlined; this is why
+//	   `const [head] = [10]` collapses to `local head = 10`);
+//	c. fallback — `local _binding = <value>` + per-element accessor reads.
+//
+// a/b are gated on !arrayBindingPatternContainsHoists ("we can't localize
+// multiple variables at the same time if any of them are hoisted"); an
+// identifier RHS is NOT a literal array, so it always takes the fallback.
+// Object binding patterns always take the `_binding` temp path.
 func transformVariableDeclaration(s *State, declaration *ast.Node) *luau.List[luau.Statement] {
 	statements := luau.NewList[luau.Statement]()
 	decl := declaration.AsVariableDeclaration()
@@ -110,8 +121,39 @@ func transformVariableDeclaration(s *State, declaration *ast.Node) *luau.List[lu
 			transformVariable(s, name, value)
 		}))
 	} else {
-		// Array/object binding patterns: destructuring task.
-		s.Diags.Add(DiagRotorNotYetSupported(name, kindName(name.Kind)))
+		// in destructuring, rhs must be executed first
+		if decl.Initializer == nil || value == nil {
+			panic("transformer: transformVariableDeclaration: binding pattern without initializer") // upstream assert
+		}
+
+		// optimize empty destructure — only the RHS side effects remain
+		if len(name.AsBindingPattern().Elements.Nodes) == 0 {
+			if array, ok := value.(*luau.Array); !ok || array.Members.IsNonEmpty() {
+				statements.PushList(wrapExpressionStatement(value))
+			}
+			return statements
+		}
+
+		if ast.IsArrayBindingPattern(name) {
+			array, isArray := value.(*luau.Array)
+			if luau.IsCall(value) &&
+				IsLuaTupleType(s).Check(s.GetType(decl.Initializer)) &&
+				!arrayBindingPatternContainsHoists(s, name) {
+				statements.PushList(transformOptimizedArrayBindingPattern(s, name, value))
+			} else if isArray && array.Members.IsNonEmpty() &&
+				// we can't localize multiple variables at the same time if any of them are hoisted
+				!arrayBindingPatternContainsHoists(s, name) {
+				statements.PushList(transformOptimizedArrayBindingPattern(s, name, array.Members))
+			} else {
+				statements.PushList(s.CaptureStatements(func() {
+					transformArrayBindingPattern(s, name, s.PushToVar(value, "binding"))
+				}))
+			}
+		} else {
+			statements.PushList(s.CaptureStatements(func() {
+				transformObjectBindingPattern(s, name, s.PushToVar(value, "binding"))
+			}))
+		}
 	}
 
 	return statements
@@ -193,9 +235,8 @@ func isUnaryAssignmentOperator(operator ast.Kind) bool {
 // (L26-84): the statement-position specializations for assignments and
 // ++/-- (no value temps), with wrapExpressionStatement discard semantics for
 // everything else. Destructuring-assignment LHS falls through to
-// transformBinaryExpression, whose destructuring entry raises
-// rotorNotYetSupported (destructuring task); upstream routes it the same way
-// and transforms it there.
+// transformBinaryExpression (upstream routes it the same way), whose
+// destructuring branch prereqs the statements and returns a dropped value.
 func transformExpressionStatementInner(s *State, expression *ast.Node) *luau.List[luau.Statement] {
 	if ast.IsBinaryExpression(expression) {
 		binary := expression.AsBinaryExpression()

@@ -6,3 +6,5 @@
 - Changes: files copied from internal/ with import paths rewritten
   ("github.com/microsoft/typescript-go/internal/" -> "rotor/tsgo/"); *_test.go files and testdata/ directories omitted.
   No other modifications. Regenerate with: go run ./tools/mirror
+- Rotor additions (NOT from the mirror; re-add after regenerating —
+  the build fails loudly if forgotten): checker/rotor_exports.go

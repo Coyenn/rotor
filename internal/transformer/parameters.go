@@ -8,11 +8,6 @@ import (
 // ---------------------------------------------------------------------------
 // Parameters — nodes/transformParameters.ts, nodes/transformInitializer.ts
 // ---------------------------------------------------------------------------
-//
-// Binding-pattern parameter names — both the `...[a, b]`
-// spread-array-pattern flattening (optimizeArraySpreadParameter, L16-51) and
-// ordinary destructuring params (L103-116) — depend on the destructuring
-// transforms (Task 4) and raise rotorNotYetSupported until they land.
 
 // transformInitializer ports transformInitializer.ts (L6-20): the `= default`
 // shape. Default expressions are evaluated lazily inside the nil-check (TS
@@ -54,10 +49,11 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 		}
 
 		if parameter.DotDotDotToken != nil && ast.IsArrayBindingPattern(name) {
-			// optimizeArraySpreadParameter (L16-51): `...[a, b]: [A, B]`
-			// flattens the pattern elements into real parameters.
-			// destructuring task.
-			s.Diags.Add(DiagRotorNotYetSupported(name, kindName(name.Kind)))
+			// `...[a, b]: [A, B]` flattens the pattern elements into real
+			// parameters (no `...` capture).
+			statements.PushList(s.CaptureStatements(func() {
+				optimizeArraySpreadParameter(s, parameters, name)
+			}))
 			continue
 		}
 
@@ -84,11 +80,56 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 
 		// destructuring
 		if !ast.IsIdentifier(name) {
-			// transformArrayBindingPattern / transformObjectBindingPattern
-			// over paramID: destructuring task.
-			s.Diags.Add(DiagRotorNotYetSupported(name, kindName(name.Kind)))
+			statements.PushList(s.CaptureStatements(func() {
+				if ast.IsArrayBindingPattern(name) {
+					transformArrayBindingPattern(s, name, paramID)
+				} else {
+					transformObjectBindingPattern(s, name, paramID)
+				}
+			}))
 		}
 	}
 
 	return parameters, statements, hasDotDotDot
+}
+
+// optimizeArraySpreadParameter ports transformParameters.ts
+// optimizeArraySpreadParameter (L16-51): parameters in the form
+// `...[a, b, c]: [A, B, C]` become just `(a, b, c)`. An omitted element gets
+// a placeholder temp parameter; a rest element raises noSpreadDestructuring
+// and aborts the pattern; nested patterns get a `_param` temp destructured
+// in the body (initializer first, then the recursion). Callers capture the
+// prereqs into the body-head statements.
+func optimizeArraySpreadParameter(s *State, parameters *luau.List[luau.AnyIdentifier], bindingPattern *ast.Node) {
+	for _, element := range bindingPattern.AsBindingPattern().Elements.Nodes {
+		if isOmittedBindingElement(element) {
+			parameters.Push(luau.TempID(""))
+		} else {
+			bindingElement := element.AsBindingElement()
+			if bindingElement.DotDotDotToken != nil {
+				s.Diags.Add(DiagNoSpreadDestructuring(element))
+				return
+			}
+			name := bindingElement.Name()
+			if ast.IsIdentifier(name) {
+				paramID := TransformIdentifierDefined(s, name)
+				ValidateIdentifier(s, name)
+				parameters.Push(paramID)
+				if bindingElement.Initializer != nil {
+					s.Prereq(transformInitializer(s, paramID.(luau.WritableExpression), bindingElement.Initializer))
+				}
+			} else {
+				paramID := luau.TempID("param")
+				parameters.Push(paramID)
+				if bindingElement.Initializer != nil {
+					s.Prereq(transformInitializer(s, paramID, bindingElement.Initializer))
+				}
+				if ast.IsArrayBindingPattern(name) {
+					transformArrayBindingPattern(s, name, paramID)
+				} else {
+					transformObjectBindingPattern(s, name, paramID)
+				}
+			}
+		}
+	}
 }

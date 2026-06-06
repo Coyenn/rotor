@@ -128,12 +128,52 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 	}
 
 	if ast.IsAssignmentOperator(operatorKind) {
-		// Destructuring assignment (ArrayLiteral/ObjectLiteral LHS, upstream
-		// L143-184 incl. the LuaTuple optimized-unpack paths): destructuring
-		// task.
-		if ast.IsArrayLiteralExpression(expression.Left) || ast.IsObjectLiteralExpression(expression.Left) {
-			s.Diags.Add(DiagRotorNotYetSupported(node, "destructuring assignment"))
-			return luau.NewNone()
+		// Destructuring assignment (upstream L141-184): "in destructuring, rhs
+		// must be executed first". Array LHS has the optimized multi-assign
+		// paths (`[a, b] = [b, a]` -> `a, b = b, a`); object LHS always
+		// destructures through a `_binding` temp. The expression VALUE of a
+		// destructuring assignment is the (temp-bound) RHS.
+		if ast.IsArrayLiteralExpression(expression.Left) {
+			rightExp := TransformExpression(s, expression.Right)
+
+			// optimize empty array destructure
+			if len(expression.Left.AsArrayLiteralExpression().Elements.Nodes) == 0 {
+				if array, ok := rightExp.(*luau.Array); ok && isUsedAsStatement(node) && array.Members.IsEmpty() {
+					return luau.NewNone()
+				}
+				return rightExp
+			}
+
+			if luau.IsCall(rightExp) && IsLuaTupleType(s).Check(s.GetType(expression.Right)) {
+				transformOptimizedArrayAssignmentPattern(s, expression.Left, rightExp)
+				if !isUsedAsStatement(node) {
+					s.Diags.Add(DiagNoLuaTupleDestructureAssignmentExpression(node))
+				}
+				return luau.NewNone()
+			}
+
+			if array, ok := rightExp.(*luau.Array); ok && array.Members.IsNonEmpty() && isUsedAsStatement(node) {
+				transformOptimizedArrayAssignmentPattern(s, expression.Left, array.Members)
+				return luau.NewNone()
+			}
+
+			parentID := s.PushToVar(rightExp, "binding")
+			transformArrayAssignmentPattern(s, expression.Left, parentID)
+			return parentID
+		} else if ast.IsObjectLiteralExpression(expression.Left) {
+			rightExp := TransformExpression(s, expression.Right)
+
+			// optimize empty object destructure
+			if len(expression.Left.AsObjectLiteralExpression().Properties.Nodes) == 0 {
+				if mapExp, ok := rightExp.(*luau.Map); ok && isUsedAsStatement(node) && mapExp.Fields.IsEmpty() {
+					return luau.NewNone()
+				}
+				return rightExp
+			}
+
+			parentID := s.PushToVar(rightExp, "binding")
+			transformObjectAssignmentPattern(s, expression.Left, parentID)
+			return parentID
 		}
 
 		writableType := s.GetType(expression.Left)

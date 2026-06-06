@@ -169,8 +169,7 @@ func isDefinedType(s *State, t *checker.Type) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Leaf predicates (types.ts L83-206; isSetType/isMapType/isGeneratorType/...
-// land with their consumers)
+// Leaf predicates (types.ts L83-206)
 // ---------------------------------------------------------------------------
 
 // IsAnyType ports isAnyType (L83-85): identity with the checker's intrinsic
@@ -320,6 +319,83 @@ func IsLuaTupleType(s *State) TypeCheck {
 	return TypeCheck{check: func(t *checker.Type) bool {
 		nominal := s.LuaTupleNominalSymbol()
 		return nominal != nil && s.Checker.GetPropertyOfType(t, NominalLuaTupleName) == nominal
+	}}
+}
+
+// symbolIsAmbient reports whether t's symbol is one of the named global
+// ambient symbols (upstream `type.symbol === macroManager.getSymbolOrThrow(...)`
+// chains; rotor resolves the same names through State.AmbientSymbol). The nil
+// guard matters: AmbientSymbol returns nil for projects without
+// @rbxts/compiler-types, and nil == nil must not match.
+func symbolIsAmbient(s *State, t *checker.Type, names ...string) bool {
+	symbol := t.Symbol()
+	if symbol == nil {
+		return false
+	}
+	for _, name := range names {
+		if symbol == s.AmbientSymbol(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSetType ports isSetType (L139-144).
+func IsSetType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		return symbolIsAmbient(s, t, "Set", "ReadonlySet", "WeakSet")
+	}}
+}
+
+// IsMapType ports isMapType (L146-151).
+func IsMapType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		return symbolIsAmbient(s, t, "Map", "ReadonlyMap", "WeakMap")
+	}}
+}
+
+// IsGeneratorType ports isGeneratorType (L153-155).
+func IsGeneratorType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		return symbolIsAmbient(s, t, "Generator")
+	}}
+}
+
+// IsIterableFunctionType ports isIterableFunctionType (L157-159).
+func IsIterableFunctionType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		return symbolIsAmbient(s, t, "IterableFunction")
+	}}
+}
+
+// IsIterableType ports isIterableType (L177-179).
+func IsIterableType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		return symbolIsAmbient(s, t, "Iterable")
+	}}
+}
+
+// getTypeArguments ports util/types.ts getTypeArguments (L256-258):
+// `typeChecker.getTypeArguments(type as ts.TypeReference) ?? []`. tsgo's
+// getTypeArguments asserts the type IS a reference, so the `?? []` fallback
+// becomes an explicit reference-flag guard.
+func getTypeArguments(s *State, t *checker.Type) []*checker.Type {
+	if t.Flags()&checker.TypeFlagsObjectFlagsType == 0 ||
+		t.ObjectFlags()&checker.ObjectFlagsReference == 0 {
+		return nil
+	}
+	return s.Checker.GetTypeArguments(t)
+}
+
+// IsIterableFunctionLuaTupleType ports isIterableFunctionLuaTupleType
+// (L167-175): an IterableFunction whose first type argument is a LuaTuple.
+func IsIterableFunctionLuaTupleType(s *State) TypeCheck {
+	return TypeCheck{check: func(t *checker.Type) bool {
+		if !IsIterableFunctionType(s).Check(t) {
+			return false
+		}
+		typeArguments := getTypeArguments(s, t)
+		return len(typeArguments) > 0 && IsLuaTupleType(s).Check(typeArguments[0])
 	}}
 }
 

@@ -24,11 +24,19 @@ import (
 func transformForInitializer(s *State, initializer *ast.Node, initializers *luau.List[luau.Statement]) luau.AnyIdentifier {
 	if ast.IsVariableDeclarationList(initializer) {
 		return transformBindingName(s, initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name(), initializers)
-	} else if ast.IsArrayLiteralExpression(initializer) || ast.IsObjectLiteralExpression(initializer) {
-		// transformArray/ObjectAssignmentPattern over a `_binding` temp:
-		// destructuring task.
-		s.Diags.Add(DiagRotorNotYetSupported(initializer, kindName(initializer.Kind)))
-		return luau.TempID("binding")
+	} else if ast.IsArrayLiteralExpression(initializer) {
+		// `for ([a, b] of ...)` — destructure a `_binding` temp inside the body.
+		parentID := luau.TempID("binding")
+		initializers.PushList(s.CaptureStatements(func() {
+			transformArrayAssignmentPattern(s, initializer, parentID)
+		}))
+		return parentID
+	} else if ast.IsObjectLiteralExpression(initializer) {
+		parentID := luau.TempID("binding")
+		initializers.PushList(s.CaptureStatements(func() {
+			transformObjectAssignmentPattern(s, initializer, parentID)
+		}))
+		return parentID
 	}
 	// `for (x of ...)`, `for (a.b of ...)` — a `_v` temp is the loop binding,
 	// assigned through the writable target at the top of the body.
@@ -36,17 +44,6 @@ func transformForInitializer(s *State, initializer *ast.Node, initializers *luau
 	expression := transformWritableExpression(s, initializer, false)
 	initializers.Push(luau.NewAssignment(expression, "=", valueID))
 	return valueID
-}
-
-// transformBindingName ports nodes/binding/transformBindingName.ts (L8-30).
-// Binding patterns (`for (const [a, b] of ...)`) destructure a `_binding`
-// temp inside the body: destructuring task.
-func transformBindingName(s *State, name *ast.Node, initializers *luau.List[luau.Statement]) luau.AnyIdentifier {
-	if ast.IsIdentifier(name) {
-		return TransformIdentifierDefined(s, name)
-	}
-	s.Diags.Add(DiagRotorNotYetSupported(name, kindName(name.Kind)))
-	return luau.TempID("binding")
 }
 
 // buildArrayLoop ports transformForOfStatement.ts buildArrayLoop (L130-134)
