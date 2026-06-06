@@ -37,7 +37,7 @@ Your existing project — `tsconfig.json`, `default.project.json`, `node_modules
 
 ## Try it today
 
-rotor already **compiles a large TypeScript subset to byte-identical Luau** — functions, closures, destructuring, loops, switch — verified continuously against real `rbxtsc` output (20/20 differential fixtures, plus real production-game files compiling byte-identical). It also **natively typechecks real rbxts projects** with watch mode:
+rotor already **compiles multi-file TypeScript projects to byte-identical Luau** — imports with Rojo-aware require chains, functions, closures, destructuring, loops, switch, `new` — verified continuously against real `rbxtsc` output (29/29 differential fixtures; 28 files of a real production game compile byte-identical). It also **natively typechecks real rbxts projects** with watch mode:
 
 ```powershell
 git clone <this repo> && cd rotor
@@ -57,7 +57,8 @@ Requires Go 1.25+. Your project needs `node_modules` installed (rotor reads the 
 | **1** | Luau AST + renderer — full port of `@roblox-ts/luau-ast` (40 node kinds, temp-id solver, byte-exact formatting) | ✅ |
 | **2** | Transformer core — `TransformState`, prereq statement stack, core expression/statement transforms, **differential harness vs rbxtsc** | ✅ |
 | **2b** | Functions, arrows, destructuring, `for...of` (arrays), switch, loop closure semantics | ✅ |
-| **3** | Imports & module resolution, `new`, macros (`Array.map`, `string.format`, …), JSX, classes, async/generators/try, remaining iteration | 🚧 |
+| **3a** | Imports & module resolution (Rojo-aware requires, `TS.import`/`TS.getModule`, export-from), `new` + constructor macros, math-op macros | ✅ |
+| **3b** | Macro tables (`Array.map`, `string.format`, …), JSX, optional chaining, Map/Set iteration, classes, async/try | 🚧 |
 | **4** | Project layer — Rojo resolution, path translation, imports, `.d.ts` emit, incremental builds, watch, full `rbxtsc` CLI, transformer-plugin sidecar | ⬜ |
 | **5** | Conformance — full upstream behavioral suite under Lune, diagnostics corpus, byte-identical builds of real games | ⬜ |
 | | **v1.0** — drop-in `rbxtsc` replacement | 🎯 |
