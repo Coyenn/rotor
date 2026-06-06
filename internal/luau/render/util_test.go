@@ -10,8 +10,10 @@ func TestGetSafeBracketEquals(t *testing.T) {
 	cases := map[string]string{
 		"hello":       "",
 		"a ]] b":      "=",
-		"a ]=] b":     "==",
+		"a ]=] b":     "",
 		"ends with ]": "=",
+		"a ]=] ]] b":  "==",
+		"x]":          "=",
 	}
 	for in, want := range cases {
 		if got := getSafeBracketEquals(in); got != want {

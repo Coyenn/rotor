@@ -8,24 +8,13 @@ import (
 )
 
 // getSafeBracketEquals returns the `=` padding needed so that `[`+eq+`[` and
-// `]`+eq+`]` brackets safely enclose str. For every `]` in str followed by a
-// run of k `=`s that is then closed by another `]` (or ends the string), a
-// bracket level of at least k+1 is required.
+// `]`+eq+`]` brackets safely enclose str. Literal port of upstream
+// getSafeBracketEquals.ts.
 func getSafeBracketEquals(str string) string {
 	amtEquals := 0
-	for i := 0; i < len(str); i++ {
-		if str[i] != ']' {
-			continue
-		}
-		k := 0
-		for i+1+k < len(str) && str[i+1+k] == '=' {
-			k++
-		}
-		if i+1+k >= len(str) || str[i+1+k] == ']' {
-			if k+1 > amtEquals {
-				amtEquals = k + 1
-			}
-		}
+	for strings.Contains(str, "]"+strings.Repeat("=", amtEquals)+"]") ||
+		strings.HasSuffix(str, "]"+strings.Repeat("=", amtEquals)) {
+		amtEquals++
 	}
 	return strings.Repeat("=", amtEquals)
 }
