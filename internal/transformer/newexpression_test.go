@@ -2,6 +2,7 @@ package transformer_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -108,28 +109,38 @@ print(a, b, c, s1, s2, s3, s4, m1, m2, m3, m4, m5, wm, ws, rm, rs, part, t)
 }
 
 // TestConstructorMacroIdentifierWithoutNew: a constructor-macro identifier
-// indexed without `new` (`const A = Array`) keeps raising loudly through the
-// centralized MacroManager (upstream raises noConstructorMacroWithoutNew from
-// transformIdentifier; rotor's compiler-types sentinel covers it until the
-// Phase 3b misuse guards land).
+// indexed without `new` (`const A = Array`) raises upstream's
+// noConstructorMacroWithoutNew from transformIdentifier (the Phase 3b Task 5
+// misuse guard) — there is no runtime Array constructor object to emit. The
+// later `print(A)` use of the ArrayConstructor-typed variable raises it
+// again, exactly as upstream (the guard keys off getFirstConstructSymbol of
+// the identifier's TYPE, not the specific name).
 func TestConstructorMacroIdentifierWithoutNew(t *testing.T) {
 	s := buildState(t, filepath.Join("testdata", "new"), "src/macroident.ts")
 	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-	if ds := s.Diags.Flush(); !hasDiagnostic(ds, "rotorNotYetSupported", "macro `Array`") {
-		t.Errorf("no rotorNotYetSupported diagnostic for `Array` without new; got: %v", ds)
+	if ds := s.Diags.Flush(); !hasDiagnostic(ds, "noConstructorMacroWithoutNew", "without using the `new` operator") {
+		t.Errorf("no noConstructorMacroWithoutNew diagnostic for `Array` without new; got: %v", ds)
 	}
 }
 
-// TestNewPromiseRaisesIdentifierMacroDiagnostic: `new Promise(...)` has a
-// construct symbol but NO constructor macro (upstream PromiseConstructor is
-// not in CONSTRUCTOR_MACROS) — the fallback transforms the `Promise`
-// identifier, which is the registered-but-unimplemented identifier macro
-// (upstream: state.TS(node, "Promise")) and must raise the sentinel, never
-// emit a bare `Promise.new(...)`.
-func TestNewPromiseRaisesIdentifierMacroDiagnostic(t *testing.T) {
+// TestNewPromise: `new Promise(...)` has a construct symbol but NO
+// constructor macro (upstream PromiseConstructor is not in
+// CONSTRUCTOR_MACROS) — the `X.new(args)` fallback transforms the `Promise`
+// identifier, which runs the registered identifier macro (upstream:
+// state.TS(node, "Promise")) — so the emit is `TS.Promise.new(...)`, never a
+// bare `Promise.new(...)`.
+func TestNewPromise(t *testing.T) {
 	s := buildState(t, filepath.Join("testdata", "new"), "src/promise.ts")
-	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-	if ds := s.Diags.Flush(); !hasDiagnostic(ds, "rotorNotYetSupported", "macro `Promise`") {
-		t.Errorf("no rotorNotYetSupported diagnostic for `new Promise`; got: %v", ds)
+	statements := transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
+
+	got := render.RenderAST(statements)
+	if !strings.Contains(got, "TS.Promise.new(") {
+		t.Errorf("`new Promise(...)` did not emit through TS.Promise.new:\n%s", got)
+	}
+	if !s.UsesRuntimeLib {
+		t.Errorf("identifier macro did not set UsesRuntimeLib")
+	}
+	if ds := s.Diags.Flush(); len(ds) != 0 {
+		t.Errorf("unexpected diagnostics: %v", ds)
 	}
 }

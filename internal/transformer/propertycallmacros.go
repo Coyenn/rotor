@@ -11,10 +11,8 @@ import (
 // logic every property-call macro is wrapped in (header/footer/
 // wasExpressionPushed/wrapComments, L941-1001). The String/ArrayLike method
 // regions live in stringmacros.go; ReadonlyArray/Array in arraymacros.go and
-// arraymacros2.go; the remaining container tables (Set, Map, Promise) land
-// in Phase 3b Task 5 — those interfaces are declared by
-// @rbxts/compiler-types, so the MacroManager's compiler-types fallback
-// already detects their methods and raises rotorNotYetSupported.
+// arraymacros2.go; ReadonlySet/Set/ReadonlyMap/Map/Promise in
+// collectionmacros.go.
 //
 // The math interfaces are different: they are declared by @rbxts/types
 // (include/macro_math.d.ts), NOT compiler-types — including the `Number`
@@ -61,9 +59,12 @@ func makeMathSet(operators ...luau.BinaryOperator) map[string]PropertyCallMacro 
 }
 
 // propertyCallMacroTable ports PROPERTY_CALL_MACROS (propertyCallMacros.ts
-// L919-939). The remaining rows (ReadonlySet, Set, ReadonlyMap, Map, Promise)
-// are Phase 3b Task 5; their compiler-types-declared methods are already
-// caught by GetPropertyCallMacro's fallback.
+// L919-939) — all upstream rows. The registration loop (macromanager.go)
+// builds each class's methodMap from its OWN interface declarations only, so
+// e.g. Set's row carries just add/delete/clear; calls to the inherited
+// isEmpty/size/has/forEach resolve to the ReadonlySet method symbols through
+// interface inheritance, hitting the ReadonlySet row's registrations.
+// WeakSet/WeakMap declare no methods and have no rows.
 var propertyCallMacroTable = map[string]map[string]PropertyCallMacro{
 	// math classes
 	"CFrame":       makeMathSet("+", "-", "*"),
@@ -79,6 +80,11 @@ var propertyCallMacroTable = map[string]map[string]PropertyCallMacro{
 	"ArrayLike":     arrayLikeMethods,
 	"ReadonlyArray": readonlyArrayMethods,
 	"Array":         arrayMethods,
+	"ReadonlySet":   readonlySetMethods,
+	"Set":           setMethods,
+	"ReadonlyMap":   readonlyMapMethods,
+	"Map":           mapMethods,
+	"Promise":       promiseMethods,
 }
 
 // ---------------------------------------------------------------------------

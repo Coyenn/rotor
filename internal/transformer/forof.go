@@ -126,8 +126,8 @@ func getLoopBuilder(s *State, node *ast.Node, t *checker.Type) loopBuilder {
 // findRangeMacro ports findRangeMacro (L440-448): the loop expression
 // (skipped downwards) is a call whose callee resolves to the `$range` macro
 // symbol. Upstream compares against macroManager.getSymbolOrThrow($range);
-// rotor matches the MacroManager call-macro entry by name so the
-// compiler-types fallback keeps working when registration misses. Checked
+// rotor matches the MacroManager call-macro entry by name (same symbol
+// identity — the entry was registered from that resolution). Checked
 // BEFORE the expression is transformed, matching upstream's position — the
 // generic macro sentinel inside TransformExpression is never reached for it.
 func findRangeMacro(s *State, node *ast.Node) *ast.Node {

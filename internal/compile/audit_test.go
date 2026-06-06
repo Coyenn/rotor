@@ -150,3 +150,48 @@ func TestMacroRegistrationAuditGating(t *testing.T) {
 		t.Fatalf("checker-light project failed the audit gate: %v (diags: %v)", err, diags)
 	}
 }
+
+// TestMacroOnlyClassAssert: a compiler-types method on a MACRO-ONLY class
+// (ReadonlyArray/Array/ReadonlyMap/WeakMap/Map/ReadonlySet/WeakSet/Set/
+// String) with NO registered macro is upstream getPropertyCallMacro's
+// `assert(false, "Macro X.y() is not implemented!")` — the
+// compiler-types-newer-than-the-compiler scenario, simulated here by adding
+// a `union` method to the copied compiler-types' OWN ReadonlySet declaration
+// (it must be the single global declaration: upstream's identity check
+// `symbols.get(parent.name) === parent` fails for a user-side augmentation,
+// which merges into a transient clone and falls back to a plain method
+// call). Rotor panics with the exact upstream text and CompileFile's recover
+// boundary surfaces it as an internal-compiler-error — NEVER silence or a
+// wrong `a:union(b)` method call. (Methods of NON-macro-only compiler-types
+// classes, e.g. Promise.cancel, emit plain method calls — oracle-pinned in
+// the 28_collectionmacros diff fixture.)
+func TestMacroOnlyClassAssert(t *testing.T) {
+	dir := buildAuditProject(t)
+
+	setDtsPath := filepath.Join(dir, "node_modules", "@rbxts", "compiler-types", "types", "Set.d.ts")
+	data, err := os.ReadFile(setDtsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const anchor = "interface ReadonlySet<T> extends Iterable<T> {"
+	patched := strings.Replace(string(data), anchor,
+		anchor+"\n\tunion(this: ReadonlySet<T>, other: ReadonlySet<T>): Set<T>;", 1)
+	if patched == string(data) {
+		t.Fatal("fixture drift: Set.d.ts has no ReadonlySet declaration")
+	}
+	if err := os.WriteFile(setDtsPath, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mainPath := filepath.Join(dir, "src", "main.ts")
+	main := "const a = new Set<number>([1]);\nconst b = new Set<number>([2]);\nconst c = a.union(b);\nprint(c);\nexport {};\n"
+	if err := os.WriteFile(mainPath, []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const wantErr = "internal compiler error: Macro ReadonlySet.union() is not implemented!"
+	_, diags, err := CompileFile(dir, "src/main.ts")
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("CompileFile error = %v, want %q (diags: %v)", err, wantErr, diags)
+	}
+}

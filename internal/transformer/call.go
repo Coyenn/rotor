@@ -13,12 +13,12 @@ import (
 // util/convertToIndexableExpression.ts, util/expressionMightMutate.ts,
 // util/wrapReturnIfLuaTuple.ts, util/arrayBindingPatternContainsHoists.ts.
 //
-// Macro hook points query the MacroManager (macromanager.go); entries with a
-// real Macro run through runCallMacro (the math-operation property-call
-// macros as of Phase 3a); registered entries with a nil Macro are known
-// upstream macros rotor has not implemented yet and raise
-// rotorNotYetSupported instead of silently-wrong output. The remaining macro
-// tables land in Phase 3b.
+// Macro hook points query the MacroManager (macromanager.go); entries run
+// through runCallMacro. All upstream macro tables are implemented (Phase 3b
+// Task 5); the nil-Macro branches below are defensive — a registered entry
+// with a nil Macro would mean a known upstream macro rotor has not
+// implemented, raising rotorNotYetSupported instead of silently-wrong
+// output.
 
 // convertToIndexableExpression ports util/convertToIndexableExpression.ts:
 // wrap non-indexable expressions in parentheses so they can be indexed or

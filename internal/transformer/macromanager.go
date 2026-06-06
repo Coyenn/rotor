@@ -2,7 +2,6 @@ package transformer
 
 import (
 	"sort"
-	"strings"
 
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
@@ -15,46 +14,31 @@ import (
 // constructs the MacroManager once per Program and threads it through
 // TransformServices).
 //
-// Phase 3a state of the tables:
-//   - CONSTRUCTOR_MACROS are fully implemented (constructormacros.go).
-//   - IDENTIFIER_MACROS / CALL_MACROS entries are registered with nil
-//     implementations: a nil Macro on a returned entry means "known upstream
-//     macro, not implemented in rotor yet" — call sites raise
-//     rotorNotYetSupported with the macro name instead of emitting
-//     silently-wrong output.
-//   - PROPERTY_CALL_MACROS: the math-operation macros (propertyCallMacros.ts
-//     makeMathSet: add/sub/mul/div/idiv on CFrame/UDim/UDim2/Vector2/
-//     Vector2int16/Vector3/Vector3int16/Number, compiled to Luau binary
-//     operators) are fully implemented (propertycallmacros.go) — they MUST
-//     be, because those methods are declared by @rbxts/types
-//     (include/macro_math.d.ts), not compiler-types, so the detection
-//     fallback misses them and `v.add(w)` would silently emit a wrong
-//     `v:add(w)` method call (found by the Phase 3a randomness re-smoke:
-//     damage-numbers.ts). Phase 3b Task 3 added the String/ArrayLike rows
-//     (stringmacros.go) — 12 of the 13 String methods are @rbxts/types-
-//     declared (include/lua.d.ts) and had the same silent-miss problem.
-//     Task 4 added the ReadonlyArray/Array rows (arraymacros.go,
-//     arraymacros2.go). The remaining method tables (Map.set, Promise.then,
-//     ...) land in Phase 3b Task 5; those interfaces are
-//     compiler-types-declared, so the fallback below covers detection.
+// Phase 3b Task 5 state of the tables: ALL upstream macros are implemented —
+// CONSTRUCTOR_MACROS (constructormacros.go), IDENTIFIER_MACROS and
+// CALL_MACROS (callmacros.go), PROPERTY_CALL_MACROS (propertycallmacros.go:
+// math classes; stringmacros.go: String/ArrayLike; arraymacros.go/
+// arraymacros2.go: ReadonlyArray/Array; collectionmacros.go: ReadonlySet/
+// Set/ReadonlyMap/Map/Promise). The lookup methods therefore match upstream
+// exactly: table-only, plus getPropertyCallMacro's macro-only-class assert
+// (`Macro X.y() is not implemented!`) for compiler-types methods on
+// MACRO_ONLY_CLASSES that lack a registered macro — the forward-compat guard
+// for a compiler-types package newer than the compiler. The Phase 2
+// "any compiler-types symbol is a macro" detection fallback is GONE.
 //
-// Fallback semantics (the Phase 2 stand-ins, centralized): every macro
-// upstream registers is declared by @rbxts/compiler-types, so a
-// compiler-types-declared symbol at a macro hook is treated as a known macro
-// even when it is missing from the tables. Upstream instead throws
-// ProjectError at construction when a registration name cannot be resolved
-// ("You may need to update your @rbxts/compiler-types!"); rotor skips the
-// entry so checker-light test projects keep working (same divergence as the
-// AmbientSymbol nil-return pattern) — BUT records every skip with the exact
-// upstream ProjectError text (see Missing). CompileProject/CompileFile fail
-// hard when Missing() is non-empty, restoring upstream's
-// ProjectError-before-any-emit contract for real projects: a failed
-// ResolveName must never silently regress a macro to a plain method call
-// (the damage-numbers.ts bug class: `v.add(w)` -> wrong `v:add(w)` output
-// with no diagnostic). The sentinel gating (compiler-types present iff
-// LuaTuple resolves; @rbxts/types present iff CFrame resolves) keeps
-// checker-light unit-test projects, which lack the packages entirely, from
-// failing the audit.
+// Registration divergence: upstream throws ProjectError at construction when
+// a registration name cannot be resolved ("You may need to update your
+// @rbxts/compiler-types!"); rotor skips the entry so checker-light test
+// projects keep working (same divergence as the AmbientSymbol nil-return
+// pattern) — BUT records every skip with the exact upstream ProjectError
+// text (see Missing). CompileProject/CompileFile fail hard when Missing() is
+// non-empty, restoring upstream's ProjectError-before-any-emit contract for
+// real projects: a failed ResolveName must never silently regress a macro to
+// a plain method call (the damage-numbers.ts bug class: `v.add(w)` -> wrong
+// `v:add(w)` output with no diagnostic). The sentinel gating (compiler-types
+// present iff LuaTuple resolves; @rbxts/types present iff CFrame resolves)
+// keeps checker-light unit-test projects, which lack the packages entirely,
+// from failing the audit.
 
 // ---------------------------------------------------------------------------
 // Macro signatures — macros/types.ts
@@ -75,7 +59,9 @@ type PropertyCallMacro func(s *State, node *ast.Node, expression luau.Expression
 
 // IdentifierMacroEntry / CallMacroEntry / PropertyCallMacroEntry pair a macro
 // with its upstream registration name (used in diagnostics). Macro == nil
-// means the macro exists upstream but rotor has not implemented it yet.
+// means the macro exists upstream but rotor has not implemented it yet —
+// as of Phase 3b Task 5 every table entry is implemented, so callers' nil
+// branches are defensive dead code.
 type IdentifierMacroEntry struct {
 	Name  string
 	Macro IdentifierMacro
@@ -95,24 +81,7 @@ type PropertyCallMacroEntry struct {
 // Registration tables
 // ---------------------------------------------------------------------------
 
-// identifierMacroTable ports macros/identifierMacros.ts IDENTIFIER_MACROS.
-// Phase 3b: Promise => state.TS(node, "Promise").
-var identifierMacroTable = map[string]IdentifierMacro{
-	"Promise": nil,
-}
-
-// callMacroTable ports macros/callMacros.ts CALL_MACROS (names only; the
-// implementations land in Phase 3b).
-var callMacroTable = map[string]CallMacro{
-	"assert":         nil,
-	"typeOf":         nil,
-	"typeIs":         nil,
-	"classIs":        nil,
-	"identity":       nil,
-	"$range":         nil,
-	"$tuple":         nil,
-	"$getModuleTree": nil,
-}
+// identifierMacroTable and callMacroTable live in callmacros.go.
 
 // constructorMacroTable ports macros/constructorMacros.ts CONSTRUCTOR_MACROS
 // (all implemented — constructormacros.go). Populated in init() because the
@@ -197,6 +166,22 @@ var rbxTypesClasses = map[string]bool{
 
 // NominalLuaTupleName ports Shared/constants.ts NOMINAL_LUA_TUPLE_NAME.
 const NominalLuaTupleName = "_nominal_LuaTuple"
+
+// macroOnlyClasses ports MacroManager.ts MACRO_ONLY_CLASSES (L53-63): the
+// classes that exist ONLY as compiler macros — they have no runtime object,
+// so a method on them WITHOUT a registered macro can never emit a real
+// method call (see GetPropertyCallMacro's assert).
+var macroOnlyClasses = map[string]bool{
+	"ReadonlyArray": true,
+	"Array":         true,
+	"ReadonlyMap":   true,
+	"WeakMap":       true,
+	"Map":           true,
+	"ReadonlySet":   true,
+	"WeakSet":       true,
+	"Set":           true,
+	"String":        true,
+}
 
 // ---------------------------------------------------------------------------
 // MacroManager
@@ -309,9 +294,9 @@ func NewMacroManager(chk *checker.Checker) *MacroManager {
 	// each macro by its method symbol. Upstream keys by
 	// `getType(typeChecker, member).symbol` — the symbol of the method's
 	// function type — which is exactly what GetFirstDefinedSymbol yields for
-	// `a.b` at the call sites. Registered rows: math classes (Phase 3a) +
-	// String/ArrayLike (Phase 3b Task 3); the rest of the table is Phase 3b
-	// Tasks 4-5 and covered by the compiler-types detection fallback.
+	// `a.b` at the call sites. All upstream rows are registered: math classes,
+	// String/ArrayLike, ReadonlyArray/Array, ReadonlySet/Set/ReadonlyMap/Map,
+	// Promise.
 	for className, methods := range propertyCallMacroTable {
 		symbol := chk.ResolveName(className, nil, ast.SymbolFlagsInterface, false)
 		if symbol == nil {
@@ -449,36 +434,25 @@ func (m *MacroManager) LuaTupleNominalSymbol() *ast.Symbol {
 	return m.luaTupleNominal
 }
 
-// GetIdentifierMacro ports macroManager.getIdentifierMacro. The fallback is
-// DELIBERATELY broader than upstream's table: rotor's Phase 2 stand-in treats
-// ANY compiler-types-declared symbol in identifier position as a known macro
-// (rejected loudly by the caller), because upstream's surrounding guards
-// (noConstructorMacroWithoutNew, noMacroExtends, noIndexWithoutCall at
-// transformIdentifier.ts L137-159) are not all ported yet. Phase 3b narrows
-// this to the real table + those guards.
-func (m *MacroManager) GetIdentifierMacro(symbol *ast.Symbol) *IdentifierMacroEntry {
-	if entry, ok := m.identifierMacros[symbol]; ok {
-		return entry
-	}
-	if isCompilerTypesSymbol(symbol) {
-		return &IdentifierMacroEntry{Name: symbol.Name}
-	}
-	return nil
+// IsMacroOnlyClass ports macroManager.isMacroOnlyClass: the symbol must be
+// THE registered global symbol of that name (`symbols.get(symbol.name) ===
+// symbol` — not a same-named user type) AND the name must be in
+// MACRO_ONLY_CLASSES.
+func (m *MacroManager) IsMacroOnlyClass(symbol *ast.Symbol) bool {
+	return m.symbols[symbol.Name] == symbol && macroOnlyClasses[symbol.Name]
 }
 
-// GetCallMacro ports macroManager.getCallMacro. Fallback: every upstream
-// CALL_MACROS entry (typeOf, typeIs, identity, $range, ...) is a
-// `declare function` in @rbxts/compiler-types; restricting to
-// FunctionDeclaration declarations keeps compiler-types TYPES (e.g. a
-// Callback-typed value's anonymous function type) callable.
+// GetIdentifierMacro ports macroManager.getIdentifierMacro: table-only.
+// The misuse guards around the hook (noConstructorMacroWithoutNew,
+// noMacroExtends, noIndexWithoutCall) live in TransformIdentifier, exactly
+// as upstream (transformIdentifier.ts L132-159).
+func (m *MacroManager) GetIdentifierMacro(symbol *ast.Symbol) *IdentifierMacroEntry {
+	return m.identifierMacros[symbol]
+}
+
+// GetCallMacro ports macroManager.getCallMacro: table-only.
 func (m *MacroManager) GetCallMacro(symbol *ast.Symbol) *CallMacroEntry {
-	if entry, ok := m.callMacros[symbol]; ok {
-		return entry
-	}
-	if isCompilerTypesSymbol(symbol) && symbolHasDeclarationOfKind(symbol, ast.IsFunctionDeclaration) {
-		return &CallMacroEntry{Name: macroDisplayName(symbol)}
-	}
-	return nil
+	return m.callMacros[symbol]
 }
 
 // IsTypeCheckCallMacro stands in for `macro === CALL_MACROS.typeIs ||
@@ -495,59 +469,23 @@ func (m *MacroManager) GetConstructorMacro(symbol *ast.Symbol) ConstructorMacro 
 	return m.constructorMacros[symbol]
 }
 
-// GetPropertyCallMacro ports macroManager.getPropertyCallMacro. Fallback:
-// upstream PROPERTY_CALL_MACROS keys are method-member symbols of
-// compiler-types interfaces (Array.push, Map.set, String.size, ...).
-// Interface symbols themselves (e.g. the Array type of `arr` in `arr[0]`) are
-// NOT macros. Upstream's macro-only-class assert ("Macro X.y() is not
-// implemented!") is subsumed by the sentinel until the 3b tables land.
+// GetPropertyCallMacro ports macroManager.getPropertyCallMacro (L190-201)
+// EXACTLY: table lookup, plus upstream's assert — a method symbol whose
+// parent is THE registered global symbol of a macro-only class but which has
+// no registered macro means the @rbxts/compiler-types package declares a
+// method this compiler version does not implement:
+// `assert(false, "Macro X.y() is not implemented!")`. Rotor panics with the
+// same text; the CompileFile/CompileProject recover boundary surfaces it as
+// an internal-compiler-error, never silent wrong output. Methods of
+// NON-macro-only compiler-types classes (e.g. Generator.next, Promise.cancel)
+// return nil here and emit as plain method calls, exactly as upstream.
 func (m *MacroManager) GetPropertyCallMacro(symbol *ast.Symbol) *PropertyCallMacroEntry {
-	if entry, ok := m.propertyCallMacros[symbol]; ok {
-		return entry
+	entry := m.propertyCallMacros[symbol]
+	if entry == nil &&
+		symbol.Parent != nil &&
+		m.symbols[symbol.Parent.Name] == symbol.Parent &&
+		m.IsMacroOnlyClass(symbol.Parent) {
+		panic("Macro " + symbol.Parent.Name + "." + symbol.Name + "() is not implemented!") // upstream assert(false, ...)
 	}
-	if isCompilerTypesSymbol(symbol) && symbolHasDeclarationOfKind(symbol, isMethodLikeDeclaration) {
-		return &PropertyCallMacroEntry{Name: macroDisplayName(symbol)}
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Fallback helpers (the centralized Phase 2 stand-ins)
-// ---------------------------------------------------------------------------
-
-// isCompilerTypesSymbol reports whether symbol is declared by the
-// @rbxts/compiler-types package — upstream's MacroManager builds its macro
-// tables exclusively from those declaration files, so this is the stand-in
-// for "symbol has a macro" wherever the real tables are not populated yet.
-func isCompilerTypesSymbol(symbol *ast.Symbol) bool {
-	for _, declaration := range symbol.Declarations {
-		if sf := ast.GetSourceFileOfNode(declaration); sf != nil &&
-			strings.Contains(sf.FileName(), "node_modules/@rbxts/compiler-types/") {
-			return true
-		}
-	}
-	return false
-}
-
-func symbolHasDeclarationOfKind(symbol *ast.Symbol, check func(*ast.Node) bool) bool {
-	for _, declaration := range symbol.Declarations {
-		if check(declaration) {
-			return true
-		}
-	}
-	return false
-}
-
-func isMethodLikeDeclaration(node *ast.Node) bool {
-	return ast.IsMethodSignatureDeclaration(node) || ast.IsMethodDeclaration(node)
-}
-
-// macroDisplayName renders a macro symbol for diagnostics, mirroring
-// upstream's `${symbol.parent.name}.${symbol.name}` assert text where a
-// parent exists (e.g. "Array.push").
-func macroDisplayName(symbol *ast.Symbol) string {
-	if symbol.Parent != nil && luau.IsValidIdentifier(symbol.Parent.Name) {
-		return symbol.Parent.Name + "." + symbol.Name
-	}
-	return symbol.Name
+	return entry
 }

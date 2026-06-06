@@ -8,6 +8,7 @@ import (
 	"rotor/internal/luau"
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/core"
 )
 
 // nodeModules ports Shared/constants.ts NODE_MODULES.
@@ -40,10 +41,18 @@ func getSourceFileFromModuleSpecifier(s *State, moduleSpecifier *ast.Node) *ast.
 		}
 	}
 
-	// Upstream falls back to a raw ts.resolveModuleName for $getModuleTree of
-	// modules never referenced by a regular import (L27-32) — deferred with
-	// the $getModuleTree macro (digest §3.2: "only needed for $getModuleTree
-	// of never-imported modules; defer").
+	// Fallback for $getModuleTree when the module is not referenced by any
+	// regular import (upstream L25-32): a raw resolveModuleName against the
+	// program options. Upstream passes no resolution mode (undefined); tsgo's
+	// equivalent is ResolutionModeNone (resolve per the compiler options).
+	if ast.IsStringLiteralLike(moduleSpecifier) && s.Program != nil {
+		sourceFile := ast.GetSourceFileOfNode(moduleSpecifier)
+		result := s.Program.ResolveModuleName(moduleSpecifier.Text(), sourceFile.FileName(), core.ResolutionModeNone)
+		if result != nil && result.IsResolved() {
+			return s.Program.GetSourceFile(result.ResolvedFileName)
+		}
+	}
+
 	return nil
 }
 
