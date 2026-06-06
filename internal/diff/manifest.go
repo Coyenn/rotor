@@ -30,4 +30,7 @@ var EnabledFixtures = []string{
 	"22a_base",
 	"22_exportfrom",
 	"23_new",
+	"24a_shared",
+	"24b_middle",
+	"24_mixed3a",
 }

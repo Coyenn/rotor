@@ -22,7 +22,15 @@ import (
 //     rotorNotYetSupported with the macro name instead of emitting
 //     silently-wrong output.
 //   - PROPERTY_CALL_MACROS method tables (Array.push, Map.set, ...) land in
-//     Phase 3b; until then the compiler-types fallbacks below cover detection.
+//     Phase 3b; until then the compiler-types fallbacks below cover detection
+//     — EXCEPT the math-operation macros (propertyCallMacros.ts makeMathSet:
+//     add/sub/mul/div/idiv on CFrame/UDim/UDim2/Vector2/Vector2int16/Vector3/
+//     Vector3int16, compiled to Luau operators). Those methods are declared
+//     by @rbxts/types, not compiler-types, so the fallback misses them and
+//     `v.add(w)` currently emits a silently-wrong `v:add(w)` method call
+//     (found by the Phase 3a randomness re-smoke: damage-numbers.ts). The 3b
+//     table registration must cover @rbxts/types math interfaces, not just
+//     compiler-types.
 //
 // Fallback semantics (the Phase 2 stand-ins, centralized): every macro
 // upstream registers is declared by @rbxts/compiler-types, so a
