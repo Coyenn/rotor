@@ -277,6 +277,48 @@ func TestCompileProjectSyntacticErrorFails(t *testing.T) {
 	}
 }
 
+// TestCompileProjectMissingRootDirOutDir: a tsconfig that defines neither
+// rootDir/rootDirs nor outDir must fail with upstream validateCompilerOptions'
+// friendly ProjectError text (validateCompilerOptions.ts L89-95, L107-115) —
+// not the getRootDirs internal panic.
+func TestCompileProjectMissingRootDirOutDir(t *testing.T) {
+	dir := t.TempDir()
+	tsconfig := `{
+	"compilerOptions": {
+		"module": "CommonJS",
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": []
+	},
+	"include": ["src"]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, diags, err := CompileProject(dir)
+	if err == nil {
+		t.Fatal("expected a hard error for missing rootDir/outDir")
+	}
+	if files != nil {
+		t.Errorf("files = %v, want nil", keys(files))
+	}
+	want := "Invalid \"tsconfig.json\" configuration!\n" +
+		"https://roblox-ts.com/docs/quick-start#project-folder-setup\n" +
+		"- \"rootDir\" or \"rootDirs\" must be defined\n" +
+		"- \"outDir\" must be defined\n"
+	if len(diags) != 1 || diags[0] != want {
+		t.Fatalf("diags = %#v, want exactly [%q]", diags, want)
+	}
+}
+
 func keys(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

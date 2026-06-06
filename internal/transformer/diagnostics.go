@@ -399,6 +399,15 @@ func DiagRotorNotYetSupported(node *ast.Node, what string) Diagnostic {
 	return errorDiag("rotorNotYetSupported", node, fmt.Sprintf("rotor: %s not yet supported (phase 2)", what))
 }
 
+// DiagRotorNoProjectContext guards transformer paths that require the Rojo
+// project context (State.Rojo) when none was attached — typically a
+// transformer-level unit test exercising import emission without
+// SetRojoContext. Upstream always constructs TransformState with full
+// ProjectData, so this condition has no rbxtsc counterpart.
+func DiagRotorNoProjectContext(node *ast.Node) Diagnostic {
+	return errorDiag("rotorNoProjectContext", node, "rotor: imports require project context (no Rojo resolver attached)")
+}
+
 // kindName strips tsgo's stringer prefix: KindCallExpression -> "CallExpression"
 // (matches upstream getKindName output for diagnostics/debugging).
 func kindName(kind ast.Kind) string {

@@ -13,6 +13,7 @@ import (
 	"rotor/internal/transformer"
 	"rotor/tsgo/bundled"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/core"
 	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/vfs/osvfs"
 )
@@ -62,6 +63,10 @@ func newProjectProgram(projectDir string) (string, *compiler.Program, []string, 
 		return "", nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
 
+	if msg := validateCompilerOptions(parsed.CompilerOptions()); msg != "" {
+		return "", nil, []string{msg}, errors.New("compile: invalid tsconfig.json configuration")
+	}
+
 	// CHECKER-IDENTITY PIN (digest §7.3): `aliasSymbolLinks.referenced` marks
 	// — the data behind EmitResolver.IsReferencedAliasDeclaration, i.e.
 	// import/export elision — live on the checker INSTANCE that semantically
@@ -79,6 +84,7 @@ func newProjectProgram(projectDir string) (string, *compiler.Program, []string, 
 	// options before NewProgram is safe. Proven load-bearing: removing the
 	// pin makes TestCompileProjectImportsModel spuriously elide the imports
 	// of every file whose round-robin checker isn't checkers[0].
+	// Phase 4 perf: restore pool parallelism via GetTypeCheckerForFile + per-checker symbol caches.
 	one := 1
 	parsed.CompilerOptions().Checkers = &one
 
@@ -356,8 +362,37 @@ func createPathTranslator(program *compiler.Program) *rojo.PathTranslator {
 	return rojo.NewPathTranslator(rootDir, outDir, "", options.Declaration.IsTrue(), true)
 }
 
+// validateCompilerOptions is a partial port of
+// Project/functions/validateCompilerOptions.ts (L89-95): only the two
+// "configurable compiler options" checks the pipeline cannot proceed without —
+// rootDir/rootDirs feed getRootDirs/createPathTranslator and outDir feeds the
+// PathTranslator and the synthetic Rojo resolver. The returned message
+// reproduces upstream's ProjectError text (L107-115) byte-for-byte, including
+// the per-error trailing newlines. The full enforced-options validation
+// (noLib, strict, target, moduleResolution, typeRoots, ...) is a Phase 4 item.
+func validateCompilerOptions(options *core.CompilerOptions) string {
+	var errs []string
+	if options.RootDir == "" && len(options.RootDirs) == 0 {
+		errs = append(errs, `"rootDir" or "rootDirs" must be defined`)
+	}
+	if options.OutDir == "" {
+		errs = append(errs, `"outDir" must be defined`)
+	}
+	if len(errs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Invalid \"tsconfig.json\" configuration!\n")
+	sb.WriteString("https://roblox-ts.com/docs/quick-start#project-folder-setup\n")
+	for _, e := range errs {
+		sb.WriteString("- " + e + "\n")
+	}
+	return sb.String()
+}
+
 // getRootDirs ports Shared/util/getRootDirs.ts: rootDir if set, else rootDirs
-// (the assert is upstream's; tsconfig validation has already run).
+// (the assert is upstream's; validateCompilerOptions has already rejected
+// configs with neither, so the panic is an unreachable internal invariant).
 func getRootDirs(program *compiler.Program) []string {
 	options := program.Options()
 	if options.RootDir != "" {

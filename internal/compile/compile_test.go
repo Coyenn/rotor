@@ -12,10 +12,11 @@ import (
 	"rotor/tsgo/ast"
 )
 
-// withStubDispatch wires a TransformStatement that emits nothing for every
-// statement, so the pipeline around it (program creation, sanitizer, module
-// symbol, export shapes, return-nil rule, header, rendering) can be exercised
-// end-to-end before Task 6 lands the real dispatch.
+// withStubDispatch swaps the real statement dispatch for a TransformStatement
+// that emits nothing, isolating the pipeline around it (program creation,
+// sanitizer, module symbol, export shapes, return-nil rule, header, rendering)
+// so these tests exercise the compile plumbing independent of transformer
+// behavior.
 func withStubDispatch(t *testing.T) {
 	t.Helper()
 	prev := transformer.TransformStatement

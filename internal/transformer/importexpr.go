@@ -227,6 +227,14 @@ func getProjectImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier
 // the node_modules or project pipeline. Every error path adds its diagnostic
 // and returns [none] (the compile bails on the diagnostic before rendering).
 func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node) []luau.Expression {
+	// rotor guard (no upstream counterpart): every path below dereferences
+	// s.Rojo; a State without SetRojoContext (transformer-level unit tests)
+	// must get a diagnostic, not a nil-pointer panic.
+	if s.Rojo == nil {
+		s.Diags.Add(DiagRotorNoProjectContext(moduleSpecifier))
+		return []luau.Expression{luau.NewNone()}
+	}
+
 	moduleFile := getSourceFileFromModuleSpecifier(s, moduleSpecifier)
 	if moduleFile == nil {
 		s.Diags.Add(DiagNoModuleSpecifierFile(moduleSpecifier))
