@@ -1,6 +1,8 @@
 package compile
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -65,6 +67,63 @@ func TestCompileFilePipelineExportShapes(t *testing.T) {
 		"local exports = {}\n" +
 		"exports.constant = constant\n" +
 		"return exports\n"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestCompileFileReturnMapShape covers the ReturnMap export shape end-to-end
+// with the REAL statement dispatch. No diff fixture reaches this branch:
+// 08_exports mixes in a mutable export, which forces the exports-table shape
+// for the whole file, so only an immutable-only file emits the map return.
+//
+// The expected bytes are oracle-verified: a scratch compile of exactly
+// `export const x = 1;` through testdata/diff/project with rbxtsc 3.0.0
+// (2026-06-06) produced this output verbatim — multi-line map literal with a
+// trailing comma, tab-indented.
+func TestCompileFileReturnMapShape(t *testing.T) {
+	// Self-contained temp project so shared fixture testdata is never mutated
+	// while other packages' tests may be compiling it in parallel. The fixture
+	// project's @rbxts packages are reused via an absolute typeRoots path.
+	dir := t.TempDir()
+	typeRoots := filepath.ToSlash(filepath.Join(fixtureProjectDir(t), "node_modules", "@rbxts"))
+	tsconfig := fmt.Sprintf(`{
+	"compilerOptions": {
+		"module": "commonjs",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"forceConsistentCasingInFileNames": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"typeRoots": [%q],
+		"rootDir": "src",
+		"outDir": "out"
+	},
+	"include": ["src"]
+}`, typeRoots)
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "returnmap.ts"), []byte("export const x = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, diags, err := CompileFile(dir, filepath.Join("src", "returnmap.ts"))
+	if err != nil {
+		t.Fatalf("CompileFile: %v", err)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	want := "-- Compiled with roblox-ts v3.0.0\n" +
+		"local x = 1\n" +
+		"return {\n" +
+		"\tx = x,\n" +
+		"}\n"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

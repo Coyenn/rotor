@@ -12,6 +12,7 @@ var EnabledFixtures = []string{
 	"05_control",
 	"06_globals",
 	"07_access",
+	"08_exports",
 	"09_unary",
 	"10_strings",
 }
