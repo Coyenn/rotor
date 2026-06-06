@@ -86,7 +86,7 @@ func TestPrependHeader(t *testing.T) {
 	t.Run("header is the first line", func(t *testing.T) {
 		list := luau.NewList[luau.Statement]()
 		list.Push(luau.NewReturn(luau.Nil()))
-		prependHeader(list)
+		prependHeader(NewTestState(), list)
 		want := "-- Compiled with roblox-ts v3.0.0\nreturn nil\n"
 		if got := render.RenderAST(list); got != want {
 			t.Errorf("got %q, want %q", got, want)
@@ -98,8 +98,24 @@ func TestPrependHeader(t *testing.T) {
 		list.Push(luau.NewComment("!strict"))
 		list.Push(luau.NewComment(" regular comment"))
 		list.Push(luau.NewReturn(luau.Nil()))
-		prependHeader(list)
+		prependHeader(NewTestState(), list)
 		want := "--!strict\n-- Compiled with roblox-ts v3.0.0\n-- regular comment\nreturn nil\n"
+		if got := render.RenderAST(list); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("runtime-lib import joins the header after the version comment", func(t *testing.T) {
+		// transformSourceFile.ts:228-230; directive comments still hoist
+		// above the whole header. A state without a Rojo context lands on the
+		// Package `_G[script]` form (runtimeLibRbxPath undefined upstream).
+		s := NewTestState()
+		s.UsesRuntimeLib = true
+		list := luau.NewList[luau.Statement]()
+		list.Push(luau.NewComment("!strict"))
+		list.Push(luau.NewReturn(luau.Nil()))
+		prependHeader(s, list)
+		want := "--!strict\n-- Compiled with roblox-ts v3.0.0\nlocal TS = _G[script]\nreturn nil\n"
 		if got := render.RenderAST(list); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}
@@ -110,7 +126,7 @@ func TestPrependHeader(t *testing.T) {
 		list.Push(luau.NewComment(" leading"))
 		list.Push(luau.NewComment("!native")) // not at head: stays below the header
 		list.Push(luau.NewReturn(luau.Nil()))
-		prependHeader(list)
+		prependHeader(NewTestState(), list)
 		want := "-- Compiled with roblox-ts v3.0.0\n-- leading\n--!native\nreturn nil\n"
 		if got := render.RenderAST(list); got != want {
 			t.Errorf("got %q, want %q", got, want)

@@ -106,6 +106,16 @@ func TestCompileFileReturnMapShape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// CompileFile validates the project like rbxtsc does (compileFiles.ts:
+	// 82-98): a non-package project needs a package.json, a Rojo config, and
+	// Rojo data for the include folder.
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"returnmap-fixture"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rojoConfig := `{"name":"returnmap","tree":{"$path":"out","include":{"$path":"include"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "default.project.json"), []byte(rojoConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}

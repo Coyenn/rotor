@@ -28,10 +28,7 @@ func renderFunctionsFile(t *testing.T, relPath string) string {
 func renderFunctionsSourceFile(t *testing.T, relPath string) string {
 	t.Helper()
 	s := buildState(t, filepath.Join("testdata", "functions"), relPath)
-	statements, err := transformer.TransformSourceFile(s)
-	if err != nil {
-		t.Fatalf("TransformSourceFile: %v", err)
-	}
+	statements := transformer.TransformSourceFile(s)
 	if ds := s.Diags.Flush(); len(ds) != 0 {
 		t.Fatalf("unexpected diagnostics: %v", ds)
 	}

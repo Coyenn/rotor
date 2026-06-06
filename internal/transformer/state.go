@@ -2,6 +2,7 @@ package transformer
 
 import (
 	"rotor/internal/luau"
+	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/checker"
 	"rotor/tsgo/compiler"
@@ -35,6 +36,24 @@ type MultiState struct {
 	macroManager *MacroManager
 }
 
+// RojoContext carries the project-level Rojo data the reference TransformState
+// receives as constructor arguments (compileFiles.ts:160-174): the resolver
+// over the project's Rojo config, the input->output PathTranslator, the
+// RuntimeLib rbxPath computed once per compile (compileFiles.ts:86-98), and
+// the project path that noRojoData renders file paths relative to. Computed
+// once per CompileProject pass and shared by every file's State. Phase 3a
+// Task 4 adds the import-resolution members (pkgRojoResolvers,
+// nodeModulesPathMapping).
+type RojoContext struct {
+	Resolver       *rojo.RojoResolver
+	PathTranslator *rojo.PathTranslator
+	// RuntimeLibRbxPath is nil for Package projects (upstream undefined),
+	// selecting the `_G[script]` runtime-lib access form.
+	RuntimeLibRbxPath rojo.RbxPath
+	// ProjectPath is upstream data.projectPath (the tsconfig.json directory).
+	ProjectPath string
+}
+
 // NewMultiState returns an empty compilation-step cache container.
 func NewMultiState() *MultiState {
 	return &MultiState{
@@ -65,12 +84,19 @@ type State struct {
 	Diags      *DiagService
 	Multi      *MultiState
 
+	// Rojo is the project-level Rojo context (nil in mechanics tests and in
+	// any State that never reaches runtime-lib emission). Upstream threads the
+	// equivalent fields through the TransformState constructor; rotor keeps
+	// NewState's signature stable for the test fleet and installs the context
+	// via SetRojoContext.
+	Rojo *RojoContext
+
 	// ProjectType + IsInReplicatedFirst gate the runtimeLibUsedInReplicatedFirst
-	// warning in RuntimeLib. Phase 4: upstream computes isInReplicatedFirst in
-	// the constructor from pathTranslator.getOutputPath +
-	// rojoResolver.getRbxPathFromFilePath (rbxPath[0] === "ReplicatedFirst");
-	// until the rojo project layer lands, callers leave these zero-valued and
-	// the warning never fires.
+	// warning in RuntimeLib. SetRojoContext computes IsInReplicatedFirst per
+	// the upstream constructor (TransformState.ts:62-65:
+	// pathTranslator.getOutputPath + rojoResolver.getRbxPathFromFilePath,
+	// rbxPath[0] === "ReplicatedFirst"); without a Rojo context both stay
+	// zero-valued and the warning never fires.
 	ProjectType         ProjectType
 	IsInReplicatedFirst bool
 
@@ -146,6 +172,21 @@ func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.S
 		multi.macroManager = NewMacroManager(chk)
 	}
 	return s
+}
+
+// SetRojoContext installs the project-level Rojo context and project type,
+// then computes IsInReplicatedFirst exactly as the upstream TransformState
+// constructor does (TransformState.ts:62-65). Call before TransformSourceFile;
+// upstream takes these as constructor arguments, rotor keeps NewState's
+// signature stable for existing call sites.
+func (s *State) SetRojoContext(rc *RojoContext, projectType ProjectType) {
+	s.Rojo = rc
+	s.ProjectType = projectType
+	if rc != nil && s.SourceFile != nil {
+		sourceOutPath := rc.PathTranslator.GetOutputPath(s.SourceFile.FileName())
+		rbxPath, ok := rc.Resolver.GetRbxPathFromFilePath(sourceOutPath)
+		s.IsInReplicatedFirst = ok && len(rbxPath) > 0 && rbxPath[0] == "ReplicatedFirst"
+	}
 }
 
 // NewTestState returns a state with nil program/checker for prereq-mechanics

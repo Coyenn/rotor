@@ -1,6 +1,7 @@
 // Package compile wires program creation, transformation, and rendering into
-// a single per-file entry point (the Go analog of upstream
-// Project/functions/compileFiles.ts, narrowed to one file).
+// the project-aware entry points (the Go analog of upstream
+// Project/functions/compileFiles.ts): CompileProject for whole projects and
+// CompileFile as the single-file fast path the per-fixture tests use.
 package compile
 
 import (
@@ -12,38 +13,29 @@ import (
 	"rotor/internal/luau/render"
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
-	"rotor/tsgo/bundled"
-	"rotor/tsgo/compiler"
-	"rotor/tsgo/tsoptions"
-	"rotor/tsgo/vfs/osvfs"
 )
 
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
 // rendered text, any diagnostics as strings (TypeScript config/option/
-// semantic diagnostics, or transformer diagnostics), and a hard error. When
-// diagnostics are returned the text is empty — mirroring upstream
-// compileFiles.ts, which bails before transforming on pre-emit errors and
-// before rendering on transformer errors.
+// semantic diagnostics, project-validation failures, or transformer
+// diagnostics), and a hard error. When diagnostics are returned the text is
+// empty — mirroring upstream compileFiles.ts, which bails before transforming
+// on pre-emit errors and before rendering on transformer errors.
+//
+// CompileFile deliberately keeps a single-file fast path instead of wrapping
+// CompileProject: it builds the same Program and project context (Rojo
+// resolver, ProjectType, runtimeLibRbxPath validation) but transforms only
+// the requested file, so per-fixture tests stay isolated and fast. The diff
+// harness migrates to CompileProject (Phase 3a Task 6).
 func CompileFile(projectDir, relPath string) (string, []string, error) {
-	dir, err := filepath.Abs(projectDir)
+	dir, program, diags, err := newProjectProgram(projectDir)
 	if err != nil {
-		return "", nil, err
+		return "", diags, err
 	}
-	dir = filepath.ToSlash(dir)
-
-	fs := SanitizeFS(bundled.WrapFS(osvfs.FS()))
-	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
-
-	configPath := dir + "/tsconfig.json"
-	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
-	if len(configDiags) > 0 {
-		return "", diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
+	pctx, diags, err := newProjectContext(dir, program)
+	if err != nil {
+		return "", diags, err
 	}
-
-	program := compiler.NewProgram(compiler.ProgramOptions{
-		Host:   host,
-		Config: parsed,
-	})
 	ctx := context.Background()
 
 	filePath := dir + "/" + filepath.ToSlash(relPath)
@@ -65,6 +57,7 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	defer release()
 
 	state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), transformer.NewMultiState())
+	state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 	return transformAndRender(state)
 }
 
@@ -81,10 +74,7 @@ func transformAndRender(state *transformer.State) (text string, diags []string, 
 		}
 	}()
 
-	luauAST, err := transformer.TransformSourceFile(state)
-	if err != nil {
-		return "", nil, err
-	}
+	luauAST := transformer.TransformSourceFile(state)
 
 	hasErrors := state.Diags.HasErrors()
 	for _, d := range state.Diags.Flush() {

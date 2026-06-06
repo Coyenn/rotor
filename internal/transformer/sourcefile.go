@@ -1,10 +1,10 @@
 package transformer
 
 import (
-	"errors"
 	"strings"
 
 	"rotor/internal/luau"
+	"rotor/internal/rojo"
 )
 
 // CompilerVersion is the rbxtsc release rotor targets byte-for-byte. Upstream
@@ -13,15 +13,10 @@ import (
 // inside the transformer — not in compileFiles/renderAST.
 const CompilerVersion = "3.0.0"
 
-// ErrRuntimeLibNotSupported is returned by TransformSourceFile when a
-// transform called State.RuntimeLib — emitting the runtime-library import
-// (upstream createRuntimeLibImport) needs the rojo project layer.
-var ErrRuntimeLibNotSupported = errors.New("runtime library imports not yet supported (Phase 4)")
-
 // TransformSourceFile ports nodes/transformSourceFile.ts: transform the
 // source file held by state into the final Luau statement list, ready for
 // rendering.
-func TransformSourceFile(s *State) (*luau.List[luau.Statement], error) {
+func TransformSourceFile(s *State) *luau.List[luau.Statement] {
 	node := s.SourceFile
 
 	// The file's module symbol maps to the identifier `exports`.
@@ -37,20 +32,20 @@ func TransformSourceFile(s *State) (*luau.List[luau.Statement], error) {
 	handleExports(s, node, symbol, statements)
 
 	// moduleScripts must `return nil` if they do not export any values.
-	// Phase 4: upstream consults rojoResolver.getRbxTypeFromFilePath on the
-	// translated output path; until the rojo layer lands every compiled file
-	// is a ModuleScript (true for all Phase 2 fixtures).
-	const isModuleScript = true
+	// Upstream consults rojoResolver.getRbxTypeFromFilePath over the
+	// translated output path (transformSourceFile.ts:213-220); states built
+	// without a Rojo context (transformer unit tests) treat every file as a
+	// ModuleScript, which has been true of all Phase 2 fixtures.
+	isModuleScript := true
+	if s.Rojo != nil {
+		outputPath := s.Rojo.PathTranslator.GetOutputPath(node.FileName())
+		isModuleScript = s.Rojo.Resolver.GetRbxTypeFromFilePath(outputPath) == rojo.RbxTypeModuleScript
+	}
 	ensureModuleReturn(statements, isModuleScript)
 
-	if s.UsesRuntimeLib {
-		// Phase 4: state.createRuntimeLibImport(node) joins the header here.
-		return nil, ErrRuntimeLibNotSupported
-	}
+	prependHeader(s, statements)
 
-	prependHeader(statements)
-
-	return statements, nil
+	return statements
 }
 
 // ensureModuleReturn ports transformSourceFile.ts:213-220: append a plain
@@ -75,12 +70,18 @@ func getLastNonCommentStatement(listNode *luau.ListNode[luau.Statement]) *luau.L
 }
 
 // prependHeader ports transformSourceFile.ts:222-242: prepend the build
-// header, hoisting any leading Luau directive comments (`--!strict`, sourced
-// from leading `//!...` TS comments) above it. The header comment text starts
-// with a space so it renders `-- Compiled with roblox-ts v3.0.0`.
-func prependHeader(statements *luau.List[luau.Statement]) {
+// header — the version comment plus, when the file used the runtime library,
+// the `local TS = ...` import (CreateRuntimeLibImport) — hoisting any leading
+// Luau directive comments (`--!strict`, sourced from leading `//!...` TS
+// comments) above it. The header comment text starts with a space so it
+// renders `-- Compiled with roblox-ts v3.0.0`.
+func prependHeader(s *State, statements *luau.List[luau.Statement]) {
 	headerStatements := luau.NewList[luau.Statement]()
 	headerStatements.Push(luau.NewComment(" Compiled with roblox-ts v" + CompilerVersion))
+
+	if s.UsesRuntimeLib {
+		headerStatements.Push(s.CreateRuntimeLibImport(s.SourceFile))
+	}
 
 	// Only a run of comments already at the very head of the list qualifies;
 	// the scan stops at the first non-`!` comment or non-comment.

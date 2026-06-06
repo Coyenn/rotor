@@ -1,0 +1,12 @@
+{
+	"compilerOptions": {
+		"module": "CommonJS",
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"rootDir": "src",
+		"outDir": "out"
+	},
+	"include": ["src"]
+}
