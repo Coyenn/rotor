@@ -435,6 +435,13 @@ func (s *State) GetModuleIDFromSymbol(moduleSymbol *ast.Symbol) luau.AnyIdentifi
 	return id
 }
 
+// GetModuleIDFromNode ports TransformState.getModuleIdFromNode: the module id
+// of the nearest module ancestor (file level => `exports`). Consumed by
+// transformExportDeclaration and transformExportAssignment.
+func (s *State) GetModuleIDFromNode(node *ast.Node) luau.AnyIdentifier {
+	return s.GetModuleIDFromSymbol(s.getModuleSymbolFromNode(node))
+}
+
 // getModuleSymbolFromNode ports TransformState.getModuleSymbolFromNode: the
 // export symbol of the nearest SourceFile or ModuleDeclaration ancestor
 // (traversal.ts getModuleAncestor).

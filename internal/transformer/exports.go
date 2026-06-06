@@ -352,10 +352,14 @@ func exportSortKey(symbol *ast.Symbol) (file string, pass int, pos int, ok bool)
 	if decl == nil {
 		return "", 0, 0, false
 	}
-	// TODO(phase-3 imports): the filename-primary key cannot reproduce
-	// upstream's cross-file insertion order — `export ... from` star-exports
-	// interleave symbols from re-exported modules in resolution order, not
-	// filename order. Revisit when `export ... from` lands.
+	// RESOLVED(phase-3a, digest §2.4): the feared cross-file interleave never
+	// reaches exportPairs — star-exported symbols are dropped by
+	// getIgnoredExportSymbols and `export { x } from` symbols by
+	// isExportSymbolFromExportFrom, so their assignments live at STATEMENT
+	// position in transformExportFrom. Trailing pairs only ever contain the
+	// file's OWN exports, which this single-file sort key already orders
+	// correctly (rbxtsc ground truth: star loop + named-from assignment
+	// in statement order, `exports.own` trailing).
 	if sf := ast.GetSourceFileOfNode(decl); sf != nil {
 		file = sf.FileName()
 	}
