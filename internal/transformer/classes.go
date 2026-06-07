@@ -18,9 +18,7 @@ import (
 //     validateMethodAssignment.ts:37-46,64-67) + a local getAllSuperTypeNodes
 //     (tsgo keeps its equivalent unexported in tsgo/ls/utilities.go).
 //
-// nodes/class/transformDecorators.ts is NOT ported yet (Phase 3c Task 3);
-// any decorator raises rotorNotYetSupported instead (see
-// transformClassLikeDeclaration).
+// nodes/class/transformDecorators.ts lives in decorators.go.
 
 // magicToStringMethod ports MAGIC_TO_STRING_METHOD
 // (transformClassLikeDeclaration.ts:23).
@@ -340,27 +338,6 @@ func transformClassPropertyDeclaration(s *State, node *ast.Node, name luau.AnyId
 	))
 }
 
-// classLikeHasDecorators reports whether the class, any member, or any member
-// parameter carries a decorator — the Task 3 (transformDecorators) surface.
-func classLikeHasDecorators(node *ast.Node) bool {
-	if ast.HasDecorators(node) {
-		return true
-	}
-	for _, member := range node.Members() {
-		if ast.HasDecorators(member) {
-			return true
-		}
-		if ast.IsFunctionLike(member) {
-			for _, parameter := range member.Parameters() {
-				if ast.HasDecorators(parameter) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
 // transformClassLikeDeclaration ports nodes/class/
 // transformClassLikeDeclaration.ts (L199-384). Returns the statements and the
 // luau identifier holding the class (the temp `_class` for a named class
@@ -524,11 +501,7 @@ func transformClassLikeDeclaration(s *State, node *ast.Node) (*luau.List[luau.St
 		statementsInner.Push(luau.NewAssignment(returnVar, "=", internalName))
 	}
 
-	// Phase 3c Task 3 ports nodes/class/transformDecorators.ts (called here,
-	// last inside the do-block). Until then decorators fail loudly.
-	if classLikeHasDecorators(node) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, "decorators"))
-	}
+	statementsInner.PushList(transformDecorators(s, node, returnVar))
 
 	statements.Push(luau.NewDo(statementsInner))
 

@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"rotor/internal/luau"
 	"rotor/internal/luau/render"
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
@@ -17,6 +18,11 @@ import (
 func renderClassFixture(t *testing.T, relPath string) (string, *transformer.State) {
 	t.Helper()
 	s := buildState(t, filepath.Join("testdata", "classes"), relPath)
+	// TransformSourceFile maps the file's module symbol to `exports` before
+	// transforming statements; reads of exported symbols consult it.
+	if symbol := s.Checker.GetSymbolAtLocation(s.SourceFile.AsNode()); symbol != nil {
+		s.SetModuleIDBySymbol(symbol, luau.GlobalID("exports"))
+	}
 	statements := transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
 	return render.RenderAST(statements), s
 }
@@ -445,23 +451,5 @@ func TestClassMemberDiagnostics(t *testing.T) {
 		if codes[i] != want[i] {
 			t.Fatalf("diagnostics = %v, want %v", codes, want)
 		}
-	}
-}
-
-// TestClassDecoratorNotYetSupported: decorators are Phase 3c Task 3; until
-// then a decorated class fails loudly with rotorNotYetSupported instead of
-// silently dropping the decorator.
-func TestClassDecoratorNotYetSupported(t *testing.T) {
-	s := buildState(t, filepath.Join("testdata", "classes"), "src/diagdecorator.ts")
-	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-
-	found := false
-	for _, d := range s.Diags.Flush() {
-		if d.Code == "rotorNotYetSupported" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected rotorNotYetSupported diagnostic for decorated class")
 	}
 }
