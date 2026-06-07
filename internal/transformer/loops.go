@@ -650,12 +650,14 @@ func transformForStatementOptimized(s *State, node *ast.Node) *luau.List[luau.St
 	return result
 }
 
-// transformForStatement ports transformForStatement (L491-499). Upstream
-// gates the optimized pass on `projectOptions.optimizedLoops` (default true);
-// rotor has no project-options surface yet, so the pass is always on.
+// transformForStatement ports transformForStatement (L491-499): the
+// optimized pass is gated on `projectOptions.optimizedLoops` (default true),
+// plumbed from `--optimizedLoops` through State.OptimizedLoops.
 func transformForStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
-	if optimized := transformForStatementOptimized(s, node); optimized != nil {
-		return optimized
+	if s.OptimizedLoops {
+		if optimized := transformForStatementOptimized(s, node); optimized != nil {
+			return optimized
+		}
 	}
 	return transformForStatementFallback(s, node)
 }

@@ -1,0 +1,90 @@
+package logservice
+
+import (
+	"bytes"
+	"regexp"
+	"testing"
+)
+
+// capture redirects Output to a buffer for one test and resets the
+// partial-line tracker.
+func capture(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	oldOut, oldVerbose, oldPartial := Output, Verbose, partial
+	Output = &buf
+	partial = false
+	t.Cleanup(func() {
+		Output, Verbose, partial = oldOut, oldVerbose, oldPartial
+	})
+	return &buf
+}
+
+func TestWriteLineInjectsNewlineAfterPartialWrite(t *testing.T) {
+	buf := capture(t)
+	Write("compiling")        // partial benchmark-style write
+	WriteLine("Hello there.") // upstream injects "\n" first (LogService.ts L13-15)
+	if got, want := buf.String(), "compiling\nHello there.\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestWriteLineNoInjectionAfterCompleteLine(t *testing.T) {
+	buf := capture(t)
+	Write("done\n")
+	WriteLine("next")
+	if got, want := buf.String(), "done\nnext\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestWarnFormat(t *testing.T) {
+	buf := capture(t)
+	// Output is a bytes.Buffer, not a TTY, so the prefix is uncolored.
+	Warn("Multiple *.project.json files found, using a.project.json")
+	want := "Compiler Warning: Multiple *.project.json files found, using a.project.json\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestWriteLineIfVerboseGate(t *testing.T) {
+	buf := capture(t)
+	Verbose = false
+	WriteLineIfVerbose("hidden")
+	if buf.Len() != 0 {
+		t.Errorf("non-verbose write leaked: %q", buf.String())
+	}
+	Verbose = true
+	WriteLineIfVerbose("compiling as model..")
+	if got, want := buf.String(), "compiling as model..\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestBenchmarkIfVerboseFormat(t *testing.T) {
+	buf := capture(t)
+	Verbose = true
+	ran := false
+	BenchmarkIfVerbose("copy include files", func() { ran = true })
+	if !ran {
+		t.Fatal("callback did not run")
+	}
+	// Exact upstream shape: `name ( N ms )\n` (benchmark.ts L4, L9).
+	if !regexp.MustCompile(`^copy include files \( \d+ ms \)\n$`).MatchString(buf.String()) {
+		t.Errorf("benchmark line %q does not match upstream format", buf.String())
+	}
+}
+
+func TestBenchmarkIfVerboseSilentWhenNotVerbose(t *testing.T) {
+	buf := capture(t)
+	Verbose = false
+	ran := false
+	BenchmarkIfVerbose("writing compiled files", func() { ran = true })
+	if !ran {
+		t.Fatal("callback did not run")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("non-verbose benchmark leaked output: %q", buf.String())
+	}
+}

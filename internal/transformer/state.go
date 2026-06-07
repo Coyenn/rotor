@@ -132,6 +132,12 @@ type State struct {
 	// createTruthinessChecks warnings (default off).
 	LogTruthyChanges bool
 
+	// OptimizedLoops plumbs the `optimizedLoops` project option into
+	// transformForStatement (upstream gate: transformForStatement.ts L492;
+	// DEFAULT_PROJECT_OPTIONS.optimizedLoops = true). NewState defaults it on
+	// so option-free call sites keep the upstream-default behavior.
+	OptimizedLoops bool
+
 	// HasExportEquals is set by transformExportAssignment when `export = x`
 	// is seen; changes export emission shape.
 	HasExportEquals bool
@@ -195,6 +201,7 @@ func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.S
 		SourceFile:        sourceFile,
 		Diags:             diags,
 		Multi:             multi,
+		OptimizedLoops:    true, // DEFAULT_PROJECT_OPTIONS.optimizedLoops
 		getTypeCache:      make(map[*ast.Node]*checker.Type),
 		HoistsByStatement: make(map[*ast.Node][]*ast.Node),
 		IsHoisted:         make(map[*ast.Symbol]bool),

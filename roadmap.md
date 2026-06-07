@@ -132,14 +132,14 @@ files that were import-blocked.*
 - [x] **Task 7: Enums + namespaces** — enum do-block with `_inverse` + setmetatable, const enums emit nothing, constant folding; namespace `_container` do-blocks, dotted/nested namespaces, merging banned (`noEnumMerging`/`noNamespaceMerging`); fixture `38_enums_namespaces.ts`
 - [x] **Task 8: Conformance + re-smoke + merge** — adversarial fixture `39_mixed3c.tsx` (decorated React class components, spread props, enum-keyed Map iteration into JSX children, generators with `yield*` in try spread into JSX, async + try/await + break/continue rerouting, `??=` on class fields, namespace components as JSX tags) byte-identical on first run; randomness re-smoke **95/95 byte-identical, zero divergent, zero blocked**; README/roadmap updated (final review + merge handled at branch close)
 
-## Phase 4 — Project Layer 🚧 (next)
+## Phase 4 — Project Layer 🚧 (in progress)
 
-*Scoped in the design spec; detailed plan not yet written. Everything that makes rotor a
-usable CLI tool rather than a compile library.*
+*Plan: `docs/superpowers/plans/2026-06-07-rotor-phase4.md`. Digest: `phase4-project-digest.md`.
+Everything that makes rotor a usable CLI tool rather than a compile library.*
 
-- [ ] Full emit layout — write `out/` tree (basic `rotor build` write landed in 3c), `index.*` ↔ `init.*` translation, `.lua`/`.luau` output selection; ~~include/ (RuntimeLib.lua + Promise.lua verbatim)~~ landed in 3c (`internal/includefiles`, `--noInclude`/`--includePath`)
+- [ ] Full emit layout — write `out/` tree (basic `rotor build` write landed in 3c), `index.*` ↔ `init.*` translation, cleanup/copyFiles passes; ~~`.lua`/`.luau` output selection~~ landed in 4 Task 1 (`--luau`); ~~include/ (RuntimeLib.lua + Promise.lua verbatim)~~ landed in 3c (`internal/includefiles`, `--noInclude`/`--includePath`)
 - [ ] `.d.ts` emit for Package projects
-- [ ] Full `rbxtsc` CLI flag surface — `-w`, `--luau`, `--logTruthyChanges`, `--allowCommentDirectives`, `--writeOnlyChanged`, `--optimizedLoops` (currently always-on — gains its option), comment-directive hoisting (`--!strict` above header); ~~`build`, `--type`~~ landed in 3c
+- [x] Full `rbxtsc` CLI flag surface — landed in 4 Task 1: ProjectOptions merge (defaults < tsconfig `rbxts` key < argv; absent CLI booleans don't clobber `rbxts` values), `-p/--project` file-path + upward tsconfig search, `--rojo` (empty-string falls through to discovery, quirk verbatim), `--luau`, `--logTruthyChanges`, `--optimizedLoops` (transformer gate wired), `--writeOnlyChanged` (cmd-level byte-compare; moves into the compile write phase with the output-pipeline task), `--verbose` + LogService analog (`internal/logservice`: yellow `Compiler Warning:` channel — now carries the previously-dropped Rojo resolver warnings — partial-line tracking, upstream benchmark/progress line formats), `--version`; usage errors now exit 1 for rbxtsc parity (was 2). Parsed-but-deferred: `--allowCommentDirectives` (plumbed; enforcement lands with the comment-directive pre-emit check), `-w`/`--usePolling` (build watch task), `--writeTransformedFiles` (warned NYS; out of v1). Comment-directive hoisting (`--!strict` above header) was already landed (`transformer/sourcefile.go`); ~~`build`, `--type`~~ landed in 3c
 - [ ] Watch mode — native fs events, debounced batching
 - [ ] Incremental builds (tsbuildinfo-equivalent)
 - [ ] Transformer-plugin Node sidecar — real JS `typescript` package, text→text boundary (Flamework-class plugins unmodified); projects without plugins never spawn Node

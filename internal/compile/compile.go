@@ -46,7 +46,7 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 // transformer diagnostic codes so higher-level conformance tests can assert
 // exact upstream diagnostic IDs instead of scraping message text.
 func CompileFileDetailed(projectDir, relPath string) (string, []DiagnosticInfo, error) {
-	dir, program, diags, err := newProjectProgram(projectDir)
+	dir, program, diags, err := newProjectProgram(projectDir, "")
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
