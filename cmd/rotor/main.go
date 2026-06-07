@@ -1,8 +1,9 @@
 // Command rotor is the rotor CLI.
 //
 // Currently it provides `rotor check`, a fast native TypeScript project
-// checker, and `rotor build`, a minimal compile-to-Luau command (the full
-// rbxtsc build surface — include/ copying, watch, incremental — is Phase 4).
+// checker, and `rotor build`, a compile-to-Luau command that also emits the
+// runtime library into the project's include folder (the rest of the rbxtsc
+// build surface — watch, incremental, --type/--luau — is later Phase 4 work).
 package main
 
 import (
@@ -47,15 +48,18 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  rotor check [path] [-w]   typecheck the project (native, full strictness)")
-	fmt.Fprintln(w, "  rotor build [path]        compile the project to Luau (experimental — writes to tsconfig outDir;")
-	fmt.Fprintln(w, "                            no include/ copy, watch, or incremental yet — Phase 4)")
+	fmt.Fprintln(w, "  rotor build [path]        compile the project to Luau (experimental — writes to tsconfig outDir")
+	fmt.Fprintln(w, "                            and copies the runtime library to the include folder;")
+	fmt.Fprintln(w, "                            no watch or incremental yet — Phase 4)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Arguments:")
 	fmt.Fprintln(w, "  path          project directory containing tsconfig.json (default \".\")")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  -w, --watch   re-run the check when watched files change (check only)")
-	fmt.Fprintln(w, "  -h, --help    show this help")
+	fmt.Fprintln(w, "  -w, --watch              re-run the check when watched files change (check only)")
+	fmt.Fprintln(w, "  --noInclude              do not copy include files (build only)")
+	fmt.Fprintln(w, "  -i, --includePath <dir>  folder to copy runtime files to (build only; default <path>/include)")
+	fmt.Fprintln(w, "  -h, --help               show this help")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Exit codes: 0 = no errors, 1 = errors found, 2 = usage or config failure")
 }

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"rotor/internal/includefiles"
 	"rotor/internal/rojo"
 	"rotor/internal/transformer"
 	"rotor/tsgo/bundled"
@@ -95,29 +96,16 @@ func newProjectProgram(projectDir string) (string, *compiler.Program, []string, 
 	return dir, program, nil, nil
 }
 
-// newProjectContext ports the project-level setup of compileFiles.ts L56-100
-// (with createProjectData.ts feeding it): RojoResolver construction,
-// checkRojoConfig/checkFileName, ProjectType inference, and runtimeLibRbxPath
-// discovery + validation. The four plain-text emit failures (compileFiles.ts
-// L83-96) are hard errors, returned as diagnostics alongside the error.
-//
-// ProjectType inference, as upstream (rotor has no --type CLI flag yet, so
-// the `data.projectOptions.type ??` override never applies):
-//   - package.json name has an npm scope (PACKAGE_REGEX)  -> Package
-//   - the Rojo tree declares $className DataModel (isGame) -> Game
-//   - otherwise                                            -> Model
-func newProjectContext(dir string, program *compiler.Program) (*projectContext, []string, error) {
-	options := program.Options()
-	outDir := options.OutDir
-
-	// createProjectData.ts L15-31: package.json discovery walks up from the
-	// project path (ts.findPackageJson); a missing package.json is an error,
-	// an unreadable one just means "not a package".
-	pkgJSONPath := findPackageJSON(dir)
+// projectIsPackage ports the isPackage detection of createProjectData.ts
+// L15-26: package.json discovery walks up from the project path
+// (ts.findPackageJson); a missing package.json is an error, an unreadable one
+// just means "not a package". A scoped name (PACKAGE_REGEX) marks the project
+// as a package.
+func projectIsPackage(dir string) (pkgJSONPath string, isPackage bool, err error) {
+	pkgJSONPath = findPackageJSON(dir)
 	if pkgJSONPath == "" {
-		return nil, nil, errors.New("compile: Unable to find package.json")
+		return "", false, errors.New("compile: Unable to find package.json")
 	}
-	isPackage := false
 	if data, err := os.ReadFile(pkgJSONPath); err == nil {
 		var pkg struct {
 			Name string `json:"name"`
@@ -126,11 +114,48 @@ func newProjectContext(dir string, program *compiler.Program) (*projectContext, 
 			isPackage = packageNameRegex.MatchString(pkg.Name)
 		}
 	}
+	return pkgJSONPath, isPackage, nil
+}
 
-	// includePath: DEFAULT_PROJECT_OPTIONS.includePath is "" and rotor has no
-	// --includePath flag, so createProjectData.ts L29's `||` fallback always
-	// resolves <projectPath>/include.
-	includePath := filepath.Join(filepath.FromSlash(dir), "include")
+// resolveIncludePath ports createProjectData.ts L29:
+// `path.resolve(projectOptions.includePath || path.join(projectPath, "include"))`
+// — the empty string (DEFAULT_PROJECT_OPTIONS.includePath) falls back to
+// <projectPath>/include; a non-empty --includePath is resolved against the
+// process working directory exactly like Node's path.resolve.
+func resolveIncludePath(dir, includePath string) (string, error) {
+	if includePath == "" {
+		return filepath.Join(filepath.FromSlash(dir), "include"), nil
+	}
+	return filepath.Abs(filepath.FromSlash(includePath))
+}
+
+// newProjectContext ports the project-level setup of compileFiles.ts L56-100
+// (with createProjectData.ts feeding it): RojoResolver construction,
+// checkRojoConfig/checkFileName, ProjectType inference, and runtimeLibRbxPath
+// discovery + validation. The four plain-text emit failures (compileFiles.ts
+// L83-96) are hard errors, returned as diagnostics alongside the error.
+// includePathOpt is the raw --includePath value ("" = default), resolved per
+// createProjectData.ts L29 before the RuntimeLib.lua Rojo lookup
+// (compileFiles.ts L88-89).
+//
+// ProjectType inference, as upstream (rotor has no --type CLI flag yet, so
+// the `data.projectOptions.type ??` override never applies):
+//   - package.json name has an npm scope (PACKAGE_REGEX)  -> Package
+//   - the Rojo tree declares $className DataModel (isGame) -> Game
+//   - otherwise                                            -> Model
+func newProjectContext(dir string, program *compiler.Program, includePathOpt string) (*projectContext, []string, error) {
+	options := program.Options()
+	outDir := options.OutDir
+
+	pkgJSONPath, isPackage, err := projectIsPackage(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	includePath, err := resolveIncludePath(dir, includePathOpt)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Upstream logs FindRojoConfigFilePath/resolver warnings via
 	// LogService.warn and proceeds; rotor has no warning channel here yet, so
@@ -279,6 +304,24 @@ func resolveAgainst(base, p string) string {
 	return filepath.Join(base, p)
 }
 
+// ProjectOptions carries the CLI-controlled knobs of upstream ProjectOptions
+// (Shared/types.ts) that affect compilation. Zero value = upstream defaults
+// without any include emission, preserving the original CompileProject
+// behavior (pure: nothing but the returned map is produced).
+type ProjectOptions struct {
+	// IncludePath is the raw --includePath value; "" applies upstream's
+	// default of <projectDir>/include (createProjectData.ts L29). It feeds
+	// both the RuntimeLib.lua Rojo-path validation (compileFiles.ts L88-89)
+	// and, when EmitIncludeFiles is set, the copy destination.
+	IncludePath string
+
+	// EmitIncludeFiles asks the compile to perform copyInclude.ts: write the
+	// embedded runtime library (RuntimeLib.lua, Promise.lua) to the resolved
+	// include path. `rotor build` sets this unless --noInclude
+	// (copyInclude.ts L8); tests and `rotor check` leave it false.
+	EmitIncludeFiles bool
+}
+
 // CompileProject compiles every file of the project rooted at projectDir —
 // the Go analog of upstream compileFiles.ts: ONE Program, the Rojo context
 // computed once, then per file: pre-emit diagnostics -> TransformState ->
@@ -287,11 +330,42 @@ func resolveAgainst(base, p string) string {
 // Like CompileFile, any diagnostics fail the compile: text map nil,
 // diagnostics returned as strings alongside a hard error.
 func CompileProject(projectDir string) (map[string]string, []string, error) {
+	return CompileProjectWithOptions(projectDir, ProjectOptions{})
+}
+
+// CompileProjectWithOptions is CompileProject with the CLI knobs applied. The
+// include copy happens at upstream's point in the pipeline (CLI/commands/
+// build.ts L140-145: createProjectProgram, then copyInclude, then
+// compileFiles): after the Program builds — a broken tsconfig still prevents
+// the copy — but before any project validation or per-file diagnostics, so
+// type errors in source files do not stop the runtime library from landing.
+func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[string]string, []string, error) {
 	dir, program, diags, err := newProjectProgram(projectDir)
 	if err != nil {
 		return nil, diags, err
 	}
-	pctx, diags, err := newProjectContext(dir, program)
+
+	// copyInclude.ts L6-16: skip when --noInclude (EmitIncludeFiles false
+	// here) or the project compiles as a Package — with no --type flag the
+	// upstream gate `type !== Package && !(type === undefined && isPackage)`
+	// reduces to !isPackage.
+	if opts.EmitIncludeFiles {
+		_, isPackage, err := projectIsPackage(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !isPackage {
+			includePath, err := resolveIncludePath(dir, opts.IncludePath)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := includefiles.Copy(includePath); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	pctx, diags, err := newProjectContext(dir, program, opts.IncludePath)
 	if err != nil {
 		return nil, diags, err
 	}
