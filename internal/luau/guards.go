@@ -44,6 +44,10 @@ func IsCall(n Node) bool {
 	return n.Kind() == KindCallExpression || n.Kind() == KindMethodCallExpression
 }
 
+func IsNone(n Node) bool {
+	return n.Kind() == KindNone
+}
+
 func IsFunctionLike(n Node) bool {
 	switch n.Kind() {
 	case KindFunctionDeclaration, KindFunctionExpression, KindMethodDeclaration:

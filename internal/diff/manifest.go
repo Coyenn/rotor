@@ -38,4 +38,5 @@ var EnabledFixtures = []string{
 	"27_arraymacros",
 	"28_collectionmacros",
 	"29_iteration",
+	"30_optional",
 }

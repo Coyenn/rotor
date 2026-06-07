@@ -2,7 +2,6 @@ package transformer_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -83,26 +82,6 @@ func TestPropertyCallMacro(t *testing.T) {
 
 	if ds := s.Diags.Flush(); len(ds) != 0 {
 		t.Errorf("unexpected diagnostics: %v", ds)
-	}
-}
-
-// TestOptionalChainRaisesDiagnostic: a real `?.` takes the optional path of
-// transformOptionalChain (nested nil-check blocks), which Phase 2 has not
-// ported — it must raise rotorNotYetSupported.
-func TestOptionalChainRaisesDiagnostic(t *testing.T) {
-	s := buildState(t, filepath.Join("testdata", "calls"), "src/optional.ts")
-
-	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-
-	ds := s.Diags.Flush()
-	found := false
-	for _, d := range ds {
-		if d.Code == "rotorNotYetSupported" && strings.Contains(d.Message, "optional chaining") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("no rotorNotYetSupported diagnostic for `?.`; got: %v", ds)
 	}
 }
 
