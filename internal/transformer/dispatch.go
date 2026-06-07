@@ -60,6 +60,14 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return luau.Bool(true)
 	case ast.KindIdentifier:
 		return TransformIdentifier(s, node)
+	case ast.KindJsxElement:
+		return transformJsxElement(s, node)
+	case ast.KindJsxExpression:
+		return transformJsxExpression(s, node)
+	case ast.KindJsxFragment:
+		return transformJsxFragment(s, node)
+	case ast.KindJsxSelfClosingElement:
+		return transformJsxSelfClosingElement(s, node)
 	case ast.KindNewExpression:
 		return transformNewExpression(s, node)
 	case ast.KindNoSubstitutionTemplateLiteral:

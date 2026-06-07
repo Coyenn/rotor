@@ -1,11 +1,8 @@
 {
 	"compilerOptions": {
-		"allowSyntheticDefaultImports": true,
-		"downlevelIteration": true,
 		"module": "commonjs",
 		"moduleResolution": "Node",
 		"noLib": true,
-		"resolveJsonModule": true,
 		"forceConsistentCasingInFileNames": true,
 		"moduleDetection": "force",
 		"strict": true,
@@ -13,11 +10,9 @@
 		"jsx": "react",
 		"jsxFactory": "React.createElement",
 		"jsxFragmentFactory": "React.Fragment",
-		"typeRoots": ["node_modules/@rbxts"],
-		"rootDir": "src",
-		"outDir": "out",
-		"incremental": true,
-		"tsBuildInfoFile": "out/tsconfig.tsbuildinfo"
+		"types": ["compiler-types", "types"],
+		"typeRoots": ["../../../../testdata/diff/project/node_modules/@rbxts"],
+		"rootDir": "src"
 	},
 	"include": ["src"]
 }

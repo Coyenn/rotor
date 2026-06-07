@@ -86,13 +86,16 @@ func TestFromPathFixtureProject(t *testing.T) {
 	}
 
 	// Partitions are LIFO: later tree entries were unshifted to the front
-	// (RojoResolver.ts L272-275).
+	// (RojoResolver.ts L272-275). The leading "src" partition is
+	// @rbxts/react's own nested default.project.json (`"tree": {"$path":
+	// "src"}`), parsed while walking the node_modules/@rbxts partition —
+	// upstream parses nested project files the same way.
 	parts := r.GetPartitions()
 	var suffixes []string
 	for _, p := range parts {
 		suffixes = append(suffixes, filepath.Base(p.FsPath))
 	}
-	want := []string{"@rbxts", "include", "out"}
+	want := []string{"src", "@rbxts", "include", "out"}
 	if !reflect.DeepEqual(suffixes, want) {
 		t.Errorf("partition order = %v, want %v", suffixes, want)
 	}
