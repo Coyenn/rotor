@@ -19,19 +19,15 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
-// buildState creates a program over projDir (through the tsconfig sanitizer,
-// harmless for already-clean configs) and returns a fresh transform state for
-// relPath. Semantic diagnostics fail the test to keep fixtures honest.
+// buildState creates a program over projDir (through compile.SanitizeFS —
+// tsconfig sanitizing plus the compiler-types Iterable-arity overlay, both
+// harmless for already-clean projects) and returns a fresh transform state
+// for relPath. Semantic diagnostics fail the test to keep fixtures honest —
+// strictly: the historical escape hatch tolerating the TS5->TS7
+// Iterable-arity divergence ("can only be iterated through ...") was deleted
+// when the SanitizeFS overlay fixed the divergence at the source, so any
+// regression resurfaces here.
 func buildState(t *testing.T, projDir, relPath string) *transformer.State {
-	t.Helper()
-	return buildStateTolerating(t, projDir, relPath, nil)
-}
-
-// buildStateTolerating is buildState with an escape hatch: a semantic
-// diagnostic whose message satisfies tolerated does not fail the test. Used
-// by fixtures that are valid rbxtsc input but trip a known TS5->TS7 checker
-// divergence (see forof_test.go); every other diagnostic still fails.
-func buildStateTolerating(t *testing.T, projDir, relPath string, tolerated func(msg string) bool) *transformer.State {
 	t.Helper()
 
 	dir, err := filepath.Abs(projDir)
@@ -56,9 +52,6 @@ func buildStateTolerating(t *testing.T, projDir, relPath string, tolerated func(
 		t.Fatalf("source file not in program: %s", relPath)
 	}
 	for _, d := range program.GetSemanticDiagnostics(ctx, sourceFile) {
-		if tolerated != nil && tolerated(d.String()) {
-			continue
-		}
 		t.Errorf("unexpected semantic diagnostic: %s", d.String())
 	}
 	if t.Failed() {

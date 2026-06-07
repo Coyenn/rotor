@@ -172,6 +172,32 @@ print(d1, d2, e1)
 	}
 }
 
+// TestIterationAccessors: the non-array binding accessors —
+// IterableFunction<LuaTuple<T>> packs each element read in `{ _binding() }`;
+// an omitted IterableFunction<T> element calls the function as a bare
+// statement to advance; an omitted Set element calls `next(_binding)` as a
+// statement WITHOUT pushing the result onto the idStack, so the following
+// element re-reads from the start (upstream quirk, ported verbatim).
+func TestIterationAccessors(t *testing.T) {
+	want := `local _binding = pairsIter
+local p1 = { _binding() }
+local p2 = { _binding() }
+print(p1[1], p2[2])
+local _binding_1 = nums
+_binding_1()
+local second = _binding_1()
+print(second)
+local _binding_2 = tags
+next(_binding_2)
+local _value = next(_binding_2)
+local t2 = _value
+print(t2)
+`
+	if got := renderDestructuringFile(t, "src/iteraccessors.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 // TestNoSpreadDestructuringDiagnostics: rest elements raise
 // noSpreadDestructuring in all three positions — array binding pattern,
 // array assignment pattern, and object binding pattern. rbxtsc 3.0.0 reports

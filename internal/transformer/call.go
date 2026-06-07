@@ -9,16 +9,17 @@ import (
 )
 
 // This file ports expressions/transformCallExpression.ts,
-// nodes/transformOptionalChain.ts (non-optional fold only), and their utils:
+// nodes/transformOptionalChain.ts (flatten + dispatch; the optional path
+// lives in optionalchain.go), and their utils:
 // util/convertToIndexableExpression.ts, util/expressionMightMutate.ts,
 // util/wrapReturnIfLuaTuple.ts, util/arrayBindingPatternContainsHoists.ts.
 //
-// Macro hook points query the MacroManager (macromanager.go); entries with a
-// real Macro run through runCallMacro (the math-operation property-call
-// macros as of Phase 3a); registered entries with a nil Macro are known
-// upstream macros rotor has not implemented yet and raise
-// rotorNotYetSupported instead of silently-wrong output. The remaining macro
-// tables land in Phase 3b.
+// Macro hook points query the MacroManager (macromanager.go); entries run
+// through runCallMacro. All upstream macro tables are implemented (Phase 3b
+// Task 5); the nil-Macro branches below are defensive — a registered entry
+// with a nil Macro would mean a known upstream macro rotor has not
+// implemented, raising rotorNotYetSupported instead of silently-wrong
+// output.
 
 // convertToIndexableExpression ports util/convertToIndexableExpression.ts:
 // wrap non-indexable expressions in parentheses so they can be indexed or
@@ -464,7 +465,8 @@ func transformCallExpression(s *State, node *ast.Node) luau.Expression {
 }
 
 // ---------------------------------------------------------------------------
-// Optional chain — nodes/transformOptionalChain.ts (non-optional fold)
+// Optional chain — nodes/transformOptionalChain.ts (flatten + item dispatch;
+// transformOptionalChain[Inner] live in optionalchain.go)
 // ---------------------------------------------------------------------------
 
 type chainItemKind int
@@ -478,8 +480,9 @@ const (
 )
 
 // chainItem ports the OptionalChainItem family (L24-66). The eager type
-// snapshots upstream records are consumed only by the optional path and are
-// omitted; the non-optional inners re-query the (memoized) checker.
+// snapshots upstream records (`type`/`callType`) are vestigial — nothing
+// reads them; transformOptionalChainInner re-queries the (memoized) checker
+// live — so they are omitted.
 type chainItem struct {
 	kind     chainItemKind
 	node     *ast.Node // the PropertyAccess/ElementAccess/Call expression
@@ -580,24 +583,4 @@ func transformChainItem(s *State, baseExpression luau.Expression, item chainItem
 	default: // chainElementCall
 		return transformElementCallExpressionInner(s, item.node, item.expression, baseExpression, item.argumentExpression, item.args)
 	}
-}
-
-// transformOptionalChain ports transformOptionalChain (L350-356) restricted
-// to fully non-optional chains, where transformOptionalChainInner (L339-347)
-// degenerates to an inner-to-outer left fold of transformChainItem. A real
-// `?.` (the optional path's nested nil-check blocks, L191-348) raises
-// rotorNotYetSupported.
-func transformOptionalChain(s *State, node *ast.Node) luau.Expression {
-	chain, expression := flattenOptionalChain(node)
-	for _, item := range chain {
-		if item.optional || item.callOptional {
-			s.Diags.Add(DiagRotorNotYetSupported(item.node, "optional chaining (`?.`)"))
-			return luau.NewNone()
-		}
-	}
-	result := TransformExpression(s, expression)
-	for _, item := range chain {
-		result = transformChainItem(s, result, item)
-	}
-	return result
 }

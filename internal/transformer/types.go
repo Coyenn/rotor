@@ -402,7 +402,7 @@ func IsIterableFunctionLuaTupleType(s *State) TypeCheck {
 // IsRobloxType ports isRobloxType (L199-206): the type's symbol has a
 // declaration inside the @rbxts/types package. Upstream resolves
 // `<nodeModulesPath>/@rbxts/types` and tests path descendance; rotor matches
-// the normalized path fragment (same stand-in as isCompilerTypesSymbol).
+// the normalized path fragment.
 func IsRobloxType(s *State) TypeCheck {
 	_ = s // upstream signature; the path stand-in needs no state
 	return TypeCheck{check: func(t *checker.Type) bool {

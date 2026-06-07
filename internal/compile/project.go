@@ -328,6 +328,13 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 		}
 
 		state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
+		// Macro registration audit (digest §6), mirroring upstream's
+		// ProjectError-at-construction: the first NewState built the pass
+		// MacroManager; fail before transforming anything when registrations
+		// are missing while the types packages are present.
+		if missing := state.Macros().Missing(); len(missing) > 0 {
+			return nil, missing, errors.New("compile: macro registration failure")
+		}
 		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 
 		text, fileDiags, err := transformAndRender(state)

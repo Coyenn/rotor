@@ -8,6 +8,7 @@ import (
 	"rotor/internal/luau"
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/core"
 )
 
 // nodeModules ports Shared/constants.ts NODE_MODULES.
@@ -40,10 +41,18 @@ func getSourceFileFromModuleSpecifier(s *State, moduleSpecifier *ast.Node) *ast.
 		}
 	}
 
-	// Upstream falls back to a raw ts.resolveModuleName for $getModuleTree of
-	// modules never referenced by a regular import (L27-32) — deferred with
-	// the $getModuleTree macro (digest §3.2: "only needed for $getModuleTree
-	// of never-imported modules; defer").
+	// Fallback for $getModuleTree when the module is not referenced by any
+	// regular import (upstream L25-32): a raw resolveModuleName against the
+	// program options. Upstream passes no resolution mode (undefined); tsgo's
+	// equivalent is ResolutionModeNone (resolve per the compiler options).
+	if ast.IsStringLiteralLike(moduleSpecifier) && s.Program != nil {
+		sourceFile := ast.GetSourceFileOfNode(moduleSpecifier)
+		result := s.Program.ResolveModuleName(moduleSpecifier.Text(), sourceFile.FileName(), core.ResolutionModeNone)
+		if result != nil && result.IsResolved() {
+			return s.Program.GetSourceFile(result.ResolvedFileName)
+		}
+	}
+
 	return nil
 }
 
@@ -241,12 +250,14 @@ func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.N
 		return []luau.Expression{luau.NewNone()}
 	}
 
-	// TODO(phase-3 symlinks): upstream consults state.guessVirtualPath first
-	// (TransformState.ts:367-385, reverse-symlink lookup over the program's
-	// symlink cache for pnpm-style node_modules); its `|| fileName` fallback
-	// is the unconditional behavior here until tsgo's symlinks package is
-	// wired (digest §3.1.2: "Port later; fallback is safe default").
+	// createImportExpression.ts:191: `const virtualPath =
+	// state.guessVirtualPath(moduleFile.fileName) || moduleFile.fileName;` —
+	// everything below (node_modules detection, the path mapping lookup, and
+	// the output-path translation) operates on the VIRTUAL path.
 	virtualPath := moduleFile.FileName()
+	if guessed := s.GuessVirtualPath(virtualPath); guessed != "" {
+		virtualPath = guessed
+	}
 
 	if isInsideNodeModules(virtualPath) {
 		mappedPath := virtualPath

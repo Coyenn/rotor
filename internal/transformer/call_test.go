@@ -2,7 +2,6 @@ package transformer_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -65,47 +64,24 @@ print(obj, lookup, arr, prev, i, mutObj)
 	}
 }
 
-// TestPropertyCallMacroRaisesDiagnostic: `arr.push(...)` resolves to the
-// compiler-types Array.push method symbol — upstream runs the property-call
-// macro, rotor Phase 2 must raise a clean rotorNotYetSupported diagnostic
-// (never silently-wrong output like `list:push(4)`).
-func TestPropertyCallMacroRaisesDiagnostic(t *testing.T) {
+// TestPropertyCallMacro: `bag.add(...)` resolves to the compiler-types
+// Set.add method symbol and runs the Set.add property-call macro (Phase 3b
+// Task 5) — in statement position that is the bare assignment
+// `bag[4] = true`, never a silently-wrong method call `bag:add(4)` (which is
+// what this site detected via a rotorNotYetSupported diagnostic before the
+// Set/Map tables landed).
+func TestPropertyCallMacro(t *testing.T) {
 	s := buildState(t, filepath.Join("testdata", "calls"), "src/macro.ts")
 
-	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
+	statements := transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
 
-	ds := s.Diags.Flush()
-	if len(ds) == 0 {
-		t.Fatal("expected a macro diagnostic, got none")
+	want := "local bag = {}\nbag[4] = true\n"
+	if got := render.RenderAST(statements); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	found := false
-	for _, d := range ds {
-		if d.Code == "rotorNotYetSupported" && strings.Contains(d.Message, "macro `Array.push`") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("no rotorNotYetSupported diagnostic mentioning macro `Array.push`; got: %v", ds)
-	}
-}
 
-// TestOptionalChainRaisesDiagnostic: a real `?.` takes the optional path of
-// transformOptionalChain (nested nil-check blocks), which Phase 2 has not
-// ported — it must raise rotorNotYetSupported.
-func TestOptionalChainRaisesDiagnostic(t *testing.T) {
-	s := buildState(t, filepath.Join("testdata", "calls"), "src/optional.ts")
-
-	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-
-	ds := s.Diags.Flush()
-	found := false
-	for _, d := range ds {
-		if d.Code == "rotorNotYetSupported" && strings.Contains(d.Message, "optional chaining") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("no rotorNotYetSupported diagnostic for `?.`; got: %v", ds)
+	if ds := s.Diags.Flush(); len(ds) != 0 {
+		t.Errorf("unexpected diagnostics: %v", ds)
 	}
 }
 

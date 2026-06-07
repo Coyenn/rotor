@@ -59,6 +59,13 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	defer release()
 
 	state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), transformer.NewMultiState())
+	// Macro registration audit (digest §6): upstream's MacroManager
+	// constructor throws ProjectError before any emit when a registration
+	// name fails to resolve; rotor fails the compile here with the same
+	// texts (sentinel-gated — see MacroManager.Missing).
+	if missing := state.Macros().Missing(); len(missing) > 0 {
+		return "", missing, errors.New("compile: macro registration failure")
+	}
 	state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 	return transformAndRender(state)
 }

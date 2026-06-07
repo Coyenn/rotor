@@ -43,27 +43,53 @@ func TransformIdentifier(s *State, node *ast.Node) luau.Expression {
 		s.Diags.Add(DiagNoGlobalThis(node))
 	}
 
-	// Macro hook points (upstream L132-159) — upstream consults the
-	// MacroManager here for:
-	//   - identifier macros (getIdentifierMacro, e.g. `Promise`),
-	//   - constructor-macro misuse (getFirstConstructSymbol +
-	//     getConstructorMacro -> noMacroExtends / noConstructorMacroWithoutNew),
-	//   - call-macro misuse outside call position (getCallMacro ->
-	//     noIndexWithoutCall).
-	// GetIdentifierMacro's compiler-types fallback keeps the Phase 2 blanket:
-	// any compiler-types-declared symbol in identifier position is rejected
-	// loudly — in EVERY position, including the call position upstream defers
-	// to transformCallExpression, because emitting a macro's name as a plain
-	// global would be silently wrong output. NOTE constructor-macro NEW
-	// expressions never reach here: transformNewExpression dispatches the
-	// macro before transforming its callee. Phase 3b narrows this to the real
-	// table plus the misuse guards above.
+	// Identifier macros (upstream L132-135): currently just `Promise` ->
+	// `TS.Promise`. NOTE constructor-macro NEW expressions never reach here:
+	// transformNewExpression dispatches the macro before transforming its
+	// callee — but its non-macro fallback (`X.new(args)`) DOES transform the
+	// callee identifier, which is how `new Promise(...)` becomes
+	// `TS.Promise.new(...)`.
 	if macro := s.Macros().GetIdentifierMacro(symbol); macro != nil {
 		if macro.Macro != nil {
 			return macro.Macro(s, node)
 		}
 		s.Diags.Add(DiagRotorNotYetSupported(node, "macro `"+macro.Name+"`"))
 		return luau.NewNone()
+	}
+
+	// Constructor-macro misuse (upstream L137-150): a constructor-macro
+	// identifier used WITHOUT `new` has no value to emit. As a class
+	// `extends` expression that is noMacroExtends; anywhere else
+	// noConstructorMacroWithoutNew. (Macro `new` expressions were already
+	// dispatched by transformNewExpression and never reach here.)
+	if constructSymbol := getFirstConstructSymbol(s, node); constructSymbol != nil {
+		if s.Macros().GetConstructorMacro(constructSymbol) != nil {
+			isClassExtendsNode := false
+			if node.Parent.Parent != nil && node.Parent.Parent.Parent != nil &&
+				ast.IsClassLike(node.Parent.Parent.Parent) {
+				if extendsNode := ast.GetExtendsHeritageClauseElement(node.Parent.Parent.Parent); extendsNode != nil &&
+					extendsNode.Expression() == node {
+					isClassExtendsNode = true
+				}
+			}
+			if isClassExtendsNode {
+				s.Diags.Add(DiagNoMacroExtends(node))
+			} else {
+				s.Diags.Add(DiagNoConstructorMacroWithoutNew(node))
+			}
+		}
+	}
+
+	// Call-macro misuse outside call position (upstream L152-159): a
+	// call-macro identifier (`typeOf`, `identity`, ...) has no value — it
+	// must be invoked directly. (isValidMethodIndexWithoutCall carves out
+	// `typeof import("x").y` positions before the access transforms get here.)
+	if parent := SkipUpwards(node).Parent; parent != nil {
+		if (!ast.IsCallExpression(parent) || SkipDownwards(parent.AsCallExpression().Expression) != node) &&
+			s.Macros().GetCallMacro(symbol) != nil {
+			s.Diags.Add(DiagNoIndexWithoutCall(node))
+			return luau.NewNone()
+		}
 	}
 
 	// `export let` indirection (upstream L161-171): reads of mutable exported

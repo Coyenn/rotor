@@ -378,25 +378,52 @@ func isTupleReturningCall(s *State, tsExpression *ast.Node, luaExpression luau.E
 		IsLuaTupleType(s).Check(s.Checker.GetTypeAtLocation(SkipDownwards(tsExpression)))
 }
 
-// transformReturnStatementInner ports transformReturnStatementInner (L28-69)
-// minus the $tuple macro returns (L36-39, macro tables: Phase 3 — a `$tuple`
-// call flows into TransformExpression and hits the call-macro stand-in
-// diagnostic) and the try-block wrapping (L51-63, see NOTE above). Returning
-// a LuaTuple VALUE (array literal or variable) must spread into a
-// multi-value return — array members inline (`return a, b`), anything else
-// through `return unpack(exp)`.
-func transformReturnStatementInner(s *State, returnExp *ast.Node) *luau.List[luau.Statement] {
-	var expression luau.NodeOrList = TransformExpression(s, SkipDownwards(returnExp))
-	if IsLuaTupleType(s).Check(s.GetType(returnExp)) &&
-		!isTupleReturningCall(s, returnExp, expression.(luau.Expression)) {
-		if array, ok := expression.(*luau.Array); ok {
-			expression = array.Members
-		} else {
-			expression = luau.NewCall(luau.GlobalID("unpack"),
-				luau.NewList[luau.Expression](expression.(luau.Expression)))
+// isTupleMacro ports transformReturnStatement.ts isTupleMacro (L18-26): the
+// return expression is a direct `$tuple(...)` call (its callee's type symbol
+// is THE registered global $tuple function symbol).
+func isTupleMacro(s *State, expression *ast.Node) bool {
+	if ast.IsCallExpression(expression) {
+		symbol := GetFirstDefinedSymbol(s, s.GetType(expression.AsCallExpression().Expression))
+		if tupleSymbol := s.Macros().Symbol("$tuple"); symbol != nil && symbol == tupleSymbol {
+			return true
 		}
 	}
-	return luau.NewList[luau.Statement](luau.NewReturn(expression))
+	return false
+}
+
+// transformReturnStatementInner ports transformReturnStatementInner (L28-69)
+// minus the try-block wrapping (L51-63, see NOTE above). A direct
+// `return $tuple(...)` spreads its arguments into a multi-value return
+// (intercepted BEFORE the expression transform — outside return position the
+// $tuple CALL macro raises noTupleMacroOutsideReturn instead). Returning a
+// LuaTuple VALUE (array literal or variable) must likewise spread — array
+// members inline (`return a, b`), anything else through `return unpack(exp)`.
+func transformReturnStatementInner(s *State, returnExp *ast.Node) *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+
+	var expression luau.NodeOrList
+	if ast.IsCallExpression(returnExp) && isTupleMacro(s, returnExp) {
+		var args []luau.Expression
+		prereqs := s.CaptureStatements(func() {
+			args = ensureTransformOrder(s, returnExp.Arguments())
+		})
+		result.PushList(prereqs)
+		expression = luau.NewList(args...)
+	} else {
+		expression = TransformExpression(s, SkipDownwards(returnExp))
+		if IsLuaTupleType(s).Check(s.GetType(returnExp)) &&
+			!isTupleReturningCall(s, returnExp, expression.(luau.Expression)) {
+			if array, ok := expression.(*luau.Array); ok {
+				expression = array.Members
+			} else {
+				expression = luau.NewCall(luau.GlobalID("unpack"),
+					luau.NewList[luau.Expression](expression.(luau.Expression)))
+			}
+		}
+	}
+
+	result.Push(luau.NewReturn(expression))
+	return result
 }
 
 // transformReturnStatement ports transformReturnStatement (L71-84): a bare

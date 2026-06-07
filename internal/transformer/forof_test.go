@@ -2,7 +2,6 @@ package transformer_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -26,21 +25,19 @@ func renderForOfFile(t *testing.T, relPath string) string {
 }
 
 // forOfDiagnostics transforms a probe file and returns rotor's diagnostics.
-// The probes iterate non-array types (Set unions, Iterable<T>, $range's
-// Iterable<number> return), which are valid rbxtsc 3.0.0 input but trip a
-// known TS5->TS7 checker divergence in tsgo: TS7 resolves the global
-// `Iterable`/`IterableIterator` types with arity 3 (checker.go:1082-1085)
-// while @rbxts/compiler-types declares the TS5 arity-1 shape, so tsgo cannot
-// see the ecosystem's iteration globals and reports "can only be iterated
-// through when using '--downlevelIteration'" (and the sanitizer must strip
-// downlevelIteration — TS7 removed the option). Tolerate exactly that
-// message; everything else still fails. Phase 3's Set/Map/generator builders
-// need a real fix (compiler-types overlay or checker shim).
+// The probes iterate non-array types (Set/Map/generators, Set unions,
+// Iterable<T>, $range's Iterable<number> return) — valid rbxtsc 3.0.0 input
+// that historically tripped a TS5->TS7 checker divergence: tsgo resolves the
+// global `Iterable`/`IterableIterator` types with arity 3 while
+// @rbxts/compiler-types declares the TS5 arity-1 shape, producing spurious
+// "can only be iterated through when using '--downlevelIteration'"
+// diagnostics. compile.SanitizeFS now rewrites the compiler-types interfaces
+// to arity 3 (RewriteIterableArity), so the checker computes real iteration
+// types and the probes must build with ZERO checker diagnostics — buildState
+// is strict; any regression of the overlay resurfaces here.
 func forOfDiagnostics(t *testing.T, relPath string) []transformer.Diagnostic {
 	t.Helper()
-	s := buildStateTolerating(t, filepath.Join("testdata", "forof"), relPath, func(msg string) bool {
-		return strings.Contains(msg, "can only be iterated through")
-	})
+	s := buildState(t, filepath.Join("testdata", "forof"), relPath)
 	transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
 	return s.Diags.Flush()
 }
@@ -177,17 +174,175 @@ func TestForOfNoIterableIterationDiagnostic(t *testing.T) {
 	}
 }
 
-// TestForOfRangeMacroDiagnostic: `for (const i of $range(1, 3))` must hit the
-// findRangeMacro check BEFORE the expression is transformed — exactly ONE
-// rotorNotYetSupported diagnostic. If the order were wrong, the generic call
-// macro stand-in would fire first AND $range's Iterable<number> return type
-// would then raise noIterableIteration from the builder dispatch.
-func TestForOfRangeMacroDiagnostic(t *testing.T) {
-	ds := forOfDiagnostics(t, "src/range.ts")
-	if len(ds) != 1 {
-		t.Fatalf("expected exactly 1 diagnostic, got %d: %v", len(ds), ds)
+// TestForOfSet: buildSetLoop — a single generic-for binding directly over the
+// Set expression.
+func TestForOfSet(t *testing.T) {
+	want := `for x in s do
+	print(x)
+end
+`
+	if got := renderForOfFile(t, "src/set.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
 	}
-	if !hasDiagnostic(ds, "rotorNotYetSupported", "macro `$range`") {
-		t.Errorf("no rotorNotYetSupported diagnostic for $range; got: %v", ds)
+}
+
+// TestForOfMapInlinePattern: the `[k, v]` inline-destructure fast path — the
+// pattern elements become the generic-for bindings directly, no `_binding`
+// temp.
+func TestForOfMapInlinePattern(t *testing.T) {
+	want := `for k, v in m do
+	print(k, v)
+end
+`
+	if got := renderForOfFile(t, "src/map.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfMapFallbacks: the non-inline Map shapes — plain id binds `_k, _v`
+// and reconstitutes `local pair = { _k, _v }`; the expression-form initializer
+// assigns `entry = { _k, _v }` through the writable target; a default in the
+// inline pattern nil-checks in the body; a nested pattern in the inline
+// pattern destructures a `_binding` temp.
+func TestForOfMapFallbacks(t *testing.T) {
+	want := `for _k, _v in m do
+	local pair = { _k, _v }
+	print(pair[1], pair[2])
+end
+local entry
+for _k, _v in m do
+	entry = { _k, _v }
+	print(entry[1])
+end
+for k2, v2 in mOpt do
+	if v2 == nil then
+		v2 = 5
+	end
+	print(k2, v2)
+end
+for k3, _binding in nestedMap do
+	local a1 = _binding[1]
+	local b1 = _binding[2]
+	print(k3, a1, b1)
+end
+`
+	if got := renderForOfFile(t, "src/mapfallback.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfGenerator: buildGeneratorLoop over a generator-object call — the
+// .next()/.done/.value protocol; the call expression is indexable so `.next`
+// attaches directly.
+func TestForOfGenerator(t *testing.T) {
+	want := `for _result in gen().next do
+	if _result.done then
+		break
+	end
+	local n = _result.value
+	print(n)
+end
+`
+	if got := renderForOfFile(t, "src/generator.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfGeneratorPatterns: a binding pattern over a generator routes the
+// `_result.value` through a `_binding` temp; an object pattern over a Set
+// routes through transformBindingName the same way.
+func TestForOfGeneratorPatterns(t *testing.T) {
+	want := `for _result in pairsGen.next do
+	if _result.done then
+		break
+	end
+	local _binding = _result.value
+	local a = _binding[1]
+	local b = _binding[2]
+	print(a, b)
+end
+for _binding in objSet do
+	local x = _binding.x
+	print(x)
+end
+`
+	if got := renderForOfFile(t, "src/genpattern.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfTupleLabels: IterableFunction<LuaTuple<T>> tuple-arity
+// introspection with a plain-id initializer — one generic-for temp per tuple
+// slot. The first label `end` is a valid TS identifier but NOT a valid Luau
+// identifier (luau.IsValidIdentifier rejects reserved words), so it falls
+// back to "element"; the second label `value` is used.
+func TestForOfTupleLabels(t *testing.T) {
+	want := `for _element, _value in it1 do
+	local item = { _element, _value }
+	print(item[1], item[2])
+end
+`
+	if got := renderForOfFile(t, "src/tuplelabels.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfTupleWhileLoop: the while-true protocol fallbacks — a rest-element
+// tuple (unknown arity; the iterFunc temp takes its name from the
+// expression), and an expression-form initializer over a KNOWN-arity tuple
+// (declaration-list gate fails; valueToIdStr of a call is empty so the temp
+// falls back to "iterFunc").
+func TestForOfTupleWhileLoop(t *testing.T) {
+	want := `local _restIt = restIt
+while true do
+	local packed = { _restIt() }
+	if #packed == 0 then
+		break
+	end
+	print(packed[1])
+end
+local tup
+local _iterFunc = make()
+while true do
+	local _v = { _iterFunc() }
+	if #_v == 0 then
+		break
+	end
+	tup = _v
+	print(tup[2])
+end
+`
+	if got := renderForOfFile(t, "src/tuplewhile.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfRangeMacro: `for (const i of $range(1, 3))` builds a Luau numeric
+// for. findRangeMacro must hit BEFORE the expression is transformed — if the
+// order were wrong, the $range call macro would raise
+// noRangeMacroOutsideForOf and the Iterable<number> return type would raise
+// noIterableIteration from the builder dispatch.
+func TestForOfRangeMacro(t *testing.T) {
+	want := `for i = 1, 3 do
+	print(i)
+end
+`
+	if got := renderForOfFile(t, "src/range.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestForOfRangeMacroPrereqs: $range argument prereqs (`i++` needs an
+// `_original` temp) land BEFORE the numeric for.
+func TestForOfRangeMacroPrereqs(t *testing.T) {
+	want := `local i = 0
+local _original = i
+i += 1
+for n = _original, 5 do
+	print(n)
+end
+`
+	if got := renderForOfFile(t, "src/rangeprereq.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }

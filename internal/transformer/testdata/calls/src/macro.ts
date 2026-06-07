@@ -1,2 +1,2 @@
-const list = [1, 2, 3];
-list.push(4);
+const bag = new Set<number>();
+bag.add(4);
