@@ -39,4 +39,5 @@ var EnabledFixtures = []string{
 	"28_collectionmacros",
 	"29_iteration",
 	"30_optional",
+	"31_mixed3b",
 }
