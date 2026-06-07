@@ -12,16 +12,43 @@ import (
 	"rotor/internal/transformer"
 )
 
+// projectTypeChoices are the upstream --type choices (CLI/commands/build.ts
+// L98-101: ProjectType.Game | Model | Package).
+var projectTypeChoices = map[string]transformer.ProjectType{
+	string(transformer.ProjectTypeGame):    transformer.ProjectTypeGame,
+	string(transformer.ProjectTypeModel):   transformer.ProjectTypeModel,
+	string(transformer.ProjectTypePackage): transformer.ProjectTypePackage,
+}
+
 // cmdBuild is the minimal compile-to-disk command: CompileProject over the
 // given directory, outputs written under the project per the PathTranslator
 // (tsconfig outDir). The full rbxtsc build surface — include/ copying, watch,
-// incremental, --type/--luau flags, .d.ts emit — is Phase 4; this exists so
-// rotor's emit can be exercised on real projects today.
+// incremental, --luau flag, .d.ts emit — is Phase 4; this exists so rotor's
+// emit can be exercised on real projects today.
 func cmdBuild(args []string) int {
 	path := ""
-	for _, a := range args {
-		switch a {
-		case "-h", "--help":
+	var projectType transformer.ProjectType
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		// --type overrides ProjectType inference, as upstream
+		// (CLI/commands/build.ts L98-101 feeding compileFiles.ts L80).
+		// Accepts `--type <v>` and `--type=<v>`.
+		typeValue := ""
+		hasTypeValue := false
+		switch {
+		case a == "--type":
+			if i+1 >= len(args) {
+				fmt.Fprint(os.Stderr, "rotor build: --type requires a value (game, model, or package)\n\n")
+				usage(os.Stderr)
+				return 2
+			}
+			i++
+			typeValue = args[i]
+			hasTypeValue = true
+		case strings.HasPrefix(a, "--type="):
+			typeValue = strings.TrimPrefix(a, "--type=")
+			hasTypeValue = true
+		case a == "-h" || a == "--help":
 			usage(os.Stdout)
 			return 0
 		default:
@@ -36,6 +63,15 @@ func cmdBuild(args []string) int {
 				return 2
 			}
 			path = a
+		}
+		if hasTypeValue {
+			pt, ok := projectTypeChoices[typeValue]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "rotor build: invalid --type %q (choices: game, model, package)\n\n", typeValue)
+				usage(os.Stderr)
+				return 2
+			}
+			projectType = pt
 		}
 	}
 	if path == "" {
@@ -68,7 +104,7 @@ func cmdBuild(args []string) int {
 	transformer.HeaderComment = " Compiled with rotor v" + version
 
 	start := time.Now()
-	results, diags, err := compile.CompileProject(dir)
+	results, diags, err := compile.CompileProjectWithOptions(dir, compile.ProjectOptions{Type: projectType})
 	if err != nil {
 		for _, d := range diags {
 			fmt.Fprintln(os.Stderr, d)
