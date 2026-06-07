@@ -27,7 +27,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | ⬜ |
 | | **v1.0 — drop-in `rbxtsc` replacement** | 🎯 |
 
-**Measured progress:** 35/35 differential fixtures byte-identical to real rbxtsc 3.0.0;
+**Measured progress:** 37/37 differential fixtures byte-identical to real rbxtsc 3.0.0;
 `randomness` real-game smoke at **54/95 files byte-identical** (14 → 28 → 42 → 54 across
 phases), zero divergent — every file that compiles is byte-exact.
 
@@ -124,8 +124,8 @@ files that were import-blocked.*
 (33 randomness files) and completes the language surface.*
 
 - [x] **Task 1: JSX** — factory-call assembler, lowercase-tag quirk, attribute spread paths (`table.clone` fast path vs `_k`/`_v` loop), `{}` attr → `true`, JsxText fixup port from tsgo (backslash-doubling quirk), fixture `32_jsx.tsx`
-- [ ] **Task 2: Classes core** 🚧 — setmetatable boilerplate byte-verbatim, `.new`/constructor synthesis, property initializers vs constructor-body order, parameter properties, static-method colon quirk, inheritance (`super()` 3 arms, `__tostring` re-emit), class expressions, computed names, `#field` diagnostic, fixture `33_classes.ts`
-- [ ] **Task 3: Decorators** — legacy experimental decorators (class/method/property, evaluation order, key-pinning); acceptance: `@ReactComponent` error boundary; fixture `34_decorators.ts`
+- [x] **Task 2: Classes core** — setmetatable boilerplate byte-verbatim, `.new`/constructor synthesis, property initializers vs constructor-body order, parameter properties, static-method colon quirk, inheritance (`super()` 3 arms, `__tostring` re-emit), class expressions, computed names, `#field` diagnostic, fixture `33_classes.ts`
+- [ ] **Task 3: Decorators** 🚧 — legacy experimental decorators (class/method/property, evaluation order, key-pinning); acceptance: `@ReactComponent` error boundary; fixture `34_decorators.ts`
 - [ ] **Task 4: Object/array spread + logical assignments** — object spread fast path vs copy loop; array-literal spread; `??=` / `&&=` / `||=` at both dispatch points; fixture `35_spread.ts`
 - [ ] **Task 5: async + generators** — `TS.async` wrappers (declarations become locals; async methods drop colon), `await`→`TS.await`, `TS.generator` body swap, `yield`/`yield*` lowering; fixture `36_async.ts`
 - [ ] **Task 6: try/catch/finally + flow-control rerouting** — `TS.try` with `TRY_RETURN`/`TRY_BREAK`/`TRY_CONTINUE` flags, blocked checks, both load-bearing orderings, `collapseFlowControlCases`; retires the Phase 2 TRY_* no-op; fixture `37_try.ts`
