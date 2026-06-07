@@ -28,8 +28,8 @@ The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) �
 
 Compatibility isn't a hope — it's enforced by construction:
 
-- **Differential testing**: every emitted `.lua` file is byte-compared against `rbxtsc` 3.0.0's output across the upstream test corpus *and real production games*, continuously in CI.
-- **Behavioral conformance**: roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune).
+- **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
+- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune) — the corpus and gated harness are vendored in-repo (`testdata/conformance`), enablement is upcoming.
 - **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
 - **Same runtime**: `RuntimeLib.lua` and `Promise.lua` are reused verbatim from roblox-ts — zero behavioral drift at runtime.
 

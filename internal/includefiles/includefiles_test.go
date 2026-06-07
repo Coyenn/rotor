@@ -23,13 +23,16 @@ func TestNames(t *testing.T) {
 	}
 }
 
-// TestEmbeddedMatchesVendored guards the drift hazard of the double-vendoring
+// TestEmbeddedMatchesVendored guards the drift hazard of the triple-vendoring
 // (go:embed cannot reach the repo-root include/ directory, so this package
-// carries a second copy): every embedded file must match the repo-root
-// include/ file byte-for-byte, and include/ must contain no .lua file the
-// embed is missing.
+// carries a second copy; the upstream authority is the third, vendored under
+// reference/): every embedded file must match BOTH the repo-root include/
+// file and reference/roblox-ts/include/ byte-for-byte, and include/ must
+// contain no .lua file the embed is missing. Pinning against the reference
+// copy prevents the two rotor copies drifting together undetected.
 func TestEmbeddedMatchesVendored(t *testing.T) {
 	vendoredDir := filepath.Join("..", "..", "include")
+	referenceDir := filepath.Join("..", "..", "reference", "roblox-ts", "include")
 
 	for _, name := range Names() {
 		embedded, err := Read(name)
@@ -41,7 +44,14 @@ func TestEmbeddedMatchesVendored(t *testing.T) {
 			t.Fatalf("reading vendored %s: %v", name, err)
 		}
 		if !bytes.Equal(embedded, vendored) {
-			t.Errorf("%s: embedded copy differs from include/%s — the two vendored copies must stay byte-identical", name, name)
+			t.Errorf("%s: embedded copy differs from include/%s — the vendored copies must stay byte-identical", name, name)
+		}
+		upstream, err := os.ReadFile(filepath.Join(referenceDir, name))
+		if err != nil {
+			t.Fatalf("reading reference %s: %v", name, err)
+		}
+		if !bytes.Equal(embedded, upstream) {
+			t.Errorf("%s: embedded copy differs from reference/roblox-ts/include/%s — the runtime files must stay verbatim upstream", name, name)
 		}
 	}
 

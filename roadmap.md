@@ -137,13 +137,13 @@ files that were import-blocked.*
 *Scoped in the design spec; detailed plan not yet written. Everything that makes rotor a
 usable CLI tool rather than a compile library.*
 
-- [ ] Full emit layout — write `out/` tree, `include/` (RuntimeLib.lua + Promise.lua verbatim), `index.*` ↔ `init.*` translation, `.lua`/`.luau` output selection
+- [ ] Full emit layout — write `out/` tree (basic `rotor build` write landed in 3c), `index.*` ↔ `init.*` translation, `.lua`/`.luau` output selection; ~~include/ (RuntimeLib.lua + Promise.lua verbatim)~~ landed in 3c (`internal/includefiles`, `--noInclude`/`--includePath`)
 - [ ] `.d.ts` emit for Package projects
-- [ ] Full `rbxtsc` CLI flag surface — `build`, `-w`, `--type`, `--luau`, `--logTruthyChanges`, `--allowCommentDirectives`, `--writeOnlyChanged`, `--optimizedLoops` (currently always-on — gains its option), comment-directive hoisting (`--!strict` above header)
+- [ ] Full `rbxtsc` CLI flag surface — `-w`, `--luau`, `--logTruthyChanges`, `--allowCommentDirectives`, `--writeOnlyChanged`, `--optimizedLoops` (currently always-on — gains its option), comment-directive hoisting (`--!strict` above header); ~~`build`, `--type`~~ landed in 3c
 - [ ] Watch mode — native fs events, debounced batching
 - [ ] Incremental builds (tsbuildinfo-equivalent)
 - [ ] Transformer-plugin Node sidecar — real JS `typescript` package, text→text boundary (Flamework-class plugins unmodified); projects without plugins never spawn Node
-- [ ] `validateCompilerOptions` full port (rootDir/outDir landed in 3a; rest deferred here)
+- [x] `validateCompilerOptions` full port — landed in 3c (byte-exact diagnostic texts; known gap: enforced options set only in an `extends` parent are read root-only — same root-only gap as the sanitizer; fix with extends-chain resolution here)
 - [ ] Concurrency: restore parallel checker workers (per-checker alias-mark caches via `GetTypeCheckerForFile`); retire per-file Program creation and the package-level `TransformStatement` func var
 - [ ] Known cleanup: `getLastToken` block-`}` trailing-comment handling
 

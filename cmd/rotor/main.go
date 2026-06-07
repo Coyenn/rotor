@@ -2,8 +2,9 @@
 //
 // Currently it provides `rotor check`, a fast native TypeScript project
 // checker, and `rotor build`, a compile-to-Luau command that also emits the
-// runtime library into the project's include folder (the rest of the rbxtsc
-// build surface — watch, incremental, --type/--luau — is later Phase 4 work).
+// runtime library into the project's include folder and supports --type /
+// --noInclude / --includePath (the rest of the rbxtsc build surface — watch,
+// incremental, --luau, .d.ts emit — is later Phase 4 work).
 package main
 
 import (
