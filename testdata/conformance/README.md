@@ -2,10 +2,15 @@
 
 A second differential corpus: roblox-ts's **own upstream test sources**, compiled
 by the real `rbxtsc` 3.0.0 into committed goldens that rotor's output is
-byte-compared against (`internal/conformance`). Everything is currently
-**disabled** — `internal/conformance/manifest.go` has an empty `EnabledFixtures`
-list, and the test skips (without even compiling the project) until Phase 5
-starts enabling fixtures.
+byte-compared against (`internal/conformance`). Phase 5 now has three harnesses:
+
+- `TestDiagnosticsCorpus` compiles the vendored `excluded/diagnostics/*` files
+  one by one and asserts rotor's diagnostic IDs.
+- `TestConformance` compiles enabled golden fixtures one by one through temp
+  projects rooted under `project/`, so unsupported nodes in unrelated upstream
+  specs do not block the fixtures that already match.
+- `TestBehavioralSuite` and `TestRandomnessAcceptance` are environment-gated
+  runners for the upstream runtime suite and the real `randomness` project.
 
 ## Provenance
 
@@ -79,13 +84,48 @@ npm-installs on first run, cleans `project/out/`, compiles, and mirrors
 
 Add the golden-relative slash path (e.g. `"tests/array.spec.luau"`) to
 `EnabledFixtures` in `internal/conformance/manifest.go`. Then
-`go test ./internal/conformance/` compiles `project/` once via
-`compile.CompileProject` and byte-compares each enabled out-file against its
-golden; disabled goldens are logged as skipped with a count.
+`go test ./internal/conformance/ -run TestConformance -count=1 -v` compiles
+each enabled fixture through a temp project rooted under `project/`, preserving
+the shared `node_modules` tree while limiting the compile to the selected
+source plus shared helpers.
 
-**Caveat:** `CompileProject` is all-or-nothing — any transformer diagnostic in
-*any* corpus file aborts the whole compile. So enabling even one fixture
-requires the entire 44-file corpus to transform diagnostic-free (byte parity
-is still only checked for enabled entries). As of creation, the corpus
-type-checks fully under rotor's embedded tsgo; the remaining blockers are
-transformer NYS diagnostics (enums, spread, generators/yield).
+## Diagnostics corpus
+
+Run:
+
+```powershell
+go test ./internal/conformance/ -run TestDiagnosticsCorpus -count=1
+```
+
+The harness installs `project/node_modules` on first use if needed, then
+overlays each vendored diagnostics fixture under `project/src/__diagnostics`
+and compiles it through the real conformance project config. Two Rojo-topology
+fixtures (`noRojoData.ts`, `noIsolatedImport.ts`) and the pre-Phase-4
+`noRobloxSymbolInstanceof.*` family are explicitly skipped with reasons.
+
+## Runtime suite
+
+Run:
+
+```powershell
+go test ./internal/conformance/ -run TestBehavioralSuite -count=1 -v
+```
+
+Requires both `rojo` and `lune` on PATH. The test skips cleanly if either
+tool is missing. When available it:
+
+1. builds `testdata/conformance/project` with `rotor`,
+2. runs `rojo build` to produce a place file,
+3. executes the upstream `reference/roblox-ts/tests/runTestsWithLune.lua`.
+
+## randomness acceptance
+
+Run:
+
+```powershell
+go test ./internal/conformance/ -run TestRandomnessAcceptance -count=1 -v
+```
+
+Set `ROTOR_RANDOMNESS_PATH` to the local project root before running. The test
+skips when unset and otherwise drives `compile.CompileProject` over the real
+project, surfacing the emitted-file count or the first failure.

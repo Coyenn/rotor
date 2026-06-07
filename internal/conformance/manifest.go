@@ -6,8 +6,14 @@ package conformance
 
 // EnabledFixtures lists the golden-relative slash paths (e.g.
 // "tests/array.spec.luau") whose rotor output must be byte-identical to
-// testdata/conformance/golden/<path>. Phase 5 tasks append entries as
-// transforms reach parity. A golden missing here is reported as skipped,
-// never silently ignored. While this list is empty the test does not even
-// compile the project, so it stays green regardless of transformer state.
-var EnabledFixtures = []string{}
+// testdata/conformance/golden/<path>. The list starts with fixtures that are
+// known to compile on the current branch and expands as more transformer
+// nodes reach parity.
+var EnabledFixtures = []string{
+	"helpers/util/ClassWithInstanceFoo.luau",
+	"helpers/util/ClassWithStaticFoo.luau",
+	"main.server.luau",
+	"tests/literal.spec.luau",
+	"tests/binary.spec.luau",
+	"tests/type.spec.luau",
+}
