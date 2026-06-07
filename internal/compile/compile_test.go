@@ -91,6 +91,7 @@ func TestCompileFileReturnMapShape(t *testing.T) {
 	typeRoots := filepath.ToSlash(filepath.Join(fixtureProjectDir(t), "node_modules", "@rbxts"))
 	tsconfig := fmt.Sprintf(`{
 	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
 		"module": "commonjs",
 		"moduleResolution": "Node",
 		"noLib": true,
@@ -98,7 +99,7 @@ func TestCompileFileReturnMapShape(t *testing.T) {
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",
-		"typeRoots": [%q],
+		"typeRoots": ["node_modules/@rbxts", %q],
 		"rootDir": "src",
 		"outDir": "out"
 	},

@@ -51,6 +51,7 @@ func buildAuditProject(t *testing.T) string {
 	write("package.json", `{"name":"@audit/fixture"}`)
 	write("tsconfig.json", `{
 	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
 		"module": "commonjs",
 		"moduleResolution": "Node",
 		"noLib": true,

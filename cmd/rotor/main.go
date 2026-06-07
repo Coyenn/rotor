@@ -57,6 +57,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  -w, --watch              re-run the check when watched files change (check only)")
+	fmt.Fprintln(w, "  --type <kind>            override project type inference (build only; choices: game, model, package)")
 	fmt.Fprintln(w, "  --noInclude              do not copy include files (build only)")
 	fmt.Fprintln(w, "  -i, --includePath <dir>  folder to copy runtime files to (build only; default <path>/include)")
 	fmt.Fprintln(w, "  -h, --help               show this help")

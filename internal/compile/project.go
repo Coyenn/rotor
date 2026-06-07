@@ -64,7 +64,12 @@ func newProjectProgram(projectDir string) (string, *compiler.Program, []string, 
 		return "", nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
 
-	if msg := validateCompilerOptions(parsed.CompilerOptions()); msg != "" {
+	// Upstream order (getParsedCommandLine.ts L21-35): config parse errors
+	// throw first, then validateCompilerOptions over the parsed options. The
+	// raw (pre-sanitization) config is read separately because SanitizeTSConfig
+	// rewrites some of the very options the validation must inspect.
+	raw := readRawEnforcedOptions(filepath.FromSlash(configPath))
+	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {
 		return "", nil, []string{msg}, errors.New("compile: invalid tsconfig.json configuration")
 	}
 
@@ -131,19 +136,19 @@ func resolveIncludePath(dir, includePath string) (string, error) {
 
 // newProjectContext ports the project-level setup of compileFiles.ts L56-100
 // (with createProjectData.ts feeding it): RojoResolver construction,
-// checkRojoConfig/checkFileName, ProjectType inference, and runtimeLibRbxPath
+// checkRojoConfig/checkFileName, ProjectType selection, and runtimeLibRbxPath
 // discovery + validation. The four plain-text emit failures (compileFiles.ts
 // L83-96) are hard errors, returned as diagnostics alongside the error.
-// includePathOpt is the raw --includePath value ("" = default), resolved per
-// createProjectData.ts L29 before the RuntimeLib.lua Rojo lookup
+// opts.IncludePath is the raw --includePath value ("" = default), resolved
+// per createProjectData.ts L29 before the RuntimeLib.lua Rojo lookup
 // (compileFiles.ts L88-89).
 //
-// ProjectType inference, as upstream (rotor has no --type CLI flag yet, so
-// the `data.projectOptions.type ??` override never applies):
+// ProjectType selection, as upstream (compileFiles.ts L80): opts.Type when
+// set (the --type override), else inferred:
 //   - package.json name has an npm scope (PACKAGE_REGEX)  -> Package
 //   - the Rojo tree declares $className DataModel (isGame) -> Game
 //   - otherwise                                            -> Model
-func newProjectContext(dir string, program *compiler.Program, includePathOpt string) (*projectContext, []string, error) {
+func newProjectContext(dir string, program *compiler.Program, opts ProjectOptions) (*projectContext, []string, error) {
 	options := program.Options()
 	outDir := options.OutDir
 
@@ -152,7 +157,7 @@ func newProjectContext(dir string, program *compiler.Program, includePathOpt str
 		return nil, nil, err
 	}
 
-	includePath, err := resolveIncludePath(dir, includePathOpt)
+	includePath, err := resolveIncludePath(dir, opts.IncludePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -187,15 +192,17 @@ func newProjectContext(dir string, program *compiler.Program, includePathOpt str
 		}
 	}
 
-	// compileFiles.ts L80: inferProjectType (no projectOptions.type override).
-	var projectType transformer.ProjectType
-	switch {
-	case isPackage:
-		projectType = transformer.ProjectTypePackage
-	case rojoResolver.IsGame:
-		projectType = transformer.ProjectTypeGame
-	default:
-		projectType = transformer.ProjectTypeModel
+	// compileFiles.ts L80: data.projectOptions.type ?? inferProjectType(...).
+	projectType := opts.Type
+	if projectType == "" {
+		switch {
+		case isPackage:
+			projectType = transformer.ProjectTypePackage
+		case rojoResolver.IsGame:
+			projectType = transformer.ProjectTypeGame
+		default:
+			projectType = transformer.ProjectTypeModel
+		}
 	}
 
 	// The four plain-text emit failures (compileFiles.ts L82-98) — hard
@@ -320,6 +327,12 @@ type ProjectOptions struct {
 	// include path. `rotor build` sets this unless --noInclude
 	// (copyInclude.ts L8); tests and `rotor check` leave it false.
 	EmitIncludeFiles bool
+
+	// Type overrides ProjectType inference — upstream's
+	// `data.projectOptions.type ?? inferProjectType(...)` (compileFiles.ts
+	// L80), fed by the `--type` CLI flag (CLI/commands/build.ts L98-101,
+	// choices game|model|package). Empty means infer.
+	Type transformer.ProjectType
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -333,12 +346,14 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 	return CompileProjectWithOptions(projectDir, ProjectOptions{})
 }
 
-// CompileProjectWithOptions is CompileProject with the CLI knobs applied. The
-// include copy happens at upstream's point in the pipeline (CLI/commands/
-// build.ts L140-145: createProjectProgram, then copyInclude, then
-// compileFiles): after the Program builds — a broken tsconfig still prevents
-// the copy — but before any project validation or per-file diagnostics, so
-// type errors in source files do not stop the runtime library from landing.
+// CompileProjectWithOptions is CompileProject with the CLI knobs applied
+// (--type ProjectType override, --includePath, include emission); the zero
+// options value is exactly CompileProject. The include copy happens at
+// upstream's point in the pipeline (CLI/commands/build.ts L140-145:
+// createProjectProgram, then copyInclude, then compileFiles): after the
+// Program builds — a broken tsconfig still prevents the copy — but before any
+// project validation or per-file diagnostics, so type errors in source files
+// do not stop the runtime library from landing.
 func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[string]string, []string, error) {
 	dir, program, diags, err := newProjectProgram(projectDir)
 	if err != nil {
@@ -346,15 +361,16 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 	}
 
 	// copyInclude.ts L6-16: skip when --noInclude (EmitIncludeFiles false
-	// here) or the project compiles as a Package — with no --type flag the
-	// upstream gate `type !== Package && !(type === undefined && isPackage)`
-	// reduces to !isPackage.
-	if opts.EmitIncludeFiles {
+	// here) or the project compiles as a Package — the full upstream gate
+	// `type !== Package && !(type === undefined && isPackage)`: an explicit
+	// --type game/model copies even into scoped-name packages; an explicit
+	// --type package never copies.
+	if opts.EmitIncludeFiles && opts.Type != transformer.ProjectTypePackage {
 		_, isPackage, err := projectIsPackage(dir)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !isPackage {
+		if opts.Type != "" || !isPackage {
 			includePath, err := resolveIncludePath(dir, opts.IncludePath)
 			if err != nil {
 				return nil, nil, err
@@ -365,7 +381,7 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 		}
 	}
 
-	pctx, diags, err := newProjectContext(dir, program, opts.IncludePath)
+	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
 		return nil, diags, err
 	}
@@ -443,22 +459,164 @@ func createPathTranslator(program *compiler.Program) *rojo.PathTranslator {
 	return rojo.NewPathTranslator(rootDir, outDir, "", options.Declaration.IsTrue(), true)
 }
 
-// validateCompilerOptions is a partial port of
-// Project/functions/validateCompilerOptions.ts (L89-95): only the two
-// "configurable compiler options" checks the pipeline cannot proceed without —
-// rootDir/rootDirs feed getRootDirs/createPathTranslator and outDir feeds the
-// PathTranslator and the synthetic Rojo resolver. The returned message
-// reproduces upstream's ProjectError text (L107-115) byte-for-byte, including
-// the per-error trailing newlines. The full enforced-options validation
-// (noLib, strict, target, moduleResolution, typeRoots, ...) is a Phase 4 item.
-func validateCompilerOptions(options *core.CompilerOptions) string {
+// rawEnforcedOptions carries the user-written values of the compilerOptions
+// that validateCompilerOptions must inspect but that the pipeline alters
+// before tsoptions parses the config:
+//
+//   - moduleResolution: SanitizeTSConfig rewrites "Node"/"node10" to
+//     "bundler" (TS7 removed node10), so the parsed option can never equal
+//     Node10 — upstream's check (L57-59) is only satisfiable against the raw
+//     value.
+//   - types: SanitizeTSConfig injects `"types": ["*"]` when the user wrote
+//     none (TS5 auto-inclusion repair); upstream's per-entry existence check
+//     (L70-86) must see the USER's entries — none, when absent — or the
+//     injected "*" would produce a spurious "were not found" error.
+//   - importsNotUsedAsValues: tsgo doesn't declare the option at all (removed
+//     post-TS5), so tsoptions would fail with "Unknown compiler option" before
+//     validation ever ran; SanitizeTSConfig strips it and the raw value feeds
+//     upstream's deprecation error (L97-104) byte-exactly.
+//
+// Everything else validateCompilerOptions checks (noLib, strict, module,
+// moduleDetection, allowSyntheticDefaultImports, typeRoots, rootDir/rootDirs,
+// outDir) is untouched by the sanitizer and validated on the PARSED options,
+// exactly like upstream.
+type rawEnforcedOptions struct {
+	moduleResolution    string // raw text; "" when absent or non-string
+	hasModuleResolution bool
+	types               []string // raw entries; nil when absent
+	importsNotUsed      string   // raw text; "" when absent or non-string
+	hasImportsNotUsed   bool
+}
+
+// readRawEnforcedOptions extracts rawEnforcedOptions from the unsanitized
+// tsconfig.json text. Same root-file-only scope as SanitizeTSConfig (its
+// documented "extends" gap): an extended config carrying these options is
+// neither sanitized nor raw-validated. Unreadable/unparsable input returns the
+// zero value — tsoptions reports the parse error itself, before validation.
+func readRawEnforcedOptions(configPath string) rawEnforcedOptions {
+	var raw rawEnforcedOptions
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return raw
+	}
+	var root map[string]any
+	if json.Unmarshal([]byte(stripJSONC(string(data))), &root) != nil {
+		return raw
+	}
+	co, ok := root["compilerOptions"].(map[string]any)
+	if !ok {
+		return raw
+	}
+	if v, ok := co["moduleResolution"]; ok {
+		raw.hasModuleResolution = true
+		raw.moduleResolution, _ = v.(string)
+	}
+	if list, ok := co["types"].([]any); ok {
+		for _, e := range list {
+			if s, ok := e.(string); ok {
+				raw.types = append(raw.types, s)
+			}
+		}
+	}
+	if v, ok := co["importsNotUsedAsValues"]; ok {
+		raw.hasImportsNotUsed = true
+		raw.importsNotUsed, _ = v.(string)
+	}
+	return raw
+}
+
+// validateCompilerOptions is the full port of
+// Project/functions/validateCompilerOptions.ts: every check upstream enforces,
+// in upstream order, with the exact ProjectError message text (L107-115) —
+// kleur.yellow stripped (color, not bytes, when piped), per-error trailing
+// newlines included. projectPath is the abs slash project dir (upstream
+// data.projectPath = dirname(tsConfigPath)); raw carries the pre-sanitization
+// option values (see rawEnforcedOptions for the per-option rationale).
+func validateCompilerOptions(options *core.CompilerOptions, projectPath string, raw rawEnforcedOptions) string {
 	var errs []string
-	if options.RootDir == "" && len(options.RootDirs) == 0 {
+
+	// required compiler options (L37-63). The Tristate/enum zero values mean
+	// "not written", matching upstream's `!== <enforced>` over possibly
+	// undefined raw options.
+	if options.NoLib != core.TSTrue {
+		errs = append(errs, `"noLib" must be true`)
+	}
+	if options.Strict != core.TSTrue {
+		errs = append(errs, `"strict" must be true`)
+	}
+	// L45-47: the target check is commented out upstream — not enforced.
+	if options.Module != core.ModuleKindCommonJS {
+		errs = append(errs, `"module" must be commonjs`)
+	}
+	if options.ModuleDetection != core.ModuleDetectionKindForce {
+		errs = append(errs, `"moduleDetection" must be "force"`)
+	}
+	// L57-59: raw value (sanitizer rewrites it; see rawEnforcedOptions).
+	// "node" and "node10" are the two spellings TS5 parses to Node10 —
+	// tsconfig enum values are matched case-insensitively (the same set
+	// SanitizeTSConfig rewrites).
+	if !raw.hasModuleResolution || !isNode10ModuleResolutionText(raw.moduleResolution) {
+		errs = append(errs, `"moduleResolution" must be "Node"`)
+	}
+	if options.AllowSyntheticDefaultImports != core.TSTrue {
+		errs = append(errs, `"allowSyntheticDefaultImports" must be true`)
+	}
+
+	// L65-68: typeRoots must contain <projectPath>/node_modules/@rbxts.
+	// tsoptions resolves typeRoots entries to absolute slash paths during
+	// config parse (mirroring upstream, where the path-typed option is already
+	// normalized in parsedCommandLine.options), so validateTypeRoots'
+	// path.resolve comparison reduces to cleaned-path equality. The message
+	// prints the native (upstream path.join) form.
+	rbxtsModules := filepath.Join(filepath.FromSlash(projectPath), "node_modules", "@rbxts")
+	if options.TypeRoots == nil || !typeRootsContain(options.TypeRoots, projectPath, rbxtsModules) {
+		errs = append(errs, `"typeRoots" must contain `+rbxtsModules)
+	}
+
+	// L70-86: every raw "types" entry must exist under some typeRoot (parsed
+	// typeRoots, or upstream's literal fallback when undefined), as-is or with
+	// the .d.ts extension. Raw entries (sanitizer injects "*" when absent);
+	// upstream runs this even when the typeRoots check above already failed.
+	typeRoots := options.TypeRoots
+	if typeRoots == nil {
+		typeRoots = []string{"node_modules/@rbxts"}
+	}
+	for _, typesLocation := range raw.types {
+		found := false
+		for _, typeRoot := range typeRoots {
+			typesPath := resolveAgainst(resolveAgainst(filepath.FromSlash(projectPath), filepath.FromSlash(typeRoot)), filepath.FromSlash(typesLocation))
+			if pathExists(typesPath) || pathExists(typesPath+".d.ts") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, `"types" `+typesLocation+" were not found. Make sure the path is relative to `typeRoots`")
+		}
+	}
+
+	// configurable compiler options (L89-95). RootDirs nil/non-nil mirrors
+	// upstream's undefined/defined: an explicit empty array passes here (and
+	// getRootDirs returns it, as upstream's assert-then-return does).
+	if options.RootDir == "" && options.RootDirs == nil {
 		errs = append(errs, `"rootDir" or "rootDirs" must be defined`)
 	}
 	if options.OutDir == "" {
 		errs = append(errs, `"outDir" must be defined`)
 	}
+
+	// L97-104: raw value (tsgo rejects the removed option outright; the
+	// sanitizer strips it so this byte-exact upstream error wins). Upstream
+	// suggests "true" only for the parsed Preserve value; enum values are
+	// matched case-insensitively.
+	if raw.hasImportsNotUsed {
+		suggestedValue := "false"
+		if strings.EqualFold(raw.importsNotUsed, "preserve") {
+			suggestedValue = "true"
+		}
+		errs = append(errs, `"importsNotUsedAsValues" is no longer supported, use "verbatimModuleSyntax": `+suggestedValue+` instead`)
+	}
+
 	if len(errs) == 0 {
 		return ""
 	}
@@ -471,6 +629,39 @@ func validateCompilerOptions(options *core.CompilerOptions) string {
 	return sb.String()
 }
 
+// isNode10ModuleResolutionText reports whether a raw tsconfig moduleResolution
+// value parses to TS5's ModuleResolutionKind.Node10 — the value upstream's
+// ENFORCED_OPTIONS requires.
+func isNode10ModuleResolutionText(value string) bool {
+	switch strings.ToLower(value) {
+	case "node", "node10":
+		return true
+	}
+	return false
+}
+
+// typeRootsContain ports validateTypeRoots (validateCompilerOptions.ts
+// L23-31): path.resolve(typeRoot) === path.resolve(nodeModulesPath) for some
+// typeRoot. Entries are resolved against projectPath (parsed typeRoots are
+// already absolute; resolveAgainst then just cleans them) and compared as
+// cleaned slash paths — exact equality, as upstream.
+func typeRootsContain(typeRoots []string, projectPath, rbxtsModules string) bool {
+	want := filepath.ToSlash(filepath.Clean(rbxtsModules))
+	for _, typeRoot := range typeRoots {
+		resolved := resolveAgainst(filepath.FromSlash(projectPath), filepath.FromSlash(typeRoot))
+		if filepath.ToSlash(filepath.Clean(resolved)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// pathExists mirrors fs.existsSync.
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // getRootDirs ports Shared/util/getRootDirs.ts: rootDir if set, else rootDirs
 // (the assert is upstream's; validateCompilerOptions has already rejected
 // configs with neither, so the panic is an unreachable internal invariant).
@@ -479,7 +670,9 @@ func getRootDirs(program *compiler.Program) []string {
 	if options.RootDir != "" {
 		return []string{options.RootDir}
 	}
-	if len(options.RootDirs) > 0 {
+	if options.RootDirs != nil {
+		// Non-nil mirrors upstream's `!== undefined` assert: an explicit empty
+		// array passed validation and returns empty, as upstream.
 		return options.RootDirs
 	}
 	panic("compile: getRootDirs: neither rootDir nor rootDirs is set") // upstream assert

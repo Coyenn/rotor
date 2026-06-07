@@ -99,6 +99,12 @@ func RewriteIterableArity(src string) string {
 //   - "baseUrl" (any value)             -> removed
 //   - "moduleResolution": "Node"/node10 -> replaced with "bundler"
 //
+// plus one option tsgo no longer even declares (parse would fail with
+// "Unknown compiler option"):
+//
+//   - "importsNotUsedAsValues" (any value) -> removed (validation still
+//     rejects it with upstream's text, from the raw config)
+//
 // One TS5->TS7 semantic repair on top of the removals: TS7 no longer
 // auto-includes every package under typeRoots when "types" is unspecified
 // (module.GetAutomaticTypeDirectiveNames returns [] unless the types array
@@ -138,6 +144,14 @@ func SanitizeTSConfig(src string) string {
 		return clean
 	}
 	delete(co, "downlevelIteration")
+	// importsNotUsedAsValues: tsgo doesn't declare the option at all, so a
+	// config carrying it would fail tsoptions parse with "Unknown compiler
+	// option" before validateCompilerOptions could emit upstream's byte-exact
+	// "no longer supported, use verbatimModuleSyntax" error (the raw value is
+	// read pre-sanitization — see readRawEnforcedOptions). Any value is an
+	// error there, so the stripped option never influences a successful
+	// compile.
+	delete(co, "importsNotUsedAsValues")
 	if baseURL, ok := co["baseUrl"].(string); ok {
 		injectBaseURLPaths(co, baseURL)
 	}

@@ -12,17 +12,27 @@ import (
 	"rotor/internal/transformer"
 )
 
+// projectTypeChoices are the upstream --type choices (CLI/commands/build.ts
+// L98-101: ProjectType.Game | Model | Package).
+var projectTypeChoices = map[string]transformer.ProjectType{
+	string(transformer.ProjectTypeGame):    transformer.ProjectTypeGame,
+	string(transformer.ProjectTypeModel):   transformer.ProjectTypeModel,
+	string(transformer.ProjectTypePackage): transformer.ProjectTypePackage,
+}
+
 // cmdBuild is the compile-to-disk command: CompileProject over the given
 // directory, outputs written under the project per the PathTranslator
 // (tsconfig outDir), plus the runtime library copy into the include folder
 // (upstream copyInclude.ts via internal/includefiles, controlled by
 // --noInclude / --includePath like rbxtsc's CLI/commands/build.ts L77-80,
-// L102-106). The rest of the rbxtsc build surface — watch, incremental,
-// --type/--luau flags, .d.ts emit — is later Phase 4 work.
+// L102-106) and the --type ProjectType override (build.ts L98-101). The rest
+// of the rbxtsc build surface — watch, incremental, --luau flag, .d.ts emit —
+// is later Phase 4 work.
 func cmdBuild(args []string) int {
 	path := ""
 	noInclude := false
 	includePath := ""
+	var projectType transformer.ProjectType
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 
@@ -41,6 +51,36 @@ func cmdBuild(args []string) int {
 		}
 		if v, ok := strings.CutPrefix(a, "--includePath="); ok {
 			includePath = v
+			continue
+		}
+
+		// --type overrides ProjectType inference, as upstream
+		// (CLI/commands/build.ts L98-101 feeding compileFiles.ts L80).
+		// Accepts `--type <v>` and `--type=<v>`.
+		typeValue := ""
+		hasTypeValue := false
+		switch {
+		case a == "--type":
+			if i+1 >= len(args) {
+				fmt.Fprint(os.Stderr, "rotor build: --type requires a value (game, model, or package)\n\n")
+				usage(os.Stderr)
+				return 2
+			}
+			i++
+			typeValue = args[i]
+			hasTypeValue = true
+		case strings.HasPrefix(a, "--type="):
+			typeValue = strings.TrimPrefix(a, "--type=")
+			hasTypeValue = true
+		}
+		if hasTypeValue {
+			pt, ok := projectTypeChoices[typeValue]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "rotor build: invalid --type %q (choices: game, model, package)\n\n", typeValue)
+				usage(os.Stderr)
+				return 2
+			}
+			projectType = pt
 			continue
 		}
 
@@ -97,6 +137,7 @@ func cmdBuild(args []string) int {
 	results, diags, err := compile.CompileProjectWithOptions(dir, compile.ProjectOptions{
 		IncludePath:      includePath,
 		EmitIncludeFiles: !noInclude,
+		Type:             projectType,
 	})
 	if err != nil {
 		for _, d := range diags {

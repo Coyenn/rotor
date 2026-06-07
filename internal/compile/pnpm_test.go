@@ -58,6 +58,7 @@ func writePnpmFixture(t *testing.T) string {
 		"allowSyntheticDefaultImports": true,
 		"module": "CommonJS",
 		"moduleResolution": "Node",
+		"noLib": true,
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",
@@ -68,7 +69,11 @@ func writePnpmFixture(t *testing.T) string {
 	},
 	"include": ["src"]
 }`,
-		"src/globals.d.ts": "declare function print(...params: Array<unknown>): void;",
+		// noLib fundamental globals (see testdata/*/src/globals.d.ts).
+		"src/globals.d.ts": "declare function print(...params: Array<unknown>): void;\n" +
+			"interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n" +
+			"interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n" +
+			"interface Number {}\ninterface Object {}\ninterface RegExp {}\ninterface String {}\n",
 		"src/main.ts": `import { dummy } from "@rbxts/dummy";
 import { linked } from "@rbxts/linked";
 print(dummy(), linked());`,
