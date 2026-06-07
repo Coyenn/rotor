@@ -95,19 +95,86 @@ func transformTemplateExpression(s *State, node *ast.Node) luau.Expression {
 }
 
 // transformArrayLiteralExpression ports
-// expressions/transformArrayLiteralExpression.ts. Non-spread fast path only:
-// inline `{ e1, e2, ... }`. The spread path (ArrayPointer + `#array` length
-// temp + iterable builders) lands with the destructuring/spread task.
+// expressions/transformArrayLiteralExpression.ts. Non-spread fast path:
+// inline `{ e1, e2, ... }`. With spreads, an ArrayPointer materializes into
+// `local _array = { ...so far }` + `local _length = #_array` at the first
+// spread (or at the first element whose transform produced prereqs), spreads
+// append through the shared addIterableToArrayBuilder machinery, and later
+// inline elements assign to `_array[_length + n]`. `_length` is only
+// re-synced (`_length += <spread size>`) when more elements follow a spread;
+// inline elements between updates are counted by amtElementsSinceUpdate
+// (which spreads do NOT reset — verbatim upstream).
 func transformArrayLiteralExpression(s *State, node *ast.Node) luau.Expression {
 	elements := node.AsArrayLiteralExpression().Elements.Nodes
+	hasSpread := false
 	for _, element := range elements {
 		if ast.IsSpreadElement(element) {
-			s.Diags.Add(DiagRotorNotYetSupported(element, "array spread elements"))
-			return luau.NewNone()
+			hasSpread = true
+			break
 		}
 	}
-	members := luau.NewList[luau.Expression](ensureTransformOrder(s, elements)...)
-	return luau.NewArray(members)
+	if !hasSpread {
+		members := luau.NewList[luau.Expression](ensureTransformOrder(s, elements)...)
+		return luau.NewArray(members)
+	}
+
+	ptr := CreateArrayPointer("array")
+	lengthID := luau.TempID("length")
+	lengthInitialized := false
+	amtElementsSinceUpdate := 0
+
+	updateLengthID := func() {
+		right := luau.NewUnary("#", ptr.Value)
+		if lengthInitialized {
+			s.Prereq(luau.NewAssignment(lengthID, "=", right))
+		} else {
+			s.Prereq(luau.NewVariableDeclaration(lengthID, right))
+			lengthInitialized = true
+		}
+		amtElementsSinceUpdate = 0
+	}
+
+	for i, element := range elements {
+		if ast.IsSpreadElement(element) {
+			if _, isArray := ptr.Value.(*luau.Array); isArray {
+				DisableArrayInline(s, ptr)
+				updateLengthID()
+			}
+			arrayID, ok := ptr.Value.(luau.AnyIdentifier)
+			if !ok {
+				panic("transformer: transformArrayLiteralExpression: pointer is not an identifier") // upstream assert
+			}
+
+			spreadExpression := element.AsSpreadElement().Expression
+			t := s.GetType(spreadExpression)
+			builder := getAddIterableToArrayBuilder(s, spreadExpression, t)
+			spreadExp := TransformExpression(s, spreadExpression)
+			shouldUpdateLengthID := i < len(elements)-1
+			s.PrereqList(builder(s, spreadExp, arrayID, lengthID, amtElementsSinceUpdate, shouldUpdateLengthID))
+		} else {
+			expression, prereqs := s.Capture(func() luau.Expression { return TransformExpression(s, element) })
+			if _, isArray := ptr.Value.(*luau.Array); isArray && prereqs.IsNonEmpty() {
+				DisableArrayInline(s, ptr)
+				updateLengthID()
+			}
+			if array, isArray := ptr.Value.(*luau.Array); isArray {
+				array.Members.Push(expression)
+			} else {
+				s.PrereqList(prereqs)
+				s.Prereq(luau.NewAssignment(
+					luau.NewComputedIndex(
+						ptr.Value.(luau.IndexableExpression),
+						luau.NewBinary(lengthID, "+", luau.Num(float64(amtElementsSinceUpdate+1))),
+					),
+					"=",
+					expression,
+				))
+			}
+			amtElementsSinceUpdate++
+		}
+	}
+
+	return ptr.Value
 }
 
 // transformObjectLiteralExpression ports
@@ -131,8 +198,7 @@ func transformObjectLiteralExpression(s *State, node *ast.Node) luau.Expression 
 			name := property.Name()
 			transformPropertyAssignment(s, ptr, name, name)
 		case ast.KindSpreadAssignment:
-			// table.clone fast path / generic-for copy: later task.
-			s.Diags.Add(DiagRotorNotYetSupported(property, "object spread assignments"))
+			transformSpreadAssignment(s, ptr, property)
 		case ast.KindMethodDeclaration:
 			s.PrereqList(transformMethodDeclaration(s, property, ptr))
 		default:

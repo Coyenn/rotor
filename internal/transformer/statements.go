@@ -242,10 +242,7 @@ func transformExpressionStatementInner(s *State, expression *ast.Node) *luau.Lis
 		binary := expression.AsBinaryExpression()
 		operatorKind := binary.OperatorToken.Kind
 		if ast.IsLogicalOrCoalescingAssignmentExpression(expression) {
-			// transformLogicalOrCoalescingAssignmentExpressionStatement
-			// (&&=, ||=, ??=): later task.
-			s.Diags.Add(DiagRotorNotYetSupported(expression, "operator `"+kindName(operatorKind)+"`"))
-			return luau.NewList[luau.Statement]()
+			return transformLogicalOrCoalescingAssignmentExpressionStatement(s, expression)
 		} else if ast.IsAssignmentOperator(operatorKind) &&
 			!ast.IsArrayLiteralExpression(binary.Left) &&
 			!ast.IsObjectLiteralExpression(binary.Left) {
