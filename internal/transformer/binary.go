@@ -120,11 +120,10 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 		return transformLogical(s, node)
 	}
 
-	// transformLogicalOrCoalescingAssignmentExpression (&&=, ||=, ??=): later
-	// task (out of Phase 2 first-wave scope).
+	// logical assignment (&&=, ||=, ??=) in expression position: the value is
+	// the writable (a re-read of the target after the conditional write).
 	if ast.IsLogicalOrCoalescingAssignmentExpression(node) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, "operator `"+kindName(operatorKind)+"`"))
-		return luau.NewNone()
+		return transformLogicalOrCoalescingAssignmentExpression(s, node)
 	}
 
 	if ast.IsAssignmentOperator(operatorKind) {

@@ -84,6 +84,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformPostfixUnaryExpression(s, node)
 	case ast.KindPrefixUnaryExpression:
 		return transformPrefixUnaryExpression(s, node)
+	case ast.KindSpreadElement:
+		return transformSpreadElement(s, node)
 	case ast.KindStringLiteral:
 		return transformStringLiteral(s, node)
 	case ast.KindTemplateExpression:
