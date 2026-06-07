@@ -12,15 +12,41 @@ import (
 	"rotor/internal/transformer"
 )
 
-// cmdBuild is the minimal compile-to-disk command: CompileProject over the
-// given directory, outputs written under the project per the PathTranslator
-// (tsconfig outDir). The full rbxtsc build surface — include/ copying, watch,
-// incremental, --type/--luau flags, .d.ts emit — is Phase 4; this exists so
-// rotor's emit can be exercised on real projects today.
+// cmdBuild is the compile-to-disk command: CompileProject over the given
+// directory, outputs written under the project per the PathTranslator
+// (tsconfig outDir), plus the runtime library copy into the include folder
+// (upstream copyInclude.ts via internal/includefiles, controlled by
+// --noInclude / --includePath like rbxtsc's CLI/commands/build.ts L77-80,
+// L102-106). The rest of the rbxtsc build surface — watch, incremental,
+// --type/--luau flags, .d.ts emit — is later Phase 4 work.
 func cmdBuild(args []string) int {
 	path := ""
-	for _, a := range args {
+	noInclude := false
+	includePath := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+
+		// --includePath/-i takes a value, as `--includePath <path>` or
+		// `--includePath=<path>` (yargs accepts both; the -i alias is
+		// upstream's, CLI/commands/build.ts L102-106).
+		if a == "--includePath" || a == "-i" {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "rotor build: %s requires a path argument\n\n", a)
+				usage(os.Stderr)
+				return 2
+			}
+			i++
+			includePath = args[i]
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "--includePath="); ok {
+			includePath = v
+			continue
+		}
+
 		switch a {
+		case "--noInclude":
+			noInclude = true
 		case "-h", "--help":
 			usage(os.Stdout)
 			return 0
@@ -68,7 +94,10 @@ func cmdBuild(args []string) int {
 	transformer.HeaderComment = " Compiled with rotor v" + version
 
 	start := time.Now()
-	results, diags, err := compile.CompileProject(dir)
+	results, diags, err := compile.CompileProjectWithOptions(dir, compile.ProjectOptions{
+		IncludePath:      includePath,
+		EmitIncludeFiles: !noInclude,
+	})
 	if err != nil {
 		for _, d := range diags {
 			fmt.Fprintln(os.Stderr, d)
@@ -98,6 +127,5 @@ func cmdBuild(args []string) int {
 	}
 
 	fmt.Printf("compiled %d files in %d ms\n", len(outPaths), time.Since(start).Milliseconds())
-	fmt.Println("note: include/ (RuntimeLib.lua, Promise.lua) is not copied yet — Phase 4")
 	return 0
 }

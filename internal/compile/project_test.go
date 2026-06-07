@@ -1,10 +1,13 @@
 package compile
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"rotor/internal/includefiles"
 )
 
 // ----------------------------------------------------------------------------
@@ -317,6 +320,107 @@ func TestCompileProjectMissingRootDirOutDir(t *testing.T) {
 	if len(diags) != 1 || diags[0] != want {
 		t.Fatalf("diags = %#v, want exactly [%q]", diags, want)
 	}
+}
+
+// ----------------------------------------------------------------------------
+// Include emission (copyInclude.ts via CompileProjectWithOptions).
+// ----------------------------------------------------------------------------
+
+// requireIncludeFiles asserts every embedded runtime file exists under
+// includeDir with the embedded bytes.
+func requireIncludeFiles(t *testing.T, includeDir string) {
+	t.Helper()
+	for _, name := range includefiles.Names() {
+		got, err := os.ReadFile(filepath.Join(includeDir, name))
+		if err != nil {
+			t.Fatalf("include emission: %v", err)
+		}
+		want, err := includefiles.Read(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s: emitted bytes differ from embedded runtime library", name)
+		}
+	}
+}
+
+// EmitIncludeFiles writes the runtime library to <projectDir>/include by
+// default; plain CompileProject (zero options) stays pure and writes nothing.
+func TestCompileProjectEmitIncludeFiles(t *testing.T) {
+	dir := writeProject(t, "include-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"include"}}}`)
+
+	if _, diags, err := CompileProject(dir); err != nil {
+		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("plain CompileProject must not create include/ (err=%v)", err)
+	}
+
+	if _, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	requireIncludeFiles(t, filepath.Join(dir, "include"))
+}
+
+// Package projects never receive include files (copyInclude.ts L9-10: with no
+// --type flag the gate reduces to !isPackage), even with EmitIncludeFiles set.
+func TestCompileProjectEmitIncludeFilesSkipsPackage(t *testing.T) {
+	dir := writeProject(t, "@include/package-fixture", "")
+	if _, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("package project must not get include/ (err=%v)", err)
+	}
+}
+
+// --includePath flows into BOTH halves of the pipeline: the copy destination
+// (copyInclude.ts L13) and the RuntimeLib.lua Rojo-path validation
+// (compileFiles.ts L88-89). The fixture's Rojo tree maps "runtime", so the
+// compile only succeeds because validation looked at the override — and the
+// files must land there too.
+func TestCompileProjectIncludePathOverride(t *testing.T) {
+	dir := writeProject(t, "includepath-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"runtime"}}}`)
+	override := filepath.Join(dir, "runtime")
+
+	opts := ProjectOptions{IncludePath: override, EmitIncludeFiles: true}
+	if _, diags, err := CompileProjectWithOptions(dir, opts); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	requireIncludeFiles(t, override)
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("default include/ must stay absent when overridden (err=%v)", err)
+	}
+
+	// The default path no longer satisfies validation when the Rojo tree only
+	// covers the override — proving newProjectContext consults the option.
+	_, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: false})
+	if err == nil {
+		t.Fatal("expected validation failure for uncovered default include path")
+	}
+	want := "Rojo project contained no data for include folder!"
+	if len(diags) != 1 || diags[0] != want {
+		t.Errorf("diags = %v, want [%q]", diags, want)
+	}
+}
+
+// Upstream order (CLI/commands/build.ts L140-145): copyInclude runs after
+// program creation but before compileFiles, so source-file type errors do not
+// prevent the runtime library from landing.
+func TestCompileProjectEmitIncludeFilesDespiteTypeErrors(t *testing.T) {
+	dir := writeProject(t, "include-errors-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"include"}}}`)
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("const n: number = \"nope\";\nexport {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err == nil {
+		t.Fatal("expected the type error to fail the compile")
+	}
+	requireIncludeFiles(t, filepath.Join(dir, "include"))
 }
 
 func keys(m map[string]string) []string {
