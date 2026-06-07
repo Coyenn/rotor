@@ -67,14 +67,23 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 		if isAsync {
 			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
 		}
-		// Phase 3: TS.generator — wrapStatementsAsGenerator replaces the body
-		// with `return TS.generator(function() <stmts> end)` (runtime lib).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "generator functions"))
-	} else if isAsync {
-		// Phase 3: TS.async — upstream emits `local f = TS.async(function()
-		// ... end)` when localized, `f = TS.async(...)` when hoisted (the
-		// declaration switches to a VariableDeclaration/Assignment).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "async functions"))
+		statements = wrapStatementsAsGenerator(s, node, statements)
+	}
+
+	// The async path REPLACES the FunctionDeclaration emit entirely: `local f
+	// = TS.async(function() ... end)` when localized, `f = TS.async(...)` when
+	// hoisted (the hoist machinery emitted the `local f` header at the
+	// premature use; async function declarations are hoist-SENSITIVE — the
+	// self-reference exemption in identifier.go excludes them). Generator
+	// DECLARATIONS stay real FunctionDeclarations whose body is the
+	// TS.generator return.
+	if isAsync {
+		right := luau.NewCall(s.RuntimeLib(node, "async"), luau.NewList[luau.Expression](
+			luau.NewFunctionExpression(parameters, hasDotDotDot, statements)))
+		if localize {
+			return luau.NewList[luau.Statement](luau.NewVariableDeclaration(name, right))
+		}
+		return luau.NewList[luau.Statement](luau.NewAssignment(name, "=", right))
 	}
 
 	return luau.NewList[luau.Statement](
@@ -117,16 +126,16 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		if isAsync {
 			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
 		}
-		// Phase 3: TS.generator — wrapStatementsAsGenerator replaces the body
-		// with `return TS.generator(function() <stmts> end)` (runtime lib).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "generator functions"))
-	} else if isAsync {
-		// Phase 3: TS.async — the function value is wrapped
-		// `TS.async(<FunctionExpression>)` (runtime lib).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "async functions"))
+		statements = wrapStatementsAsGenerator(s, node, statements)
 	}
 
-	return luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+	var expression luau.Expression = luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+
+	if isAsync {
+		expression = luau.NewCall(s.RuntimeLib(node, "async"), luau.NewList[luau.Expression](expression))
+	}
+
+	return expression
 }
 
 // transformMethodDeclaration ports nodes/transformMethodDeclaration.ts
@@ -176,20 +185,21 @@ func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau
 
 	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
 
+	// Generator wrap happens FIRST and does NOT exclude the method shape — a
+	// generator method may still emit as `function Class:m()` whose body is
+	// `return TS.generator(...)`.
 	if declaration.AsteriskToken != nil {
 		if isAsync {
 			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
 		}
-		// Phase 3: TS.generator (wrapStatementsAsGenerator).
-		s.Diags.Add(DiagRotorNotYetSupported(node, "generator functions"))
-	} else if isAsync {
-		// Phase 3: TS.async — the function value is wrapped `TS.async(...)`.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "async functions"))
+		statements = wrapStatementsAsGenerator(s, node, statements)
 	}
 
 	// can we use `function class:name() end`? — only when the pointer was
 	// already spilled to a temp id (an inline map field can't hold a
-	// function statement).
+	// function statement). Async methods are EXCLUDED (the !isAsync gate):
+	// they fall to the map-pointer path with `self` kept in parameters
+	// (`work = TS.async(function(self, n)`).
 	nameStr, nameIsStr := name.(*luau.StringLiteral)
 	_, ptrIsMap := ptr.Value.(*luau.Map)
 	if !isAsync && nameIsStr && !ptrIsMap && luau.IsValidIdentifier(nameStr.Value) {
@@ -206,7 +216,11 @@ func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau
 		return result
 	}
 
-	expression := luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+	var expression luau.Expression = luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+
+	if isAsync {
+		expression = luau.NewCall(s.RuntimeLib(node, "async"), luau.NewList[luau.Expression](expression))
+	}
 
 	// we have to use `class[name] = function()`
 	result.PushList(s.CaptureStatements(func() {
