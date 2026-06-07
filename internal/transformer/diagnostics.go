@@ -396,7 +396,7 @@ func DiagRojoPathInSrc(partitionPath, suggestedPath string) Diagnostic {
 // diagnostics (which reproduce rbxtsc messages byte-exact) so unsupported
 // input always fails loudly instead of producing silently wrong output.
 func DiagRotorNotYetSupported(node *ast.Node, what string) Diagnostic {
-	return errorDiag("rotorNotYetSupported", node, fmt.Sprintf("rotor: %s not yet supported (phase 2)", what))
+	return errorDiag("rotorNotYetSupported", node, fmt.Sprintf("rotor: %s not yet supported", what))
 }
 
 // DiagRotorNoProjectContext guards transformer paths that require the Rojo
