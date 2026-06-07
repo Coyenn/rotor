@@ -149,6 +149,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformContinueStatement(s, node)
 	case ast.KindDoStatement:
 		return transformDoStatement(s, node)
+	case ast.KindEnumDeclaration:
+		return transformEnumDeclaration(s, node)
 	case ast.KindExportAssignment:
 		return transformExportAssignment(s, node)
 	case ast.KindExportDeclaration:
@@ -165,6 +167,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformImportEqualsDeclaration(s, node)
 	case ast.KindIfStatement:
 		return transformIfStatement(s, node)
+	case ast.KindModuleDeclaration:
+		return transformModuleDeclaration(s, node)
 	case ast.KindReturnStatement:
 		return transformReturnStatement(s, node)
 	case ast.KindSwitchStatement:
