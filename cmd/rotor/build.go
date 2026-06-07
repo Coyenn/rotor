@@ -185,7 +185,7 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 // --logTruthyChanges/--optimizedLoops/--allowCommentDirectives/--verbose are
 // live; --writeOnlyChanged now runs inside the compile package's output
 // pipeline; --watch/
-// --usePolling are parsed but build watch lands with the Phase 4 watch task;
+// --usePolling drive the polling watch loop;
 // --writeTransformedFiles is parsed and ignored (rbxtsc plugin debug output —
 // out of v1 scope).
 //
@@ -221,17 +221,16 @@ func cmdBuild(args []string) int {
 	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
 	logservice.Verbose = opts.verbose
 
+	// Upstream projectPath = path.dirname(tsConfigPath)
+	// (createProjectData.ts L13).
+	dir := filepath.Dir(tsConfigPath)
+
 	if opts.writeTransformedFiles {
 		logservice.Warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
-		fmt.Fprintln(os.Stderr, "rotor build: watch mode is not implemented yet (lands later in Phase 4); use `rotor check -w` for watch-mode typechecking")
-		return 1
+		return runBuildWatch(dir, tsConfigPath, opts)
 	}
-
-	// Upstream projectPath = path.dirname(tsConfigPath)
-	// (createProjectData.ts L13).
-	dir := filepath.Dir(tsConfigPath)
 
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
 		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr != nil {
@@ -241,6 +240,23 @@ func cmdBuild(args []string) int {
 		}
 	}
 
+	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
+	if err != nil {
+		for _, d := range diags {
+			fmt.Fprintln(os.Stderr, d)
+		}
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		return 1
+	}
+
+	// rotor's own summary line (rbxtsc 3.0.0 prints no total — deliberate UX
+	// addition, via LogService so partial-line tracking holds).
+	logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
+		len(result.Outputs), len(result.EmittedFiles), elapsed.Milliseconds()))
+	return 0
+}
+
+func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []string, time.Duration, error) {
 	// Real builds carry rotor's own header; the upstream-header default is
 	// only load-bearing for differential byte-comparison in tests.
 	transformer.HeaderComment = " Compiled with rotor v" + version
@@ -258,17 +274,5 @@ func cmdBuild(args []string) int {
 		LuaExtension:           !opts.luau,
 		WriteOnlyChanged:       opts.writeOnlyChanged,
 	})
-	if err != nil {
-		for _, d := range diags {
-			fmt.Fprintln(os.Stderr, d)
-		}
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
-		return 1
-	}
-
-	// rotor's own summary line (rbxtsc 3.0.0 prints no total — deliberate UX
-	// addition, via LogService so partial-line tracking holds).
-	logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
-		len(result.Outputs), len(result.EmittedFiles), time.Since(start).Milliseconds()))
-	return 0
+	return result, diags, time.Since(start), err
 }

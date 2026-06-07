@@ -2,8 +2,8 @@
 //
 // `rotor check` is a fast native TypeScript project checker; `rotor build`
 // compiles to Luau with the full rbxtsc build flag surface (ProjectOptions
-// merged from defaults < tsconfig `rbxts` key < argv). Build watch mode and
-// incremental builds are later Phase 4 work.
+// merged from defaults < tsconfig `rbxts` key < argv). Build watch mode is
+// available; incremental rebuild selection remains later Phase 4 work.
 //
 // Exit-code policy: 0 = success, 1 = ANY failure including usage errors —
 // matching upstream rbxtsc, whose yargs `.fail` handler sets exit code 1
@@ -65,7 +65,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
 	fmt.Fprintln(w, "                            containing one, or any path to search upward from")
-	fmt.Fprintln(w, "  -w, --watch               enable watch mode (build watch is not implemented yet)")
+	fmt.Fprintln(w, "  -w, --watch               enable watch mode")
 	fmt.Fprintln(w, "  --usePolling              use polling for watch mode (requires --watch)")
 	fmt.Fprintln(w, "  --verbose                 enable verbose logs")
 	fmt.Fprintln(w, "  --noInclude               do not copy include files")
