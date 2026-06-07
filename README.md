@@ -50,19 +50,33 @@ go build -o rotor.exe ./cmd/rotor
 
 ### Use it
 
-The CLI currently exposes one command — `rotor check`, a native, full-strictness typecheck of any rbxts project (the same checking `rbxtsc` does, minus the JS toolchain boot time):
+Two commands so far:
 
 ```powershell
-rotor check path/to/your-game        # one-shot: diagnostics + timing
+rotor check path/to/your-game        # native, full-strictness typecheck: diagnostics + timing
 rotor check path/to/your-game -w     # watch mode: rechecks on save
-rotor check                          # defaults to the current directory
+rotor build path/to/your-game        # compile the project to Luau (experimental)
 ```
 
-- `path` is a project directory containing a `tsconfig.json`.
+- `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).
 - Exit codes: `0` = no errors, `1` = errors found, `2` = usage/config failure — suitable for CI.
 
-**Compilation to Luau is not wired into the CLI yet** — `rotor build` lands with Phase 4. Today the compiler lives in `internal/compile` (`CompileProject` / `CompileFile`) and is driven by the differential test suite below, where every emitted file is byte-compared against real `rbxtsc` 3.0.0 output. If you want to see rotor emit Luau right now, that suite is the way.
+`rotor build` compiles every file in the project and writes the `.luau` outputs to your tsconfig's `outDir`, exactly where `rbxtsc` would put them. Try it on rotor's own test fixture project to see it in action:
+
+```powershell
+rotor build testdata/diff/project
+# out/01_literals.luau
+# ...
+# compiled 37 files in 165 ms
+```
+
+Caveats while the transformer port is still in progress (see the [roadmap](roadmap.md)):
+
+- Constructs not yet ported (currently: decorators, spread, async/generators, try/catch, enums) fail loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
+- `include/` (RuntimeLib.lua, Promise.lua) isn't copied yet, and there's no watch/incremental mode or `--type` flag for `build` — that's the Phase 4 project layer. To run the output in Roblox, copy `include/` from an `rbxtsc` build for now.
+
+A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
 
 ## Roadmap
 

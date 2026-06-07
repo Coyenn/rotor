@@ -1,7 +1,8 @@
 // Command rotor is the rotor CLI.
 //
 // Currently it provides `rotor check`, a fast native TypeScript project
-// checker (compilation to Luau is not yet implemented).
+// checker, and `rotor build`, a minimal compile-to-Luau command (the full
+// rbxtsc build surface — include/ copying, watch, incremental — is Phase 4).
 package main
 
 import (
@@ -10,7 +11,7 @@ import (
 	"os"
 )
 
-const banner = "rotor check — native TypeScript checking (compilation to Luau not yet implemented)"
+const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts projects"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -24,6 +25,8 @@ func run(args []string) int {
 	switch args[0] {
 	case "check":
 		return cmdCheck(args[1:])
+	case "build":
+		return cmdBuild(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -38,13 +41,15 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, banner)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  rotor check [path] [-w]")
+	fmt.Fprintln(w, "  rotor check [path] [-w]   typecheck the project (native, full strictness)")
+	fmt.Fprintln(w, "  rotor build [path]        compile the project to Luau (experimental — writes to tsconfig outDir;")
+	fmt.Fprintln(w, "                            no include/ copy, watch, or incremental yet — Phase 4)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Arguments:")
 	fmt.Fprintln(w, "  path          project directory containing tsconfig.json (default \".\")")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  -w, --watch   re-run the check when watched files change")
+	fmt.Fprintln(w, "  -w, --watch   re-run the check when watched files change (check only)")
 	fmt.Fprintln(w, "  -h, --help    show this help")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Exit codes: 0 = no errors, 1 = errors found, 2 = usage or config failure")
