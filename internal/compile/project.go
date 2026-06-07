@@ -10,7 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	"rotor/internal/includefiles"
 	"rotor/internal/logservice"
 	"rotor/internal/rojo"
 	"rotor/internal/transformer"
@@ -18,7 +17,9 @@ import (
 	"rotor/tsgo/bundled"
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
+	"rotor/tsgo/outputpaths"
 	"rotor/tsgo/tsoptions"
+	"rotor/tsgo/tspath"
 	"rotor/tsgo/vfs/osvfs"
 )
 
@@ -401,6 +402,11 @@ type ProjectOptions struct {
 	// (DEFAULT_PROJECT_OPTIONS.luau = true); set from `--luau=false` to emit
 	// `.lua` (createPathTranslator.ts L17).
 	LuaExtension bool
+
+	// WriteOnlyChanged ports the build write-phase and copyItem byte-compare
+	// skip: unchanged compiled outputs and copied passthrough files are left
+	// untouched on disk.
+	WriteOnlyChanged bool
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -427,33 +433,13 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 	if err != nil {
 		return nil, diags, err
 	}
-
-	// copyInclude.ts L6-16: skip when --noInclude (EmitIncludeFiles false
-	// here) or the project compiles as a Package — the full upstream gate
-	// `type !== Package && !(type === undefined && isPackage)`: an explicit
-	// --type game/model copies even into scoped-name packages; an explicit
-	// --type package never copies.
-	if opts.EmitIncludeFiles && opts.Type != transformer.ProjectTypePackage {
-		_, isPackage, err := projectIsPackage(dir)
-		if err != nil {
-			return nil, nil, err
-		}
-		if opts.Type != "" || !isPackage {
-			includePath, err := resolveIncludePath(dir, opts.IncludePath)
-			if err != nil {
-				return nil, nil, err
-			}
-			// Verbose benchmark, exact upstream name (copyInclude.ts L12).
-			var copyErr error
-			logservice.BenchmarkIfVerbose("copy include files", func() {
-				copyErr = includefiles.Copy(includePath)
-			})
-			if copyErr != nil {
-				return nil, nil, copyErr
-			}
-		}
+	if err := maybeCopyInclude(dir, opts); err != nil {
+		return nil, nil, err
 	}
+	return compileProjectProgram(dir, program, opts)
+}
 
+func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []string, error) {
 	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
 		return nil, diags, err
@@ -569,7 +555,15 @@ func createPathTranslator(program *compiler.Program, useLuauExtension bool) *roj
 	dirs := append([]string{program.CommonSourceDirectory()}, getRootDirs(program)...)
 	rootDir := findAncestorDir(dirs)
 	outDir := filepath.FromSlash(options.OutDir)
-	return rojo.NewPathTranslator(rootDir, outDir, "", options.Declaration.IsTrue(), useLuauExtension)
+	currentDirectory := rootDir
+	if options.ConfigFilePath != "" {
+		currentDirectory = filepath.Dir(filepath.FromSlash(options.ConfigFilePath))
+	}
+	buildInfoOutputPath := outputpaths.GetBuildInfoFileName(options, tspath.ComparePathsOptions{
+		CurrentDirectory:          currentDirectory,
+		UseCaseSensitiveFileNames: osvfs.FS().UseCaseSensitiveFileNames(),
+	})
+	return rojo.NewPathTranslator(rootDir, outDir, filepath.FromSlash(buildInfoOutputPath), options.Declaration.IsTrue(), useLuauExtension)
 }
 
 // rawEnforcedOptions carries the user-written values of the compilerOptions

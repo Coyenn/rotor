@@ -1,0 +1,225 @@
+package compile
+
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"rotor/internal/includefiles"
+	"rotor/internal/logservice"
+	"rotor/internal/rojo"
+)
+
+// BuildResult is the disk-writing sibling of CompileProject's pure text map.
+// Outputs contains the compiled Luau sources keyed by project-relative output
+// path; EmittedFiles contains the compiled output paths actually written to
+// disk this pass (mirroring compileFiles.ts' emittedFiles and excluding copied
+// passthrough files).
+type BuildResult struct {
+	Outputs      map[string]string
+	EmittedFiles []string
+}
+
+// BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
+// cleanup -> copyInclude -> copy non-compiled files -> compile -> write
+// compiled outputs. CompileProject remains the pure library API; this is the
+// writing entry point for the CLI and future watch/incremental layers.
+func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResult, []string, error) {
+	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
+	if err != nil {
+		return nil, diags, err
+	}
+
+	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
+	cleanupOutputs(pathTranslator)
+
+	if err := maybeCopyInclude(dir, opts); err != nil {
+		return nil, nil, err
+	}
+	if err := copyNonCompiledFiles(pathTranslator, getRootDirs(program), opts.WriteOnlyChanged); err != nil {
+		return nil, nil, err
+	}
+
+	outputs, diags, err := compileProjectProgram(dir, program, opts)
+	if err != nil {
+		return nil, diags, err
+	}
+
+	emittedFiles := make([]string, 0, len(outputs))
+	relOuts := make([]string, 0, len(outputs))
+	for relOut := range outputs {
+		relOuts = append(relOuts, relOut)
+	}
+	sort.Strings(relOuts)
+
+	for _, relOut := range relOuts {
+		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
+		unchanged := false
+		if opts.WriteOnlyChanged {
+			if existing, err := os.ReadFile(absOut); err == nil && string(existing) == outputs[relOut] {
+				unchanged = true
+			}
+		}
+		if unchanged {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
+			return nil, nil, err
+		}
+		if err := os.WriteFile(absOut, []byte(outputs[relOut]), 0o644); err != nil {
+			return nil, nil, err
+		}
+		emittedFiles = append(emittedFiles, absOut)
+	}
+
+	return &BuildResult{
+		Outputs:      outputs,
+		EmittedFiles: emittedFiles,
+	}, nil, nil
+}
+
+func maybeCopyInclude(dir string, opts ProjectOptions) error {
+	if !opts.EmitIncludeFiles || opts.Type == "package" {
+		return nil
+	}
+	_, isPackage, err := projectIsPackage(dir)
+	if err != nil {
+		return err
+	}
+	if opts.Type == "" && isPackage {
+		return nil
+	}
+
+	includePath, err := resolveIncludePath(dir, opts.IncludePath)
+	if err != nil {
+		return err
+	}
+	var copyErr error
+	logservice.BenchmarkIfVerbose("copy include files", func() {
+		copyErr = includefiles.Copy(includePath)
+	})
+	return copyErr
+}
+
+func cleanupOutputs(pathTranslator *rojo.PathTranslator) {
+	cleanupDirRecursively(pathTranslator, pathTranslator.OutDir)
+}
+
+func cleanupDirRecursively(pathTranslator *rojo.PathTranslator, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		itemPath := filepath.Join(dir, entry.Name())
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				continue
+			}
+			cleanupDirRecursively(pathTranslator, itemPath)
+		}
+		tryRemoveOutput(pathTranslator, itemPath)
+	}
+}
+
+func tryRemoveOutput(pathTranslator *rojo.PathTranslator, outPath string) {
+	if !isOutputFileOrphaned(pathTranslator, outPath) {
+		return
+	}
+	if err := os.RemoveAll(outPath); err == nil {
+		logservice.WriteLineIfVerbose("remove " + outPath)
+	}
+}
+
+func isOutputFileOrphaned(pathTranslator *rojo.PathTranslator, outPath string) bool {
+	if strings.HasSuffix(outPath, ".d.ts") && !pathTranslator.Declaration {
+		return true
+	}
+	for _, inputPath := range pathTranslator.GetInputPaths(outPath) {
+		if _, err := os.Stat(inputPath); err == nil {
+			return false
+		}
+	}
+	if pathTranslator.BuildInfoOutputPath == outPath {
+		return false
+	}
+	return true
+}
+
+func copyNonCompiledFiles(pathTranslator *rojo.PathTranslator, rootDirs []string, writeOnlyChanged bool) error {
+	for _, rootDir := range rootDirs {
+		rootDir = filepath.FromSlash(rootDir)
+		if _, err := os.Stat(rootDir); err != nil {
+			continue
+		}
+		if err := copyItem(pathTranslator, rootDir, writeOnlyChanged); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyItem(pathTranslator *rojo.PathTranslator, itemPath string, writeOnlyChanged bool) error {
+	info, err := os.Stat(itemPath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		outDir := pathTranslator.GetOutputPath(itemPath)
+		if err := os.MkdirAll(outDir, 0o755); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(itemPath)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := copyItem(pathTranslator, filepath.Join(itemPath, entry.Name()), writeOnlyChanged); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if strings.HasSuffix(itemPath, ".d.ts") {
+		if !pathTranslator.Declaration {
+			return nil
+		}
+	} else if isCompilableFile(itemPath) {
+		return nil
+	}
+
+	dest := pathTranslator.GetOutputPath(itemPath)
+	if writeOnlyChanged {
+		if existing, err := os.ReadFile(dest); err == nil {
+			incoming, err := os.ReadFile(itemPath)
+			if err != nil {
+				return err
+			}
+			if string(existing) == string(incoming) {
+				return nil
+			}
+		}
+	}
+
+	data, err := os.ReadFile(itemPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dest, data, 0o644)
+}
+
+func isCompilableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if strings.HasSuffix(path, ".d.ts") {
+		return false
+	}
+	return strings.HasSuffix(path, ".ts") || strings.HasSuffix(path, ".tsx")
+}

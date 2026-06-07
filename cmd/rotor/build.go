@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -184,8 +183,8 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 //
 // Flag wiring status: --type/--noInclude/--includePath/--rojo/--luau/
 // --logTruthyChanges/--optimizedLoops/--allowCommentDirectives/--verbose are
-// live; --writeOnlyChanged is honored by the write loop below (moves into
-// the compile write phase with the Task 3 output pipeline); --watch/
+// live; --writeOnlyChanged now runs inside the compile package's output
+// pipeline; --watch/
 // --usePolling are parsed but build watch lands with the Phase 4 watch task;
 // --writeTransformedFiles is parsed and ignored (rbxtsc plugin debug output —
 // out of v1 scope).
@@ -247,7 +246,7 @@ func cmdBuild(args []string) int {
 	transformer.HeaderComment = " Compiled with rotor v" + version
 
 	start := time.Now()
-	results, diags, err := compile.CompileProjectWithOptions(dir, compile.ProjectOptions{
+	result, diags, err := compile.BuildProjectWithOptions(dir, compile.ProjectOptions{
 		TsConfigPath:           tsConfigPath,
 		IncludePath:            opts.includePath,
 		EmitIncludeFiles:       !opts.noInclude,
@@ -257,6 +256,7 @@ func cmdBuild(args []string) int {
 		AllowCommentDirectives: opts.allowCommentDirectives,
 		NoOptimizedLoops:       !opts.optimizedLoops,
 		LuaExtension:           !opts.luau,
+		WriteOnlyChanged:       opts.writeOnlyChanged,
 	})
 	if err != nil {
 		for _, d := range diags {
@@ -266,38 +266,9 @@ func cmdBuild(args []string) int {
 		return 1
 	}
 
-	// Deterministic write order (CompileProject returns a map). The write
-	// phase moves into the compile package with the Task 3 output pipeline
-	// (cleanup/copyFiles/outputFileSync semantics); --writeOnlyChanged
-	// byte-compares here meanwhile (compileFiles.ts L191-194).
-	outPaths := make([]string, 0, len(results))
-	for relOut := range results {
-		outPaths = append(outPaths, relOut)
-	}
-	sort.Strings(outPaths)
-
-	written := 0
-	for _, relOut := range outPaths {
-		absOut := filepath.Join(dir, filepath.FromSlash(relOut))
-		if opts.writeOnlyChanged {
-			if existing, err := os.ReadFile(absOut); err == nil && string(existing) == results[relOut] {
-				continue
-			}
-		}
-		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(absOut, []byte(results[relOut]), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
-			return 1
-		}
-		written++
-	}
-
 	// rotor's own summary line (rbxtsc 3.0.0 prints no total — deliberate UX
 	// addition, via LogService so partial-line tracking holds).
 	logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
-		len(outPaths), written, time.Since(start).Milliseconds()))
+		len(result.Outputs), len(result.EmittedFiles), time.Since(start).Milliseconds()))
 	return 0
 }
