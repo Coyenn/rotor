@@ -34,12 +34,12 @@ func cmdCheck(args []string) int {
 			if strings.HasPrefix(a, "-") {
 				fmt.Fprintf(os.Stderr, "rotor check: unknown flag %q\n\n", a)
 				usage(os.Stderr)
-				return 2
+				return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
 			}
 			if path != "" {
 				fmt.Fprintf(os.Stderr, "rotor check: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
-				return 2
+				return 1
 			}
 			path = a
 		}
@@ -51,15 +51,15 @@ func cmdCheck(args []string) int {
 	dir, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor check: cannot resolve path %q: %v\n", path, err)
-		return 2
+		return 1
 	}
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
 		fmt.Fprintf(os.Stderr, "rotor check: %s is not a directory\n", dir)
-		return 2
+		return 1
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "tsconfig.json")); statErr != nil {
 		fmt.Fprintf(os.Stderr, "rotor check: no tsconfig.json found in %s\n", dir)
-		return 2
+		return 1
 	}
 
 	// rbxts-style projects resolve all of their types (including the

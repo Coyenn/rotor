@@ -29,7 +29,7 @@ import (
 // the requested file, so per-fixture tests stay isolated and fast. The diff
 // harness migrates to CompileProject (Phase 3a Task 6).
 func CompileFile(projectDir, relPath string) (string, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir)
+	dir, program, diags, err := newProjectProgram(projectDir, "")
 	if err != nil {
 		return "", diags, err
 	}
