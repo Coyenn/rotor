@@ -48,6 +48,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformBinaryExpression(s, node)
 	case ast.KindCallExpression:
 		return transformCallExpression(s, node)
+	case ast.KindClassExpression:
+		return transformClassExpression(s, node)
 	case ast.KindConditionalExpression:
 		return transformConditionalExpression(s, node)
 	case ast.KindElementAccessExpression:
@@ -86,6 +88,10 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformStringLiteral(s, node)
 	case ast.KindTemplateExpression:
 		return transformTemplateExpression(s, node)
+	case ast.KindThisKeyword:
+		return transformThisExpression(s, node)
+	case ast.KindSuperKeyword:
+		return transformSuperKeyword()
 
 	// type-only wrappers -> transformTypeExpression (inner expression)
 	case ast.KindAsExpression,
@@ -137,6 +143,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformBlock(s, node)
 	case ast.KindBreakStatement:
 		return transformBreakStatement(s, node)
+	case ast.KindClassDeclaration:
+		return transformClassDeclaration(s, node)
 	case ast.KindContinueStatement:
 		return transformContinueStatement(s, node)
 	case ast.KindDoStatement:

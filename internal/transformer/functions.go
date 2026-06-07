@@ -130,12 +130,8 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 }
 
 // transformMethodDeclaration ports nodes/transformMethodDeclaration.ts
-// (L14-106) for object-literal methods (`{ m() {} }`), writing through the
-// object's MapPointer. Class methods route here too once classes land.
-//
-// Decorator bookkeeping (upstream L36-49, setClassElementObjectKey) is
-// class-only — decorators are not legal on object-literal methods — and lands
-// with classes (Phase 3+).
+// (L14-106): object-literal methods (`{ m() {} }`, inline-map pointer) and
+// class methods (identifier pointer) share this transform.
 func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau.List[luau.Statement] {
 	result := luau.NewList[luau.Statement]()
 
@@ -157,6 +153,26 @@ func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau
 	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
 
 	name := transformPropertyName(s, nameNode)
+
+	// Decorator key pinning (upstream L36-49): a decorated method (or a method
+	// with decorated parameters) records the object key the decorator
+	// transforms re-read (transformDecorators, Phase 3c Task 3); a computed
+	// non-literal key is pinned to a temp first so it only evaluates once.
+	hasParameterDecorators := false
+	for _, parameter := range node.Parameters() {
+		if ast.HasDecorators(parameter) {
+			hasParameterDecorators = true
+			break
+		}
+	}
+	if ast.HasDecorators(node) || hasParameterDecorators {
+		if !luau.IsSimplePrimitive(name) {
+			tempID := luau.TempID("key")
+			result.Push(luau.NewVariableDeclaration(tempID, name))
+			name = tempID
+		}
+		s.SetClassElementObjectKey(node, name)
+	}
 
 	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
 

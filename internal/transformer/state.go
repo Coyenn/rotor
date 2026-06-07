@@ -164,6 +164,19 @@ type State struct {
 	// vars).
 	SymbolToID map[*ast.Symbol]*luau.TemporaryIdentifier
 
+	// ClassIdentifierMap maps a ClassLikeDeclaration node to its INTERNAL luau
+	// identifier (upstream classIdentifierMap, TransformState.ts:28) — for a
+	// named class expression that is the inner name (`Inner`), not the `_class`
+	// temp. Consumed by transformThisExpression for `this` in static blocks
+	// and static property initializers.
+	ClassIdentifierMap map[*ast.Node]luau.AnyIdentifier
+
+	// classElementToObjectKeyMap ports classElementToObjectKeyMap
+	// (TransformState.ts:390): the pinned object key of a decorated class
+	// element, set by transformMethodDeclaration and read back by the
+	// decorator transforms.
+	classElementToObjectKeyMap map[*ast.Node]luau.Expression
+
 	// moduleIDBySymbol maps a module symbol to the luau id holding that
 	// module's exports table (source file symbol -> `exports`; namespaces ->
 	// their container id).
@@ -184,6 +197,9 @@ func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.S
 		IsHoisted:         make(map[*ast.Symbol]bool),
 		SymbolToID:        make(map[*ast.Symbol]*luau.TemporaryIdentifier),
 		moduleIDBySymbol:  make(map[*ast.Symbol]luau.AnyIdentifier),
+
+		ClassIdentifierMap:         make(map[*ast.Node]luau.AnyIdentifier),
+		classElementToObjectKeyMap: make(map[*ast.Node]luau.Expression),
 	}
 	if sourceFile != nil {
 		s.SourceFileText = sourceFile.Text()
@@ -332,6 +348,26 @@ func (s *State) PushToVarIfNonID(expr luau.Expression, nameHint string) luau.Any
 		return id
 	}
 	return s.PushToVar(expr, nameHint)
+}
+
+// ---------------------------------------------------------------------------
+// Class element object keys (upstream lines 390-399)
+// ---------------------------------------------------------------------------
+
+// SetClassElementObjectKey ports TransformState.setClassElementObjectKey
+// (TransformState.ts:392-395): record the pinned key for a decorated class
+// element, asserting no overwrite.
+func (s *State) SetClassElementObjectKey(classElement *ast.Node, identifier luau.Expression) {
+	if _, ok := s.classElementToObjectKeyMap[classElement]; ok {
+		panic("transformer: SetClassElementObjectKey: key already set") // upstream assert
+	}
+	s.classElementToObjectKeyMap[classElement] = identifier
+}
+
+// GetClassElementObjectKey ports TransformState.getClassElementObjectKey
+// (TransformState.ts:397-399).
+func (s *State) GetClassElementObjectKey(classElement *ast.Node) luau.Expression {
+	return s.classElementToObjectKeyMap[classElement]
 }
 
 // ---------------------------------------------------------------------------

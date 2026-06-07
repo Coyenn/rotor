@@ -41,4 +41,5 @@ var EnabledFixtures = []string{
 	"30_optional",
 	"31_mixed3b",
 	"32_jsx",
+	"33_classes",
 }
