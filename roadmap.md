@@ -22,14 +22,14 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | **2b** | Functions, destructuring, for-of (arrays), switch, loop closures | ✅ |
 | **3a** | Imports, module resolution, Rojo resolver, `new` + constructor macros | ✅ |
 | **3b** | Macro tables, optional chaining, full iteration, pnpm/baseUrl resolution | ✅ |
-| **3c** | JSX, classes, decorators, spread, async, try, enums, namespaces | 🚧 |
-| **4** | Project layer — emit layout, watch, incremental, full CLI, plugin sidecar | ⬜ |
+| **3c** | JSX, classes, decorators, spread, async, try, enums, namespaces | ✅ |
+| **4** | Project layer — emit layout, watch, incremental, full CLI, plugin sidecar | 🚧 |
 | **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | ⬜ |
 | | **v1.0 — drop-in `rbxtsc` replacement** | 🎯 |
 
-**Measured progress:** 42/42 differential fixtures byte-identical to real rbxtsc 3.0.0;
-`randomness` real-game smoke at **54/95 files byte-identical** (14 → 28 → 42 → 54 across
-phases), zero divergent — every file that compiles is byte-exact.
+**Measured progress:** 43/43 differential fixtures byte-identical to real rbxtsc 3.0.0;
+`randomness` real-game smoke at **95/95 files byte-identical** (14 → 28 → 42 → 54 → 95
+across phases), zero divergent, zero blocked — the entire game compiles byte-exact.
 
 ---
 
@@ -117,7 +117,7 @@ files that were import-blocked.*
 - [x] **Task 7: Optional chaining** — snapshot-free chainItem, double nil-check nesting, `_self` method rule, temp reuse, `noOptionalMacroCall`
 - [x] **Task 8: Conformance + re-smoke + merge** — fixture 31; 35/35 fixtures; randomness 54/95
 
-## Phase 3c — JSX, Classes, Spread, Async, Try, Enums 🚧 (current)
+## Phase 3c — JSX, Classes, Spread, Async, Try, Enums ✅
 
 *Plan: `docs/superpowers/plans/2026-06-07-rotor-phase3c.md`. Digests: `phase3c-jsx-digest.md`,
 `phase3c-classes-digest.md`, `phase3c-async-try-enums-digest.md`. Breaks the JSX wall
@@ -130,9 +130,9 @@ files that were import-blocked.*
 - [x] **Task 5: async + generators** — `TS.async` wrappers (declarations become locals; async methods drop colon), `await`→`TS.await`, `TS.generator` body swap, `yield`/`yield*` lowering, `async function*` banned; fixture `36_async.ts`
 - [x] **Task 6: try/catch/finally + flow-control rerouting** — `TS.try` with `TRY_RETURN`/`TRY_BREAK`/`TRY_CONTINUE` flags, blocked checks, both load-bearing orderings, `collapseFlowControlCases`; retires the Phase 2 TRY_* no-op; fixture `37_try.ts`
 - [x] **Task 7: Enums + namespaces** — enum do-block with `_inverse` + setmetatable, const enums emit nothing, constant folding; namespace `_container` do-blocks, dotted/nested namespaces, merging banned (`noEnumMerging`/`noNamespaceMerging`); fixture `38_enums_namespaces.ts`
-- [ ] **Task 8: Conformance + re-smoke + merge** 🚧 — adversarial fixture `39_mixed3c.tsx` (feature interactions), full randomness re-smoke (expect a step change above 54/95), README/memory updates, final review, merge
+- [x] **Task 8: Conformance + re-smoke + merge** — adversarial fixture `39_mixed3c.tsx` (decorated React class components, spread props, enum-keyed Map iteration into JSX children, generators with `yield*` in try spread into JSX, async + try/await + break/continue rerouting, `??=` on class fields, namespace components as JSX tags) byte-identical on first run; randomness re-smoke **95/95 byte-identical, zero divergent, zero blocked**; README/roadmap updated (final review + merge handled at branch close)
 
-## Phase 4 — Project Layer ⬜
+## Phase 4 — Project Layer 🚧 (next)
 
 *Scoped in the design spec; detailed plan not yet written. Everything that makes rotor a
 usable CLI tool rather than a compile library.*

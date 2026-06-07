@@ -47,4 +47,5 @@ var EnabledFixtures = []string{
 	"36_async",
 	"37_try",
 	"38_enums_namespaces",
+	"39_mixed3c",
 }
