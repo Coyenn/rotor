@@ -45,5 +45,6 @@ var EnabledFixtures = []string{
 	"34_decorators",
 	"35_spread",
 	"36_async",
+	"37_try",
 	"38_enums_namespaces",
 }

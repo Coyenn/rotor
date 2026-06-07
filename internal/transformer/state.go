@@ -96,9 +96,6 @@ func NewMultiState() *MultiState {
 // `resolver = typeChecker.getEmitResolver(sourceFile)` is consumed only by
 // JSX factory entity lookups (getJsxFactoryEntity/getJsxFragmentFactoryEntity)
 // and import/export elision (isReferencedAliasDeclaration).
-// Phase 3: classIdentifierMap, classElementToObjectKeyMap (class transforms)
-// and the tryUsesStack (try/catch flow-control tunneling) land with their
-// consumers.
 type State struct {
 	Program    *compiler.Program // may be nil in mechanics tests
 	Checker    *checker.Checker  // may be nil in mechanics tests
@@ -145,6 +142,12 @@ type State struct {
 	// prereqStack ports prereqStatementsStack — THE core mechanism: a stack of
 	// statement lists that prerequisite statements are appended onto.
 	prereqStack []*luau.List[luau.Statement]
+
+	// tryUsesStack ports tryUsesStack (TransformState.ts:68-97): one TryUses
+	// entry per enclosing try statement currently being transformed. The
+	// break/continue/return transforms mark the TOP entry when they reroute;
+	// transformTryStatement reads the flags back after popping.
+	tryUsesStack []*TryUses
 
 	// getTypeCache memoizes GetType by the ORIGINAL node pointer (not the
 	// SkipUpwards result).
@@ -306,6 +309,54 @@ func (s *State) NoPrereqs(cb func() luau.Expression) luau.Expression {
 	}
 	return expression
 }
+
+// ---------------------------------------------------------------------------
+// Try uses stack (upstream lines 68-97, types.ts L7-11)
+// ---------------------------------------------------------------------------
+
+// TryUses ports types.ts TryUses: which flow-control kinds escape a try block
+// and must be rerouted through the TS.try exitType protocol.
+type TryUses struct {
+	UsesReturn   bool
+	UsesBreak    bool
+	UsesContinue bool
+}
+
+// PushTryUsesStack ports pushTryUsesStack: push a fresh all-false TryUses and
+// RETURN it — the caller keeps the pointer and reads the flags after pop.
+func (s *State) PushTryUsesStack() *TryUses {
+	uses := &TryUses{}
+	s.tryUsesStack = append(s.tryUsesStack, uses)
+	return uses
+}
+
+// PopTryUsesStack ports popTryUsesStack.
+func (s *State) PopTryUsesStack() {
+	n := len(s.tryUsesStack)
+	if n == 0 {
+		panic("transformer: PopTryUsesStack on empty stack") // upstream assert
+	}
+	s.tryUsesStack = s.tryUsesStack[:n-1]
+}
+
+// markTryUses ports markTryUses(property): set a flag on the TOP entry;
+// a NO-OP when the stack is empty (upstream L87-89) — this is what makes
+// return/break/continue outside any try free.
+func (s *State) markTryUses(mark func(*TryUses)) {
+	if len(s.tryUsesStack) == 0 {
+		return
+	}
+	mark(s.tryUsesStack[len(s.tryUsesStack)-1])
+}
+
+// MarkTryUsesReturn ports markTryUses("usesReturn").
+func (s *State) MarkTryUsesReturn() { s.markTryUses(func(u *TryUses) { u.UsesReturn = true }) }
+
+// MarkTryUsesBreak ports markTryUses("usesBreak").
+func (s *State) MarkTryUsesBreak() { s.markTryUses(func(u *TryUses) { u.UsesBreak = true }) }
+
+// MarkTryUsesContinue ports markTryUses("usesContinue").
+func (s *State) MarkTryUsesContinue() { s.markTryUses(func(u *TryUses) { u.UsesContinue = true }) }
 
 // ---------------------------------------------------------------------------
 // pushToVar family (upstream lines 267-306)

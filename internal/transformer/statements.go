@@ -358,14 +358,6 @@ func transformBlock(s *State, node *ast.Node) *luau.List[luau.Statement] {
 // Return statements — statements/transformReturnStatement.ts
 // ---------------------------------------------------------------------------
 
-// NOTE on isReturnBlockedByTryStatement / isBreakBlockedByTryStatement
-// (util/isBlockedByTryStatement.ts): both reroute through `return
-// TS.TRY_RETURN/TRY_BREAK/TRY_CONTINUE` when the nearest relevant ancestor is
-// a TryStatement. rotor Phase 2 raises rotorNotYetSupported for TryStatement
-// itself WITHOUT descending into its blocks, so no return/break/continue is
-// ever transformed inside a try — the blocked branches are documented no-ops
-// until the try transform lands.
-
 // isTupleReturningCall ports transformReturnStatement.ts isTupleReturningCall
 // (L10-16): a call expression whose own type (at the call site, intentionally
 // NOT via s.GetType which uses SkipUpwards) is a LuaTuple — its multi-returns
@@ -388,13 +380,16 @@ func isTupleMacro(s *State, expression *ast.Node) bool {
 	return false
 }
 
-// transformReturnStatementInner ports transformReturnStatementInner (L28-69)
-// minus the try-block wrapping (L51-63, see NOTE above). A direct
-// `return $tuple(...)` spreads its arguments into a multi-value return
-// (intercepted BEFORE the expression transform — outside return position the
-// $tuple CALL macro raises noTupleMacroOutsideReturn instead). Returning a
-// LuaTuple VALUE (array literal or variable) must likewise spread — array
-// members inline (`return a, b`), anything else through `return unpack(exp)`.
+// transformReturnStatementInner ports transformReturnStatementInner (L28-69).
+// A direct `return $tuple(...)` spreads its arguments into a multi-value
+// return (intercepted BEFORE the expression transform — outside return
+// position the $tuple CALL macro raises noTupleMacroOutsideReturn instead).
+// Returning a LuaTuple VALUE (array literal or variable) must likewise spread
+// — array members inline (`return a, b`), anything else through
+// `return unpack(exp)`. A return blocked by a try statement (L51-63) reroutes
+// as `return TS.TRY_RETURN, { <value(s)> }` — the values are ALWAYS boxed in
+// an array literal (LuaTuple multi-returns spread as array MEMBERS); the
+// unbox happens at the consumer (transformFlowControl).
 func transformReturnStatementInner(s *State, returnExp *ast.Node) *luau.List[luau.Statement] {
 	result := luau.NewList[luau.Statement]()
 
@@ -419,16 +414,38 @@ func transformReturnStatementInner(s *State, returnExp *ast.Node) *luau.List[lua
 		}
 	}
 
-	result.Push(luau.NewReturn(expression))
+	if isReturnBlockedByTryStatement(returnExp) {
+		s.MarkTryUsesReturn()
+		var members *luau.List[luau.Expression]
+		if list, ok := expression.(*luau.List[luau.Expression]); ok {
+			members = list
+		} else {
+			members = luau.NewList[luau.Expression](expression.(luau.Expression))
+		}
+		result.Push(luau.NewReturn(luau.NewList[luau.Expression](
+			s.RuntimeLib(returnExp, "TRY_RETURN"),
+			luau.NewArray(members),
+		)))
+	} else {
+		result.Push(luau.NewReturn(expression))
+	}
 	return result
 }
 
 // transformReturnStatement ports transformReturnStatement (L71-84): a bare
 // `return` emits an explicit `return nil` (preserving JS `undefined`), never
-// a bare Luau `return`.
+// a bare Luau `return` — unless blocked by a try statement, in which case it
+// reroutes as `return TS.TRY_RETURN, {}`.
 func transformReturnStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	expression := node.AsReturnStatement().Expression
 	if expression == nil {
+		if isReturnBlockedByTryStatement(node) {
+			s.MarkTryUsesReturn()
+			return luau.NewList[luau.Statement](luau.NewReturn(luau.NewList[luau.Expression](
+				s.RuntimeLib(node, "TRY_RETURN"),
+				luau.NewArray(luau.NewList[luau.Expression]()),
+			)))
+		}
 		return luau.NewList[luau.Statement](luau.NewReturn(luau.Nil()))
 	}
 	return transformReturnStatementInner(s, expression)
@@ -440,21 +457,32 @@ func transformReturnStatement(s *State, node *ast.Node) *luau.List[luau.Statemen
 // ---------------------------------------------------------------------------
 
 // transformBreakStatement ports transformBreakStatement.ts (L8-25). Labeled
-// break is banned; try-blocked rerouting is a no-op (see NOTE above).
+// break is banned; a break blocked by a try statement (nearest-of try vs
+// loop-or-switch) reroutes as `return TS.TRY_BREAK` and marks the enclosing
+// try's TryUses.
 func transformBreakStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	if label := node.AsBreakStatement().Label; label != nil {
 		s.Diags.Add(DiagNoLabeledStatement(label))
 		return luau.NewList[luau.Statement]()
 	}
+	if isBreakBlockedByTryStatement(node) {
+		s.MarkTryUsesBreak()
+		return luau.NewList[luau.Statement](luau.NewReturn(s.RuntimeLib(node, "TRY_BREAK")))
+	}
 	return luau.NewList[luau.Statement](luau.NewBreak())
 }
 
 // transformContinueStatement ports transformContinueStatement.ts (L8-25):
-// identical shape — Luau has native `continue`.
+// identical shape — Luau has native `continue`; the try-blocked reroute emits
+// `return TS.TRY_CONTINUE`.
 func transformContinueStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	if label := node.AsContinueStatement().Label; label != nil {
 		s.Diags.Add(DiagNoLabeledStatement(label))
 		return luau.NewList[luau.Statement]()
+	}
+	if isBreakBlockedByTryStatement(node) {
+		s.MarkTryUsesContinue()
+		return luau.NewList[luau.Statement](luau.NewReturn(s.RuntimeLib(node, "TRY_CONTINUE")))
 	}
 	return luau.NewList[luau.Statement](luau.NewContinue())
 }
