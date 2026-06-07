@@ -1,14 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"rotor/internal/compile"
+	"rotor/internal/logservice"
 	"rotor/internal/transformer"
 )
 
@@ -20,107 +21,217 @@ var projectTypeChoices = map[string]transformer.ProjectType{
 	string(transformer.ProjectTypePackage): transformer.ProjectTypePackage,
 }
 
-// cmdBuild is the compile-to-disk command: CompileProject over the given
-// directory, outputs written under the project per the PathTranslator
-// (tsconfig outDir), plus the runtime library copy into the include folder
-// (upstream copyInclude.ts via internal/includefiles, controlled by
-// --noInclude / --includePath like rbxtsc's CLI/commands/build.ts L77-80,
-// L102-106) and the --type ProjectType override (build.ts L98-101). The rest
-// of the rbxtsc build surface — watch, incremental, --luau flag, .d.ts emit —
-// is later Phase 4 work.
-func cmdBuild(args []string) int {
-	path := ""
-	noInclude := false
-	includePath := ""
-	var projectType transformer.ProjectType
+// buildArgs is the parsed `rotor build` argv: the project path (the only
+// option with a default — "DO NOT PROVIDE DEFAULTS BELOW HERE",
+// CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
+// flags the user passed.
+type buildArgs struct {
+	project string
+	opts    partialProjectOptions
+	help    bool
+	version bool
+}
+
+// parseBuildArgs parses the rbxtsc-compatible `build` flag surface
+// (CLI/commands/build.ts L49-118). Booleans accept `--flag`, `--flag=bool`,
+// and the yargs-17 negation `--no-flag`; strings accept `--flag value` and
+// `--flag=value` (a missing value parses as "", like yargs — load-bearing
+// for the `--rojo` empty-string fall-through quirk). `--usePolling` implies
+// `--watch`: yargs errors when usePolling appears in argv without watch.
+// As rotor sugar (kept from the earlier CLI), one positional argument is
+// accepted as the project path.
+func parseBuildArgs(args []string) (*buildArgs, error) {
+	res := &buildArgs{project: "."} // yargs default: --project "."
+	positional := ""
+	projectSet := false
+
+	boolTargets := func(name string) **bool {
+		switch name {
+		case "watch", "w":
+			return &res.opts.watch
+		case "usePolling":
+			return &res.opts.usePolling
+		case "verbose":
+			return &res.opts.verbose
+		case "noInclude":
+			return &res.opts.noInclude
+		case "logTruthyChanges":
+			return &res.opts.logTruthyChanges
+		case "writeOnlyChanged":
+			return &res.opts.writeOnlyChanged
+		case "writeTransformedFiles":
+			return &res.opts.writeTransformedFiles
+		case "optimizedLoops":
+			return &res.opts.optimizedLoops
+		case "allowCommentDirectives":
+			return &res.opts.allowCommentDirectives
+		case "luau":
+			return &res.opts.luau
+		}
+		return nil
+	}
+
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-
-		// --includePath/-i takes a value, as `--includePath <path>` or
-		// `--includePath=<path>` (yargs accepts both; the -i alias is
-		// upstream's, CLI/commands/build.ts L102-106).
-		if a == "--includePath" || a == "-i" {
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor build: %s requires a path argument\n\n", a)
-				usage(os.Stderr)
-				return 2
-			}
-			i++
-			includePath = args[i]
-			continue
-		}
-		if v, ok := strings.CutPrefix(a, "--includePath="); ok {
-			includePath = v
-			continue
-		}
-
-		// --type overrides ProjectType inference, as upstream
-		// (CLI/commands/build.ts L98-101 feeding compileFiles.ts L80).
-		// Accepts `--type <v>` and `--type=<v>`.
-		typeValue := ""
-		hasTypeValue := false
-		switch {
-		case a == "--type":
-			if i+1 >= len(args) {
-				fmt.Fprint(os.Stderr, "rotor build: --type requires a value (game, model, or package)\n\n")
-				usage(os.Stderr)
-				return 2
-			}
-			i++
-			typeValue = args[i]
-			hasTypeValue = true
-		case strings.HasPrefix(a, "--type="):
-			typeValue = strings.TrimPrefix(a, "--type=")
-			hasTypeValue = true
-		}
-		if hasTypeValue {
-			pt, ok := projectTypeChoices[typeValue]
-			if !ok {
-				fmt.Fprintf(os.Stderr, "rotor build: invalid --type %q (choices: game, model, package)\n\n", typeValue)
-				usage(os.Stderr)
-				return 2
-			}
-			projectType = pt
-			continue
-		}
-
 		switch a {
-		case "--noInclude":
-			noInclude = true
 		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "rotor build: unknown flag %q\n\n", a)
-				usage(os.Stderr)
-				return 2
-			}
-			if path != "" {
-				fmt.Fprintf(os.Stderr, "rotor build: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 2
-			}
-			path = a
+			res.help = true
+			return res, nil
+		case "-v", "--version":
+			res.version = true
+			return res, nil
 		}
-	}
-	if path == "" {
-		path = "."
+
+		if !strings.HasPrefix(a, "-") {
+			if positional != "" {
+				return nil, fmt.Errorf("unexpected extra argument %q", a)
+			}
+			positional = a
+			continue
+		}
+
+		// Split --name=value / alias normalization.
+		name := strings.TrimLeft(a, "-")
+		value, hasValue := "", false
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			value, name = name[eq+1:], name[:eq]
+			hasValue = true
+		}
+
+		// takeValue consumes the next argv entry as a string value; a
+		// missing/flag-like next token yields "" (yargs string options).
+		takeValue := func() string {
+			if hasValue {
+				return value
+			}
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				return args[i]
+			}
+			return ""
+		}
+
+		switch name {
+		case "project", "p":
+			res.project = takeValue()
+			projectSet = true
+			continue
+		case "includePath", "i":
+			v := takeValue()
+			res.opts.includePath = &v
+			continue
+		case "rojo":
+			v := takeValue()
+			res.opts.rojo = &v
+			continue
+		case "type":
+			v := takeValue()
+			if _, ok := projectTypeChoices[v]; !ok {
+				return nil, fmt.Errorf("invalid --type %q (choices: game, model, package)", v)
+			}
+			res.opts.typeName = &v
+			continue
+		}
+
+		// Boolean flags: --flag / --flag=bool / --no-flag.
+		negated := false
+		if rest, ok := strings.CutPrefix(name, "no-"); ok {
+			name, negated = rest, true
+		}
+		if target := boolTargets(name); target != nil {
+			b := !negated
+			if hasValue {
+				switch value {
+				case "true", "1":
+					b = true
+				case "false", "0":
+					b = false
+				default:
+					return nil, fmt.Errorf("invalid boolean value %q for --%s", value, name)
+				}
+				if negated {
+					b = !b
+				}
+			}
+			*target = &b
+			continue
+		}
+
+		return nil, fmt.Errorf("unknown flag %q", a)
 	}
 
-	dir, err := filepath.Abs(path)
+	if projectSet && positional != "" {
+		return nil, fmt.Errorf("unexpected extra argument %q (project already set via --project)", positional)
+	}
+	if positional != "" {
+		res.project = positional
+	}
+
+	// yargs `implies: "watch"` (build.ts L68-72): --usePolling present in
+	// argv without --watch is a usage error.
+	if res.opts.usePolling != nil && res.opts.watch == nil {
+		return nil, errors.New("--usePolling requires --watch (usePolling implies watch)")
+	}
+
+	return res, nil
+}
+
+// cmdBuild is the compile-to-disk command, porting the rbxtsc build handler
+// (CLI/commands/build.ts L120-167): find the tsconfig (file path or upward
+// search), merge ProjectOptions (defaults < tsconfig `rbxts` key < argv),
+// set LogService verbosity, then compile and write outputs.
+//
+// Flag wiring status: --type/--noInclude/--includePath/--rojo/--luau/
+// --logTruthyChanges/--optimizedLoops/--allowCommentDirectives/--verbose are
+// live; --writeOnlyChanged now runs inside the compile package's output
+// pipeline; --watch/
+// --usePolling drive the polling watch loop;
+// --writeTransformedFiles is parsed and ignored (rbxtsc plugin debug output —
+// out of v1 scope).
+//
+// Exit-code policy: usage errors exit 1, matching upstream
+// (`.fail(...)` sets exitCode 1, CLI/cli.ts L30-35 — rotor's earlier exit 2
+// convention was a documented divergence, removed in Phase 4).
+func cmdBuild(args []string) int {
+	parsed, err := parseBuildArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: cannot resolve path %q: %v\n", path, err)
-		return 2
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n\n", err)
+		usage(os.Stderr)
+		return 1
 	}
-	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "rotor build: %s is not a directory\n", dir)
-		return 2
+	if parsed.help {
+		usage(os.Stdout)
+		return 0
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, "tsconfig.json")); statErr != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: no tsconfig.json found in %s\n", dir)
-		return 2
+	if parsed.version {
+		fmt.Println(version)
+		return 0
 	}
+
+	tsConfigPath, err := findTsConfigPath(parsed.project)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		return 1
+	}
+
+	// Merge order (build.ts L125-130): defaults < tsconfig `rbxts` key <
+	// argv. Absent CLI booleans (nil) never clobber `rbxts` values.
+	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &parsed.opts)
+
+	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
+	logservice.Verbose = opts.verbose
+
+	// Upstream projectPath = path.dirname(tsConfigPath)
+	// (createProjectData.ts L13).
+	dir := filepath.Dir(tsConfigPath)
+
+	if opts.writeTransformedFiles {
+		logservice.Warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
+	}
+	if opts.watch {
+		return runBuildWatch(dir, tsConfigPath, opts)
+	}
+
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
 		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr != nil {
 			fmt.Fprintf(os.Stderr,
@@ -129,16 +240,7 @@ func cmdBuild(args []string) int {
 		}
 	}
 
-	// Real builds carry rotor's own header; the upstream-header default is
-	// only load-bearing for differential byte-comparison in tests.
-	transformer.HeaderComment = " Compiled with rotor v" + version
-
-	start := time.Now()
-	results, diags, err := compile.CompileProjectWithOptions(dir, compile.ProjectOptions{
-		IncludePath:      includePath,
-		EmitIncludeFiles: !noInclude,
-		Type:             projectType,
-	})
+	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
 	if err != nil {
 		for _, d := range diags {
 			fmt.Fprintln(os.Stderr, d)
@@ -147,26 +249,30 @@ func cmdBuild(args []string) int {
 		return 1
 	}
 
-	// Deterministic write order (CompileProject returns a map).
-	outPaths := make([]string, 0, len(results))
-	for relOut := range results {
-		outPaths = append(outPaths, relOut)
-	}
-	sort.Strings(outPaths)
-
-	for _, relOut := range outPaths {
-		absOut := filepath.Join(dir, filepath.FromSlash(relOut))
-		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
-			return 1
-		}
-		if err := os.WriteFile(absOut, []byte(results[relOut]), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
-			return 1
-		}
-		fmt.Println(relOut)
-	}
-
-	fmt.Printf("compiled %d files in %d ms\n", len(outPaths), time.Since(start).Milliseconds())
+	// rotor's own summary line (rbxtsc 3.0.0 prints no total — deliberate UX
+	// addition, via LogService so partial-line tracking holds).
+	logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
+		len(result.Outputs), len(result.EmittedFiles), elapsed.Milliseconds()))
 	return 0
+}
+
+func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []string, time.Duration, error) {
+	// Real builds carry rotor's own header; the upstream-header default is
+	// only load-bearing for differential byte-comparison in tests.
+	transformer.HeaderComment = " Compiled with rotor v" + version
+
+	start := time.Now()
+	result, diags, err := compile.BuildProjectWithOptions(dir, compile.ProjectOptions{
+		TsConfigPath:           tsConfigPath,
+		IncludePath:            opts.includePath,
+		EmitIncludeFiles:       !opts.noInclude,
+		Type:                   transformer.ProjectType(opts.typeName),
+		RojoConfigPath:         opts.rojo,
+		LogTruthyChanges:       opts.logTruthyChanges,
+		AllowCommentDirectives: opts.allowCommentDirectives,
+		NoOptimizedLoops:       !opts.optimizedLoops,
+		LuaExtension:           !opts.luau,
+		WriteOnlyChanged:       opts.writeOnlyChanged,
+	})
+	return result, diags, time.Since(start), err
 }

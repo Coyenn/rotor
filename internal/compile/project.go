@@ -4,18 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
-	"rotor/internal/includefiles"
+	"rotor/internal/logservice"
 	"rotor/internal/rojo"
 	"rotor/internal/transformer"
+	"rotor/tsgo/ast"
 	"rotor/tsgo/bundled"
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
+	"rotor/tsgo/outputpaths"
 	"rotor/tsgo/tsoptions"
+	"rotor/tsgo/tspath"
 	"rotor/tsgo/vfs/osvfs"
 )
 
@@ -48,17 +52,27 @@ type projectContext struct {
 
 // newProjectProgram builds the tsgo Program for projectDir over the sanitized
 // config — the shared front half of CompileFile and CompileProject.
-func newProjectProgram(projectDir string) (string, *compiler.Program, []string, error) {
+// tsConfigPath selects a custom config file ("" = projectDir/tsconfig.json;
+// upstream `--project` may name any config file, CLI/commands/build.ts
+// L31-40).
+func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Program, []string, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return "", nil, nil, err
 	}
 	dir = filepath.ToSlash(dir)
 
-	fs := SanitizeFS(bundled.WrapFS(osvfs.FS()))
-	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
-
 	configPath := dir + "/tsconfig.json"
+	if tsConfigPath != "" {
+		abs, err := filepath.Abs(tsConfigPath)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		configPath = filepath.ToSlash(abs)
+	}
+
+	fs := SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath)
+	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
 	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
 	if len(configDiags) > 0 {
 		return "", nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
@@ -162,10 +176,24 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		return nil, nil, err
 	}
 
-	// Upstream logs FindRojoConfigFilePath/resolver warnings via
-	// LogService.warn and proceeds; rotor has no warning channel here yet, so
-	// they are intentionally dropped (they never fail a compile upstream).
-	rojoConfigPath, _ := rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
+	// createProjectData.ts L33-43: a truthy --rojo overrides discovery
+	// (path.resolve'd); QUIRK: `--rojo ""` (empty string) falls through to
+	// auto-discovery, whose warnings go to LogService.warn (they never fail a
+	// compile upstream).
+	var rojoConfigPath string
+	if opts.RojoConfigPath != "" {
+		abs, err := filepath.Abs(filepath.FromSlash(opts.RojoConfigPath))
+		if err != nil {
+			return nil, nil, err
+		}
+		rojoConfigPath = abs
+	} else {
+		var rojoWarnings []string
+		rojoConfigPath, rojoWarnings = rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
+		for _, warning := range rojoWarnings {
+			logservice.Warn(warning)
+		}
+	}
 
 	// compileFiles.ts L61-63.
 	var rojoResolver *rojo.RojoResolver
@@ -175,7 +203,12 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		rojoResolver = rojo.Synthetic(filepath.FromSlash(outDir))
 	}
 
-	pathTranslator := createPathTranslator(program)
+	// compileFiles.ts L65-67: resolver parse warnings → LogService.warn.
+	for _, warning := range rojoResolver.GetWarnings() {
+		logservice.Warn(warning)
+	}
+
+	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
 
 	// checkRojoConfig + checkFileName queue project-level diagnostics
 	// (compileFiles.ts L69-75); upstream flushes them only after the emit
@@ -333,6 +366,47 @@ type ProjectOptions struct {
 	// L80), fed by the `--type` CLI flag (CLI/commands/build.ts L98-101,
 	// choices game|model|package). Empty means infer.
 	Type transformer.ProjectType
+
+	// TsConfigPath selects a custom config file (the CLI's --project may
+	// resolve to any file path, CLI/commands/build.ts L31-40). "" means
+	// <projectDir>/tsconfig.json — the original CompileProject behavior.
+	TsConfigPath string
+
+	// RojoConfigPath is the --rojo override (createProjectData.ts L33-43):
+	// non-empty values are path.resolve'd and used verbatim; QUIRK verbatim
+	// from upstream's truthiness check, "" (including an explicit `--rojo ""`)
+	// falls through to auto-discovery.
+	RojoConfigPath string
+
+	// LogTruthyChanges plumbs --logTruthyChanges into the transformer's
+	// truthiness warnings (State.LogTruthyChanges, consumed by
+	// createTruthinessChecks).
+	LogTruthyChanges bool
+
+	// AllowCommentDirectives plumbs --allowCommentDirectives. Its consumer —
+	// the fileUsesCommentDirectives pre-emit check (digest §2.9) — is Phase 4
+	// Task 2 work; until then the option is carried but nothing reads it (the
+	// @ts-ignore diagnostics it would suppress are not yet emitted either, so
+	// behavior already matches allowCommentDirectives=true).
+	AllowCommentDirectives bool
+
+	// NoOptimizedLoops is the INVERSE of upstream optimizedLoops (default
+	// true, DEFAULT_PROJECT_OPTIONS), inverted so this struct's zero value
+	// keeps the upstream-default (optimized) behavior for all existing
+	// callers. Set from `--optimizedLoops=false`; gates
+	// transformForStatementOptimized via State.OptimizedLoops.
+	NoOptimizedLoops bool
+
+	// LuaExtension is the INVERSE of upstream luau (default true), inverted
+	// for the same zero-value reason: zero emits `.luau`
+	// (DEFAULT_PROJECT_OPTIONS.luau = true); set from `--luau=false` to emit
+	// `.lua` (createPathTranslator.ts L17).
+	LuaExtension bool
+
+	// WriteOnlyChanged ports the build write-phase and copyItem byte-compare
+	// skip: unchanged compiled outputs and copied passthrough files are left
+	// untouched on disk.
+	WriteOnlyChanged bool
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -355,32 +429,17 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 // project validation or per-file diagnostics, so type errors in source files
 // do not stop the runtime library from landing.
 func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[string]string, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir)
+	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
 	if err != nil {
 		return nil, diags, err
 	}
-
-	// copyInclude.ts L6-16: skip when --noInclude (EmitIncludeFiles false
-	// here) or the project compiles as a Package — the full upstream gate
-	// `type !== Package && !(type === undefined && isPackage)`: an explicit
-	// --type game/model copies even into scoped-name packages; an explicit
-	// --type package never copies.
-	if opts.EmitIncludeFiles && opts.Type != transformer.ProjectTypePackage {
-		_, isPackage, err := projectIsPackage(dir)
-		if err != nil {
-			return nil, nil, err
-		}
-		if opts.Type != "" || !isPackage {
-			includePath, err := resolveIncludePath(dir, opts.IncludePath)
-			if err != nil {
-				return nil, nil, err
-			}
-			if err := includefiles.Copy(includePath); err != nil {
-				return nil, nil, err
-			}
-		}
+	if err := maybeCopyInclude(dir, opts); err != nil {
+		return nil, nil, err
 	}
+	return compileProjectProgram(dir, program, opts)
+}
 
+func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []string, error) {
 	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
 		return nil, diags, err
@@ -393,54 +452,100 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 		return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
+	// compileFiles.ts L102 — note the TWO dots.
+	logservice.WriteLineIfVerbose("compiling as " + string(pctx.projectType) + "..")
+
 	chk, release := program.GetTypeChecker(ctx)
 	defer release()
 	multi := transformer.NewMultiState()
 
-	results := make(map[string]string)
+	// Upstream compiles the root source files (getChangedSourceFiles filters
+	// declaration and JSON files; node_modules/lib files are declaration
+	// files and drop out the same way). Collected up front so the verbose
+	// progress fraction knows the total (compileFiles.ts L105).
+	var sourceFiles []*ast.SourceFile
 	for _, sourceFile := range program.SourceFiles() {
-		// Upstream compiles the root source files (getChangedSourceFiles
-		// filters declaration and JSON files; node_modules/lib files are
-		// declaration files and drop out the same way).
 		fileName := sourceFile.FileName()
 		if sourceFile.IsDeclarationFile ||
 			(!strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx")) {
 			continue
 		}
+		sourceFiles = append(sourceFiles, sourceFile)
+	}
+	progressMaxLength := len(fmt.Sprintf("%d/%d", len(sourceFiles), len(sourceFiles)))
+	cwd, cwdErr := os.Getwd()
 
-		// Per-file pre-emit diagnostics (syntactic + semantic + checker
-		// globals); the first file with errors aborts the pass
-		// (compileFiles.ts L156-158 + the hasErrors early return). Running
-		// the semantic pass before transforming also populates the checker's
-		// alias-reference marks for this file (digest §7.3).
-		if tsDiags := preEmitDiagnostics(ctx, program, sourceFile); len(tsDiags) > 0 {
-			return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
-		}
+	results := make(map[string]string)
+	for i, sourceFile := range sourceFiles {
+		fileName := sourceFile.FileName()
 
-		state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
-		// Macro registration audit (digest §6), mirroring upstream's
-		// ProjectError-at-construction: the first NewState built the pass
-		// MacroManager; fail before transforming anything when registrations
-		// are missing while the types packages are present.
-		if missing := state.Macros().Missing(); len(missing) > 0 {
-			return nil, missing, errors.New("compile: macro registration failure")
-		}
-		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
-
-		text, fileDiags, err := transformAndRender(state)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(fileDiags) > 0 {
-			return nil, fileDiags, errors.New("compile: transformer diagnostics")
+		// Per-file verbose benchmark line (compileFiles.ts L154-155):
+		// `${i+1}/${total} compile ${path.relative(cwd, fileName)}` with the
+		// fraction padStart'ed to len("total/total").
+		progress := fmt.Sprintf("%*s", progressMaxLength, fmt.Sprintf("%d/%d", i+1, len(sourceFiles)))
+		relName := filepath.FromSlash(fileName)
+		if cwdErr == nil {
+			if rel, err := filepath.Rel(cwd, relName); err == nil {
+				relName = rel
+			}
 		}
 
-		outPath := pctx.rojoContext.PathTranslator.GetOutputPath(fileName)
-		relOut, err := filepath.Rel(filepath.FromSlash(dir), outPath)
-		if err != nil {
-			relOut = outPath
+		var fileDiags []string
+		var fileErr error
+		logservice.BenchmarkIfVerbose(progress+" compile "+relName, func() {
+			// Per-file pre-emit diagnostics (syntactic + semantic + checker
+			// globals); the first file with errors aborts the pass
+			// (compileFiles.ts L156-158 + the hasErrors early return). Running
+			// the semantic pass before transforming also populates the
+			// checker's alias-reference marks for this file (digest §7.3).
+			if tsDiags := preEmitDiagnostics(ctx, program, sourceFile); len(tsDiags) > 0 {
+				fileDiags = diagnosticStrings(tsDiags)
+				fileErr = errors.New("compile: TypeScript diagnostics")
+				return
+			}
+			if !opts.AllowCommentDirectives {
+				if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
+					fileDiags = diags
+					fileErr = errors.New("compile: comment directive diagnostics")
+					return
+				}
+			}
+
+			state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
+			// Macro registration audit (digest §6), mirroring upstream's
+			// ProjectError-at-construction: the first NewState built the pass
+			// MacroManager; fail before transforming anything when
+			// registrations are missing while the types packages are present.
+			if missing := state.Macros().Missing(); len(missing) > 0 {
+				fileDiags = missing
+				fileErr = errors.New("compile: macro registration failure")
+				return
+			}
+			state.SetRojoContext(pctx.rojoContext, pctx.projectType)
+			state.LogTruthyChanges = opts.LogTruthyChanges
+			state.OptimizedLoops = !opts.NoOptimizedLoops
+
+			text, tDiags, err := transformAndRender(state)
+			if err != nil {
+				fileErr = err
+				return
+			}
+			if len(tDiags) > 0 {
+				fileDiags = tDiags
+				fileErr = errors.New("compile: transformer diagnostics")
+				return
+			}
+
+			outPath := pctx.rojoContext.PathTranslator.GetOutputPath(fileName)
+			relOut, err := filepath.Rel(filepath.FromSlash(dir), outPath)
+			if err != nil {
+				relOut = outPath
+			}
+			results[filepath.ToSlash(relOut)] = text
+		})
+		if fileErr != nil {
+			return nil, fileDiags, fileErr
 		}
-		results[filepath.ToSlash(relOut)] = text
 	}
 
 	return results, nil, nil
@@ -449,14 +554,23 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 // createPathTranslator ports Project/functions/createPathTranslator.ts:
 // rootDir is the common ancestor of the program's common source directory and
 // the configured rootDir(s); the buildInfo path is irrelevant to translation
-// (the translator stores but never consults it) and rotor always emits the
-// .luau extension (DEFAULT_PROJECT_OPTIONS.luau = true).
-func createPathTranslator(program *compiler.Program) *rojo.PathTranslator {
+// (the translator stores but never consults it). useLuauExtension is
+// upstream's `data.projectOptions.luau` (createPathTranslator.ts L17,
+// DEFAULT_PROJECT_OPTIONS.luau = true → .luau; --luau=false → .lua).
+func createPathTranslator(program *compiler.Program, useLuauExtension bool) *rojo.PathTranslator {
 	options := program.Options()
 	dirs := append([]string{program.CommonSourceDirectory()}, getRootDirs(program)...)
 	rootDir := findAncestorDir(dirs)
 	outDir := filepath.FromSlash(options.OutDir)
-	return rojo.NewPathTranslator(rootDir, outDir, "", options.Declaration.IsTrue(), true)
+	currentDirectory := rootDir
+	if options.ConfigFilePath != "" {
+		currentDirectory = filepath.Dir(filepath.FromSlash(options.ConfigFilePath))
+	}
+	buildInfoOutputPath := outputpaths.GetBuildInfoFileName(options, tspath.ComparePathsOptions{
+		CurrentDirectory:          currentDirectory,
+		UseCaseSensitiveFileNames: osvfs.FS().UseCaseSensitiveFileNames(),
+	})
+	return rojo.NewPathTranslator(rootDir, outDir, filepath.FromSlash(buildInfoOutputPath), options.Declaration.IsTrue(), useLuauExtension)
 }
 
 // rawEnforcedOptions carries the user-written values of the compilerOptions

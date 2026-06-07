@@ -24,13 +24,22 @@ import (
 // still hard-errors on it. Acceptable for now — rbxts projects keep these
 // options in the root tsconfig.json.
 func SanitizeFS(inner vfs.FS) vfs.FS {
+	return SanitizeFSWithConfigPath(inner, "")
+}
+
+// SanitizeFSWithConfigPath is SanitizeFS that additionally sanitizes the
+// exact (slash-separated, absolute) config file path — needed when
+// `--project` points at a config file NOT named tsconfig.json (upstream
+// findTsConfigPath accepts any file path, CLI/commands/build.ts L31-40).
+// An empty configPath adds nothing.
+func SanitizeFSWithConfigPath(inner vfs.FS, configPath string) vfs.FS {
 	return wrapvfs.Wrap(inner, wrapvfs.Replacements{
 		ReadFile: func(path string) (string, bool) {
 			contents, ok := inner.ReadFile(path)
 			if !ok {
 				return contents, ok
 			}
-			if isTSConfigPath(path) {
+			if isTSConfigPath(path) || (configPath != "" && path == configPath) {
 				return SanitizeTSConfig(contents), true
 			}
 			if isCompilerTypesDTSPath(path) {
@@ -277,6 +286,13 @@ func isAbsolutePathText(s string) bool {
 	}
 	return len(s) >= 2 && s[1] == ':' &&
 		(('a' <= s[0] && s[0] <= 'z') || ('A' <= s[0] && s[0] <= 'Z'))
+}
+
+// StripJSONC exposes the JSONC stripper to other packages: the CLI's raw
+// `rbxts` tsconfig-key read (CLI/commands/build.ts L22-29) mirrors upstream's
+// ts.parseConfigFileTextToJson, which accepts comments and trailing commas.
+func StripJSONC(src string) string {
+	return stripJSONC(src)
 }
 
 // stripJSONC removes // line comments, /* */ block comments, and trailing

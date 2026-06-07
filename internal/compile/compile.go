@@ -16,6 +16,15 @@ import (
 	"rotor/tsgo/compiler"
 )
 
+// DiagnosticInfo carries the structured form of a compile diagnostic. Rotor
+// transformer diagnostics include a stable upstream-style Code (for example
+// "noAny"); TypeScript diagnostics leave Code empty and only populate Message.
+type DiagnosticInfo struct {
+	Code    string
+	Message string
+	Warning bool
+}
+
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
 // rendered text, any diagnostics as strings (TypeScript config/option/
 // semantic diagnostics, project-validation failures, or transformer
@@ -29,13 +38,33 @@ import (
 // the requested file, so per-fixture tests stay isolated and fast. The diff
 // harness migrates to CompileProject (Phase 3a Task 6).
 func CompileFile(projectDir, relPath string) (string, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir)
+	text, diags, err := CompileFileDetailed(projectDir, relPath)
+	return text, diagnosticInfoMessages(diags), err
+}
+
+// CompileFileDetailed is CompileFile's structured sibling. It preserves
+// transformer diagnostic codes so higher-level conformance tests can assert
+// exact upstream diagnostic IDs instead of scraping message text.
+func CompileFileDetailed(projectDir, relPath string) (string, []DiagnosticInfo, error) {
+	return CompileFileDetailedWithOptions(projectDir, relPath, ProjectOptions{})
+}
+
+// CompileFileWithOptions is CompileFile with ProjectOptions plumbed through
+// the project-layer setup.
+func CompileFileWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []string, error) {
+	text, diags, err := CompileFileDetailedWithOptions(projectDir, relPath, opts)
+	return text, diagnosticInfoMessages(diags), err
+}
+
+// CompileFileDetailedWithOptions is the options-aware single-file fast path.
+func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []DiagnosticInfo, error) {
+	dir, program, diags, err := newProjectProgram(projectDir, "")
 	if err != nil {
-		return "", diags, err
+		return "", stringDiagnostics(diags), err
 	}
-	pctx, diags, err := newProjectContext(dir, program, ProjectOptions{})
+	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
-		return "", diags, err
+		return "", stringDiagnostics(diags), err
 	}
 	ctx := context.Background()
 
@@ -52,7 +81,12 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	tsDiags := program.GetProgramDiagnostics()
 	tsDiags = append(tsDiags, preEmitDiagnostics(ctx, program, sourceFile)...)
 	if len(tsDiags) > 0 {
-		return "", diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return "", tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+	}
+	if !opts.AllowCommentDirectives {
+		if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
+			return "", stringDiagnostics(diags), errors.New("compile: comment directive diagnostics")
+		}
 	}
 
 	chk, release := program.GetTypeChecker(ctx)
@@ -64,10 +98,10 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	// name fails to resolve; rotor fails the compile here with the same
 	// texts (sentinel-gated — see MacroManager.Missing).
 	if missing := state.Macros().Missing(); len(missing) > 0 {
-		return "", missing, errors.New("compile: macro registration failure")
+		return "", stringDiagnostics(missing), errors.New("compile: macro registration failure")
 	}
 	state.SetRojoContext(pctx.rojoContext, pctx.projectType)
-	return transformAndRender(state)
+	return transformAndRenderDetailed(state)
 }
 
 // transformAndRender runs the transformer and renderer behind a recover
@@ -75,6 +109,11 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 // upstream asserts — missing symbols, prereq-stack misuse), and a user's
 // source must surface as an error, never crash the process.
 func transformAndRender(state *transformer.State) (text string, diags []string, err error) {
+	text, infos, err := transformAndRenderDetailed(state)
+	return text, diagnosticInfoMessages(infos), err
+}
+
+func transformAndRenderDetailed(state *transformer.State) (text string, diags []DiagnosticInfo, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			text = ""
@@ -87,7 +126,11 @@ func transformAndRender(state *transformer.State) (text string, diags []string, 
 
 	hasErrors := state.Diags.HasErrors()
 	for _, d := range state.Diags.Flush() {
-		diags = append(diags, d.Message)
+		diags = append(diags, DiagnosticInfo{
+			Code:    d.Code,
+			Message: d.Message,
+			Warning: d.Warning,
+		})
 	}
 	if hasErrors {
 		// Upstream bails before rendering when the transformer reported
@@ -124,4 +167,44 @@ func diagnosticStrings(diags []*ast.Diagnostic) []string {
 		out[i] = d.String()
 	}
 	return out
+}
+
+func diagnosticInfoMessages(diags []DiagnosticInfo) []string {
+	out := make([]string, len(diags))
+	for i, d := range diags {
+		out[i] = d.Message
+	}
+	return out
+}
+
+func stringDiagnostics(diags []string) []DiagnosticInfo {
+	out := make([]DiagnosticInfo, len(diags))
+	for i, msg := range diags {
+		out[i] = DiagnosticInfo{Message: msg}
+	}
+	return out
+}
+
+func tsDiagnosticInfos(diags []*ast.Diagnostic) []DiagnosticInfo {
+	out := make([]DiagnosticInfo, len(diags))
+	for i, d := range diags {
+		out[i] = DiagnosticInfo{Message: d.String()}
+	}
+	return out
+}
+
+func commentDirectiveDiagnostics(sourceFile *ast.SourceFile) []string {
+	count := len(sourceFile.CommentDirectives)
+	if ast.GetPragmaFromSourceFile(sourceFile, "ts-nocheck") != nil {
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	msg := transformer.DiagNoCommentDirectives(sourceFile.AsNode()).Message
+	diags := make([]string, count)
+	for i := range diags {
+		diags[i] = msg
+	}
+	return diags
 }

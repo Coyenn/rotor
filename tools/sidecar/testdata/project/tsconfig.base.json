@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "strict": true,
+    "skipLibCheck": true,
+    "plugins": [
+      {
+        "transform": "./plugins/prefix-string-named.js",
+        "import": "rawTransformer",
+        "type": "raw",
+        "prefix": "afterDeclarations",
+        "afterDeclarations": true
+      }
+    ]
+  },
+  "include": ["src/**/*.ts"]
+}
