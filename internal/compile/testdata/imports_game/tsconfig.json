@@ -3,6 +3,7 @@
 		"allowSyntheticDefaultImports": true,
 		"module": "CommonJS",
 		"moduleResolution": "Node",
+		"noLib": true,
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",

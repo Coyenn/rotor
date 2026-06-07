@@ -33,7 +33,7 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 	if err != nil {
 		return "", diags, err
 	}
-	pctx, diags, err := newProjectContext(dir, program)
+	pctx, diags, err := newProjectContext(dir, program, ProjectOptions{})
 	if err != nil {
 		return "", diags, err
 	}

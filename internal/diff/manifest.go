@@ -40,4 +40,12 @@ var EnabledFixtures = []string{
 	"29_iteration",
 	"30_optional",
 	"31_mixed3b",
+	"32_jsx",
+	"33_classes",
+	"34_decorators",
+	"35_spread",
+	"36_async",
+	"37_try",
+	"38_enums_namespaces",
+	"39_mixed3c",
 }

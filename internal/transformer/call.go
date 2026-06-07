@@ -301,9 +301,12 @@ func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expr
 	validateNotAnyType(s, call.Expression)
 
 	if ast.IsSuperCall(node) {
-		// super.constructor(self, ...) needs the class transforms: Phase 3.
-		s.Diags.Add(DiagRotorNotYetSupported(node, "`super` calls"))
-		return luau.NewNone()
+		// super(...) -> super.constructor(self, <args>)
+		return luau.NewCall(
+			luau.NewPropertyAccess(convertToIndexableExpression(expression), "constructor"),
+			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
+				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
+		)
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -345,8 +348,12 @@ func transformPropertyCallExpressionInner(s *State, node *ast.Node, expression *
 	validateNotAnyType(s, call.Expression)
 
 	if ast.IsSuperProperty(expression) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, "`super` calls"))
-		return luau.NewNone()
+		// QUIRK: super method calls pass self explicitly — dot-call, never `:`.
+		return luau.NewCall(
+			luau.NewPropertyAccess(convertToIndexableExpression(baseExpression), propertyAccess.Name().Text()),
+			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
+				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
+		)
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -411,8 +418,16 @@ func transformElementCallExpressionInner(s *State, node *ast.Node, expression *a
 	validateNotAnyType(s, call.Expression)
 
 	if ast.IsSuperProperty(expression) {
-		s.Diags.Add(DiagRotorNotYetSupported(node, "`super` calls"))
-		return luau.NewNone()
+		// QUIRK: no addOneIfArrayType here (upstream omits it for super
+		// element calls); self is explicit, never `:`.
+		return luau.NewCall(
+			luau.NewComputedIndex(
+				convertToIndexableExpression(baseExpression),
+				TransformExpression(s, elementAccess.ArgumentExpression),
+			),
+			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
+				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
+		)
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))

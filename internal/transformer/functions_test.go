@@ -119,22 +119,33 @@ func hasDiagnostic(ds []transformer.Diagnostic, code, messageSubstring string) b
 	return false
 }
 
-// TestAsyncFunctionDeclarationDiagnostic: async functions need TS.async
-// (runtime lib, Phase 3) — rotor must raise rotorNotYetSupported, never
-// silently emit a plain sync function.
-func TestAsyncFunctionDeclarationDiagnostic(t *testing.T) {
-	ds := transformExpectingDiagnostics(t, "src/asyncfn.ts")
-	if !hasDiagnostic(ds, "rotorNotYetSupported", "async functions") {
-		t.Errorf("no rotorNotYetSupported diagnostic for async function; got: %v", ds)
+// TestAsyncFunctionDeclaration: a localized async function declaration emits
+// `local f = TS.async(function() ... end)` — never a function statement
+// (async_test.go pins the hoisted/method/expression variants).
+func TestAsyncFunctionDeclaration(t *testing.T) {
+	want := `local fetchValue = TS.async(function()
+	return 1
+end)
+print(fetchValue())
+`
+	if got := renderFunctionsFile(t, "src/asyncfn.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-// TestGeneratorFunctionDeclarationDiagnostic: generators need TS.generator
-// (runtime lib, Phase 3).
-func TestGeneratorFunctionDeclarationDiagnostic(t *testing.T) {
-	ds := transformExpectingDiagnostics(t, "src/genfn.ts")
-	if !hasDiagnostic(ds, "rotorNotYetSupported", "generator functions") {
-		t.Errorf("no rotorNotYetSupported diagnostic for generator function; got: %v", ds)
+// TestGeneratorFunctionDeclaration: generator declarations stay real function
+// declarations; the body is swapped for `return TS.generator(function()
+// <body> end)`.
+func TestGeneratorFunctionDeclaration(t *testing.T) {
+	want := `local function gen()
+	return TS.generator(function()
+		coroutine.yield(1)
+	end)
+end
+print(gen())
+`
+	if got := renderFunctionsFile(t, "src/genfn.ts"); got != want {
+		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

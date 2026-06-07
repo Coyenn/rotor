@@ -69,9 +69,6 @@ func validateSpread(s *State, node *ast.Node) {
 }
 
 // validateMethodAssignment ports validateMethodAssignment.ts (L63-77).
-// The ClassElement arm (validateHeritageClause per ts.getAllSuperTypeNodes,
-// upstream L64-67) is class-only and lands with the class transforms — until
-// then no ClassElement with a ClassLike parent reaches a transform.
 func validateMethodAssignment(s *State, node *ast.Node) {
 	// Checker-free test states (parse-only literal tests) skip validation —
 	// upstream always has a checker (same pattern as State.AmbientSymbol).
@@ -79,7 +76,9 @@ func validateMethodAssignment(s *State, node *ast.Node) {
 		return
 	}
 	if ast.IsClassElement(node) && node.Parent != nil && ast.IsClassLike(node.Parent) && node.Name() != nil {
-		// Phase 3+: validateHeritageClause over getAllSuperTypeNodes(node.parent).
+		for _, typeNode := range getAllSuperTypeNodes(node.Parent) {
+			validateHeritageClause(s, node, typeNode)
+		}
 		return
 	}
 	if ast.IsObjectLiteralElement(node) {

@@ -44,10 +44,16 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformArrayLiteralExpression(s, node)
 	case ast.KindArrowFunction, ast.KindFunctionExpression:
 		return transformFunctionExpression(s, node)
+	case ast.KindAwaitExpression:
+		return transformAwaitExpression(s, node)
+	case ast.KindYieldExpression:
+		return transformYieldExpression(s, node)
 	case ast.KindBinaryExpression:
 		return transformBinaryExpression(s, node)
 	case ast.KindCallExpression:
 		return transformCallExpression(s, node)
+	case ast.KindClassExpression:
+		return transformClassExpression(s, node)
 	case ast.KindConditionalExpression:
 		return transformConditionalExpression(s, node)
 	case ast.KindElementAccessExpression:
@@ -60,6 +66,14 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return luau.Bool(true)
 	case ast.KindIdentifier:
 		return TransformIdentifier(s, node)
+	case ast.KindJsxElement:
+		return transformJsxElement(s, node)
+	case ast.KindJsxExpression:
+		return transformJsxExpression(s, node)
+	case ast.KindJsxFragment:
+		return transformJsxFragment(s, node)
+	case ast.KindJsxSelfClosingElement:
+		return transformJsxSelfClosingElement(s, node)
 	case ast.KindNewExpression:
 		return transformNewExpression(s, node)
 	case ast.KindNoSubstitutionTemplateLiteral:
@@ -74,10 +88,16 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformPostfixUnaryExpression(s, node)
 	case ast.KindPrefixUnaryExpression:
 		return transformPrefixUnaryExpression(s, node)
+	case ast.KindSpreadElement:
+		return transformSpreadElement(s, node)
 	case ast.KindStringLiteral:
 		return transformStringLiteral(s, node)
 	case ast.KindTemplateExpression:
 		return transformTemplateExpression(s, node)
+	case ast.KindThisKeyword:
+		return transformThisExpression(s, node)
+	case ast.KindSuperKeyword:
+		return transformSuperKeyword()
 
 	// type-only wrappers -> transformTypeExpression (inner expression)
 	case ast.KindAsExpression,
@@ -129,10 +149,14 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformBlock(s, node)
 	case ast.KindBreakStatement:
 		return transformBreakStatement(s, node)
+	case ast.KindClassDeclaration:
+		return transformClassDeclaration(s, node)
 	case ast.KindContinueStatement:
 		return transformContinueStatement(s, node)
 	case ast.KindDoStatement:
 		return transformDoStatement(s, node)
+	case ast.KindEnumDeclaration:
+		return transformEnumDeclaration(s, node)
 	case ast.KindExportAssignment:
 		return transformExportAssignment(s, node)
 	case ast.KindExportDeclaration:
@@ -149,12 +173,16 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformImportEqualsDeclaration(s, node)
 	case ast.KindIfStatement:
 		return transformIfStatement(s, node)
+	case ast.KindModuleDeclaration:
+		return transformModuleDeclaration(s, node)
 	case ast.KindReturnStatement:
 		return transformReturnStatement(s, node)
 	case ast.KindSwitchStatement:
 		return transformSwitchStatement(s, node)
 	case ast.KindThrowStatement:
 		return transformThrowStatement(s, node)
+	case ast.KindTryStatement:
+		return transformTryStatement(s, node)
 	case ast.KindVariableStatement:
 		return transformVariableStatement(s, node)
 	case ast.KindExpressionStatement:
@@ -163,9 +191,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformWhileStatement(s, node)
 	}
 
-	// Statement kinds not yet ported (classes, imports/exports, try/catch,
-	// ...) report a not-yet-supported diagnostic rather than emitting wrong
-	// output.
+	// Statement kinds not yet ported report a not-yet-supported diagnostic
+	// rather than emitting wrong output.
 	s.Diags.Add(DiagRotorNotYetSupported(node, kindName(node.Kind)))
 	return luau.NewList[luau.Statement]()
 }

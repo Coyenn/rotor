@@ -1,10 +1,14 @@
 package compile
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"rotor/internal/includefiles"
+	"rotor/internal/transformer"
 )
 
 // ----------------------------------------------------------------------------
@@ -149,11 +153,15 @@ func writeProject(t *testing.T, pkgName, rojoConfig string) string {
 	dir := t.TempDir()
 	tsconfig := `{
 	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
 		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",
 		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
 		"rootDir": "src",
 		"outDir": "out"
 	},
@@ -173,11 +181,22 @@ func writeProject(t *testing.T, pkgName, rojoConfig string) string {
 	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "globals.d.ts"), []byte(noLibGlobalStubs), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export {};\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir
 }
+
+// noLibGlobalStubs declares the fundamental global types the checker resolves
+// at initialization under noLib (@rbxts/compiler-types provides them in real
+// projects; stubbed so temp projects stay self-contained).
+const noLibGlobalStubs = "declare function print(...params: Array<unknown>): void;\n" +
+	"interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n" +
+	"interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n" +
+	"interface Number {}\ninterface Object {}\ninterface RegExp {}\ninterface String {}\n"
 
 func TestCompileProjectValidationFailures(t *testing.T) {
 	tests := []struct {
@@ -285,11 +304,15 @@ func TestCompileProjectMissingRootDirOutDir(t *testing.T) {
 	dir := t.TempDir()
 	tsconfig := `{
 	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
 		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",
-		"types": []
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"]
 	},
 	"include": ["src"]
 }`
@@ -316,6 +339,186 @@ func TestCompileProjectMissingRootDirOutDir(t *testing.T) {
 		"- \"outDir\" must be defined\n"
 	if len(diags) != 1 || diags[0] != want {
 		t.Fatalf("diags = %#v, want exactly [%q]", diags, want)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Include emission (copyInclude.ts via CompileProjectWithOptions).
+// ----------------------------------------------------------------------------
+
+// requireIncludeFiles asserts every embedded runtime file exists under
+// includeDir with the embedded bytes.
+func requireIncludeFiles(t *testing.T, includeDir string) {
+	t.Helper()
+	for _, name := range includefiles.Names() {
+		got, err := os.ReadFile(filepath.Join(includeDir, name))
+		if err != nil {
+			t.Fatalf("include emission: %v", err)
+		}
+		want, err := includefiles.Read(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s: emitted bytes differ from embedded runtime library", name)
+		}
+	}
+}
+
+// EmitIncludeFiles writes the runtime library to <projectDir>/include by
+// default; plain CompileProject (zero options) stays pure and writes nothing.
+func TestCompileProjectEmitIncludeFiles(t *testing.T) {
+	dir := writeProject(t, "include-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"include"}}}`)
+
+	if _, diags, err := CompileProject(dir); err != nil {
+		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("plain CompileProject must not create include/ (err=%v)", err)
+	}
+
+	if _, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	requireIncludeFiles(t, filepath.Join(dir, "include"))
+}
+
+// Package projects never receive include files (copyInclude.ts L9-10: with no
+// --type flag the gate reduces to !isPackage), even with EmitIncludeFiles set.
+func TestCompileProjectEmitIncludeFilesSkipsPackage(t *testing.T) {
+	dir := writeProject(t, "@include/package-fixture", "")
+	if _, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("package project must not get include/ (err=%v)", err)
+	}
+}
+
+// --includePath flows into BOTH halves of the pipeline: the copy destination
+// (copyInclude.ts L13) and the RuntimeLib.lua Rojo-path validation
+// (compileFiles.ts L88-89). The fixture's Rojo tree maps "runtime", so the
+// compile only succeeds because validation looked at the override — and the
+// files must land there too.
+func TestCompileProjectIncludePathOverride(t *testing.T) {
+	dir := writeProject(t, "includepath-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"runtime"}}}`)
+	override := filepath.Join(dir, "runtime")
+
+	opts := ProjectOptions{IncludePath: override, EmitIncludeFiles: true}
+	if _, diags, err := CompileProjectWithOptions(dir, opts); err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	requireIncludeFiles(t, override)
+	if _, err := os.Stat(filepath.Join(dir, "include")); !os.IsNotExist(err) {
+		t.Fatalf("default include/ must stay absent when overridden (err=%v)", err)
+	}
+
+	// The default path no longer satisfies validation when the Rojo tree only
+	// covers the override — proving newProjectContext consults the option.
+	_, diags, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: false})
+	if err == nil {
+		t.Fatal("expected validation failure for uncovered default include path")
+	}
+	want := "Rojo project contained no data for include folder!"
+	if len(diags) != 1 || diags[0] != want {
+		t.Errorf("diags = %v, want [%q]", diags, want)
+	}
+}
+
+// Upstream order (CLI/commands/build.ts L140-145): copyInclude runs after
+// program creation but before compileFiles, so source-file type errors do not
+// prevent the runtime library from landing.
+func TestCompileProjectEmitIncludeFilesDespiteTypeErrors(t *testing.T) {
+	dir := writeProject(t, "include-errors-fixture",
+		`{"name":"x","tree":{"$path":"out","include":{"$path":"include"}}}`)
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("const n: number = \"nope\";\nexport {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := CompileProjectWithOptions(dir, ProjectOptions{EmitIncludeFiles: true}); err == nil {
+		t.Fatal("expected the type error to fail the compile")
+	}
+	requireIncludeFiles(t, filepath.Join(dir, "include"))
+}
+
+// ----------------------------------------------------------------------------
+// --type override (ProjectOptions.Type), upstream's
+// `data.projectOptions.type ?? inferProjectType(...)` (compileFiles.ts L80 fed
+// by CLI/commands/build.ts L98-101).
+// ----------------------------------------------------------------------------
+
+// TestCompileProjectTypeOverridePackageSkipsRojo: a non-package project with
+// NO Rojo config normally fails the "Non-package projects must have a Rojo
+// project file!" gate; --type package skips that whole path (no Rojo config,
+// no runtime-lib validation) and compiles.
+func TestCompileProjectTypeOverridePackageSkipsRojo(t *testing.T) {
+	dir := writeProject(t, "typeoverride-fixture", "")
+
+	// Sanity: inference picks Model (unscoped name, no Rojo config) and fails.
+	if _, diags, err := CompileProject(dir); err == nil || len(diags) != 1 ||
+		diags[0] != "Non-package projects must have a Rojo project file!" {
+		t.Fatalf("inferred compile = (%v, %v), want the Rojo-config failure", diags, err)
+	}
+
+	files, diags, err := CompileProjectWithOptions(dir, ProjectOptions{Type: transformer.ProjectTypePackage})
+	if err != nil {
+		t.Fatalf("CompileProjectWithOptions(package): %v (diags: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	if _, ok := files["out/main.luau"]; !ok {
+		t.Errorf("out/main.luau missing (%v)", keys(files))
+	}
+}
+
+// TestCompileProjectTypeOverrideGameModelRequireRojo: --type game/model on an
+// INFERRED-package project (scoped name) re-enables the Rojo-config
+// requirement — the override beats inference in both directions.
+func TestCompileProjectTypeOverrideGameModelRequireRojo(t *testing.T) {
+	for _, projectType := range []transformer.ProjectType{transformer.ProjectTypeGame, transformer.ProjectTypeModel} {
+		t.Run(string(projectType), func(t *testing.T) {
+			dir := writeProject(t, "@scope/typeoverride-fixture", "")
+
+			// Sanity: inference picks Package (scoped name) and compiles.
+			if _, diags, err := CompileProject(dir); err != nil {
+				t.Fatalf("inferred package compile failed: %v (diags: %v)", err, diags)
+			}
+
+			_, diags, err := CompileProjectWithOptions(dir, ProjectOptions{Type: projectType})
+			if err == nil {
+				t.Fatal("expected the Rojo-config failure")
+			}
+			want := "Non-package projects must have a Rojo project file!"
+			if len(diags) != 1 || diags[0] != want {
+				t.Errorf("diags = %v, want [%q]", diags, want)
+			}
+		})
+	}
+}
+
+// TestCompileProjectTypeOverridePackageEmission: --type package on the model
+// fixture switches the runtime-lib require to the package `_G[script]` shape
+// — the override reaches the transformer's ProjectType, not just the
+// validation gates (mirrors the rbxtsc oracle run `npx rbxtsc --type package`
+// documented atop this file).
+func TestCompileProjectTypeOverridePackageEmission(t *testing.T) {
+	files, diags, err := CompileProjectWithOptions(
+		filepath.Join("testdata", "runtimelib_model"),
+		ProjectOptions{Type: transformer.ProjectTypePackage},
+	)
+	if err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	want := "-- Compiled with roblox-ts v3.0.0\n" +
+		"local TS = _G[script]\n" +
+		"local isFoo = TS.instanceof(inst, Foo)\n" +
+		"print(isFoo)\n" +
+		"return nil\n"
+	if got := files["out/main.luau"]; got != want {
+		t.Errorf("out/main.luau:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

@@ -13,6 +13,13 @@ import (
 // inside the transformer — not in compileFiles/renderAST.
 const CompilerVersion = "3.0.0"
 
+// HeaderComment is the text of the leading build-comment line (rendered as
+// `--<HeaderComment>`). It defaults to the upstream rbxtsc header so the
+// differential harness stays a strict byte comparison against real rbxtsc
+// output; `rotor build` rebrands it (the v1.0 contract is byte-identical
+// output, header-normalized).
+var HeaderComment = " Compiled with roblox-ts v" + CompilerVersion
+
 // TransformSourceFile ports nodes/transformSourceFile.ts: transform the
 // source file held by state into the final Luau statement list, ready for
 // rendering.
@@ -74,10 +81,10 @@ func getLastNonCommentStatement(listNode *luau.ListNode[luau.Statement]) *luau.L
 // the `local TS = ...` import (CreateRuntimeLibImport) — hoisting any leading
 // Luau directive comments (`--!strict`, sourced from leading `//!...` TS
 // comments) above it. The header comment text starts with a space so it
-// renders `-- Compiled with roblox-ts v3.0.0`.
+// renders `-- Compiled with roblox-ts v3.0.0` (or the HeaderComment override).
 func prependHeader(s *State, statements *luau.List[luau.Statement]) {
 	headerStatements := luau.NewList[luau.Statement]()
-	headerStatements.Push(luau.NewComment(" Compiled with roblox-ts v" + CompilerVersion))
+	headerStatements.Push(luau.NewComment(HeaderComment))
 
 	if s.UsesRuntimeLib {
 		headerStatements.Push(s.CreateRuntimeLibImport(s.SourceFile))

@@ -328,11 +328,13 @@ func (s *State) GetModuleExportsAliasMap(moduleSymbol *ast.Symbol) map[*ast.Symb
 // first-bound declaration's position. tsgo appends Symbol.Declarations in
 // binding order, so Declarations[0] is the insertion-defining declaration.
 //
-// NOTE: the "any FunctionDeclaration → pass 0" rule assumes top-level
-// functions: bindEachFunctionsFirst applies per container, so once
-// namespaces (ModuleBlock containers) land, a function nested in a namespace
-// is not bound in the source file's functions-first pass and this must be
-// keyed on the declaration's container instead.
+// NOTE: the "any FunctionDeclaration → pass 0" rule is per container —
+// bindEachStatementFunctionsFirst runs for ModuleBlocks too (tsgo
+// binder.go:1740), and every declaration of a module symbol's exports lives
+// in that same container, so the key reconstructs the per-container binder
+// order for namespaces as well (oracle-verified 2026-06-07: a namespace's
+// exported functions sort before its consts/sub-namespaces, source order
+// within each pass; same for the file-level return map).
 func exportSortKey(symbol *ast.Symbol) (file string, pass int, pos int, ok bool) {
 	var decl *ast.Node
 	for _, d := range symbol.Declarations {
