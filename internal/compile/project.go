@@ -503,6 +503,13 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 				fileErr = errors.New("compile: TypeScript diagnostics")
 				return
 			}
+			if !opts.AllowCommentDirectives {
+				if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
+					fileDiags = diags
+					fileErr = errors.New("compile: comment directive diagnostics")
+					return
+				}
+			}
 
 			state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
 			// Macro registration audit (digest §6), mirroring upstream's

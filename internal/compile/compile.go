@@ -71,6 +71,9 @@ func CompileFileDetailed(projectDir, relPath string) (string, []DiagnosticInfo, 
 	if len(tsDiags) > 0 {
 		return "", tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
+	if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
+		return "", stringDiagnostics(diags), errors.New("compile: comment directive diagnostics")
+	}
 
 	chk, release := program.GetTypeChecker(ctx)
 	defer release()
@@ -174,4 +177,20 @@ func tsDiagnosticInfos(diags []*ast.Diagnostic) []DiagnosticInfo {
 		out[i] = DiagnosticInfo{Message: d.String()}
 	}
 	return out
+}
+
+func commentDirectiveDiagnostics(sourceFile *ast.SourceFile) []string {
+	count := len(sourceFile.CommentDirectives)
+	if ast.GetPragmaFromSourceFile(sourceFile, "ts-nocheck") != nil {
+		count++
+	}
+	if count == 0 {
+		return nil
+	}
+	msg := transformer.DiagNoCommentDirectives(sourceFile.AsNode()).Message
+	diags := make([]string, count)
+	for i := range diags {
+		diags[i] = msg
+	}
+	return diags
 }
