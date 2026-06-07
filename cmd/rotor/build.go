@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"rotor/internal/compile"
+	"rotor/internal/transformer"
 )
 
 // cmdBuild is the minimal compile-to-disk command: CompileProject over the
@@ -61,6 +62,10 @@ func cmdBuild(args []string) int {
 				dir)
 		}
 	}
+
+	// Real builds carry rotor's own header; the upstream-header default is
+	// only load-bearing for differential byte-comparison in tests.
+	transformer.HeaderComment = " Compiled with rotor v" + version
 
 	start := time.Now()
 	results, diags, err := compile.CompileProject(dir)

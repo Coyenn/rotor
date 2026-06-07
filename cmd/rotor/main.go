@@ -13,6 +13,11 @@ import (
 
 const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts projects"
 
+// version is rotor's own release version, used for the `rotor build` emit
+// header (`-- Compiled with rotor v...`). Library/test compilation keeps the
+// upstream rbxtsc header so differential byte-comparison stays strict.
+const version = "0.1.0-dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
