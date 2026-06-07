@@ -64,6 +64,14 @@ func TestConformance(t *testing.T) {
 			t.Errorf("manifest entry %q has no golden: %v", name, err)
 		}
 	}
+	for name, reason := range DisabledFixtures {
+		if reason == "" {
+			t.Errorf("disabled fixture %q is missing a reason", name)
+		}
+		if _, err := os.Stat(filepath.Join(goldenDir, filepath.FromSlash(name))); err != nil {
+			t.Errorf("disabled manifest entry %q has no golden: %v", name, err)
+		}
+	}
 
 	// Everything-disabled fast path: do NOT compile the project, so this test
 	// stays green regardless of transformer state until Phase 5 enables
@@ -76,7 +84,11 @@ func TestConformance(t *testing.T) {
 	skipped := []string{}
 	for _, rel := range goldens {
 		if !enabled[rel] {
-			skipped = append(skipped, rel)
+			if reason, ok := DisabledFixtures[rel]; ok {
+				skipped = append(skipped, fmt.Sprintf("%s (%s)", rel, reason))
+				continue
+			}
+			t.Fatalf("golden %q is neither enabled nor disabled", rel)
 			continue
 		}
 		t.Run(rel, func(t *testing.T) {
@@ -95,7 +107,7 @@ func TestConformance(t *testing.T) {
 		})
 	}
 	if len(skipped) > 0 {
-		t.Logf("skipped %d goldens (not yet enabled): %s", len(skipped), strings.Join(skipped, ", "))
+		t.Logf("skipped %d goldens (explicitly disabled): %s", len(skipped), strings.Join(skipped, ", "))
 	}
 }
 

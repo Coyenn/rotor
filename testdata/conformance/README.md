@@ -89,6 +89,14 @@ each enabled fixture through a temp project rooted under `project/`, preserving
 the shared `node_modules` tree while limiting the compile to the selected
 source plus shared helpers.
 
+As of June 7, 2026, **40 / 44** committed goldens are enabled. The remaining
+four are tracked in `DisabledFixtures` with explicit reasons:
+
+- `tests/array.spec.luau` — byte mismatch against the upstream golden
+- `tests/delete.spec.luau` — `DeleteExpression` is still unsupported
+- `tests/roact.spec.luau` — byte mismatch against the upstream golden
+- `tests/template.spec.luau` — `TaggedTemplateExpression` is still unsupported
+
 ## Diagnostics corpus
 
 Run:
@@ -111,12 +119,32 @@ Run:
 go test ./internal/conformance/ -run TestBehavioralSuite -count=1 -v
 ```
 
-Requires both `rojo` and `lune` on PATH. The test skips cleanly if either
-tool is missing. When available it:
+Requires `rojo` plus `lune`. Detection order is:
 
-1. builds `testdata/conformance/project` with `rotor`,
+1. `ROTOR_ROJO_PATH` / `ROTOR_LUNE_PATH`
+2. the executable on `PATH`
+
+The test skips with an actionable message if either tool is missing. When
+available it stages a temporary **runtime subset project** containing:
+
+- the current enabled conformance specs,
+- shared helpers and entrypoints,
+- an upstream-shaped DataModel Rojo config for `ServerScriptService.tests`.
+
+This keeps known compile blockers out of the runtime run while still executing
+real upstream TestEZ cases under Lune. The staged runtime subset currently
+excludes `tests/roact_spread.spec.luau`, which is byte-identical in the diff
+harness but still fails behaviorally under Lune; that exclusion is tracked in
+`DisabledBehavioralFixtures` in `internal/conformance/runtime.go`.
+
+When the tools are available it:
+
+1. builds a staged conformance subset project with `rotor`,
 2. runs `rojo build` to produce a place file,
 3. executes the upstream `reference/roblox-ts/tests/runTestsWithLune.lua`.
+
+With the current runtime subset, the staged suite executes **378 upstream
+behavioral cases** locally.
 
 ## randomness acceptance
 
@@ -127,5 +155,7 @@ go test ./internal/conformance/ -run TestRandomnessAcceptance -count=1 -v
 ```
 
 Set `ROTOR_RANDOMNESS_PATH` to the local project root before running. The test
-skips when unset and otherwise drives `compile.CompileProject` over the real
-project, surfacing the emitted-file count or the first failure.
+accepts either the project root or a direct path to its `tsconfig.json`. It
+skips with an explicit setup message when unset and otherwise drives
+`compile.CompileProject` over the real project, surfacing the emitted-file
+count or the first failure.
