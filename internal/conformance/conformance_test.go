@@ -158,7 +158,9 @@ func compileConformanceFixture(root, baseProjectDir, goldenRel string) (string, 
 		return "", err
 	}
 
-	text, diags, err := compile.CompileFile(tmpProj, filepath.ToSlash(filepath.Join("src", sourceRel)))
+	text, diags, err := compile.CompileFileWithOptions(tmpProj, filepath.ToSlash(filepath.Join("src", sourceRel)), compile.ProjectOptions{
+		AllowCommentDirectives: true,
+	})
 	if err != nil {
 		return "", fmt.Errorf("CompileFile(%s): %w (diagnostics: %v)", goldenRel, err, diags)
 	}

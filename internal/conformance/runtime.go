@@ -172,7 +172,7 @@ func runBehavioralSuite(root string, tools RuntimeTools) error {
 	}
 	defer os.RemoveAll(projDir)
 
-	buildCmd := exec.Command("go", "run", "./cmd/rotor", "build", projDir, "--type", "game")
+	buildCmd := exec.Command("go", "run", "./cmd/rotor", "build", projDir, "--type", "game", "--allowCommentDirectives")
 	buildCmd.Dir = root
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr

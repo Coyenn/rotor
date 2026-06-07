@@ -86,7 +86,9 @@ func compileDiagnosticFixture(root, fixturePath string) ([]string, error) {
 		_ = os.Remove(overlayDir)
 	}()
 
-	_, diags, err := compile.CompileFileDetailed(projectDir, filepath.ToSlash(filepath.Join("src", "__diagnostics", name)))
+	_, diags, err := compile.CompileFileDetailedWithOptions(projectDir, filepath.ToSlash(filepath.Join("src", "__diagnostics", name)), compile.ProjectOptions{
+		AllowCommentDirectives: true,
+	})
 	if err != nil && len(diags) == 0 {
 		return nil, err
 	}

@@ -46,11 +46,23 @@ func CompileFile(projectDir, relPath string) (string, []string, error) {
 // transformer diagnostic codes so higher-level conformance tests can assert
 // exact upstream diagnostic IDs instead of scraping message text.
 func CompileFileDetailed(projectDir, relPath string) (string, []DiagnosticInfo, error) {
+	return CompileFileDetailedWithOptions(projectDir, relPath, ProjectOptions{})
+}
+
+// CompileFileWithOptions is CompileFile with ProjectOptions plumbed through
+// the project-layer setup.
+func CompileFileWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []string, error) {
+	text, diags, err := CompileFileDetailedWithOptions(projectDir, relPath, opts)
+	return text, diagnosticInfoMessages(diags), err
+}
+
+// CompileFileDetailedWithOptions is the options-aware single-file fast path.
+func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []DiagnosticInfo, error) {
 	dir, program, diags, err := newProjectProgram(projectDir, "")
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
-	pctx, diags, err := newProjectContext(dir, program, ProjectOptions{})
+	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
@@ -71,8 +83,10 @@ func CompileFileDetailed(projectDir, relPath string) (string, []DiagnosticInfo, 
 	if len(tsDiags) > 0 {
 		return "", tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
-	if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
-		return "", stringDiagnostics(diags), errors.New("compile: comment directive diagnostics")
+	if !opts.AllowCommentDirectives {
+		if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
+			return "", stringDiagnostics(diags), errors.New("compile: comment directive diagnostics")
+		}
 	}
 
 	chk, release := program.GetTypeChecker(ctx)
