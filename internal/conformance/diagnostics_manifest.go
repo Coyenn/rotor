@@ -2,9 +2,11 @@ package conformance
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,9 +21,9 @@ type DiagnosticFixture struct {
 	ExpectedID string
 }
 
-var skippedDiagnosticFixtures = map[string]string{
-	"noIsolatedImport.ts": "requires an isolated Rojo container topology that the model conformance project intentionally does not model",
-	"noRojoData.ts":       "requires a missing-Rojo-data project layout that the model conformance project intentionally does not model",
+type diagnosticFixtureProjectPlan struct {
+	sourceRel       string
+	rojoConfigFile  string
 }
 
 var skippedDiagnosticIDs = map[string]string{}
@@ -65,26 +67,52 @@ func compileDiagnosticFixture(root, fixturePath string) ([]string, error) {
 		return nil, err
 	}
 
-	overlayDir := filepath.Join(projectDir, "src", "__diagnostics")
-	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
-		return nil, err
-	}
-
 	name := filepath.Base(fixturePath)
-	overlayPath := filepath.Join(overlayDir, name)
-	data, err := os.ReadFile(fixturePath)
+	plan := diagnosticFixtureProjectPlan{
+		sourceRel:      filepath.ToSlash(filepath.Join("src", "__diagnostics", name)),
+		rojoConfigFile: filepath.Join(projectDir, "default.project.json"),
+	}
+	switch name {
+	case "noIsolatedImport.ts", "noRojoData.ts":
+		plan.sourceRel = filepath.ToSlash(filepath.Join("src", "diagnostics", name))
+		plan.rojoConfigFile = filepath.Join(root, "reference", "roblox-ts", "tests", "default.project.json")
+	}
+	return compileDiagnosticFixtureWithProjectPlan(projectDir, fixturePath, plan)
+}
+
+func compileDiagnosticFixtureWithProjectPlan(baseProjectDir, fixturePath string, plan diagnosticFixtureProjectPlan) ([]string, error) {
+	tmpProj, err := os.MkdirTemp(baseProjectDir, ".phase5-diagnostic-")
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(overlayPath, data, 0o644); err != nil {
+	defer os.RemoveAll(tmpProj)
+
+	if err := os.WriteFile(filepath.Join(tmpProj, "package.json"), []byte(`{"name":"conformance-diagnostic-fixture"}`), 0o644); err != nil {
 		return nil, err
 	}
-	defer func() {
-		_ = os.Remove(overlayPath)
-		_ = os.Remove(overlayDir)
-	}()
+	if err := os.WriteFile(filepath.Join(tmpProj, "tsconfig.json"), []byte(diagnosticFixtureTSConfig()), 0o644); err != nil {
+		return nil, err
+	}
+	if err := copyDiagnosticFile(plan.rojoConfigFile, filepath.Join(tmpProj, "default.project.json")); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(tmpProj, "include"), 0o755); err != nil {
+		return nil, err
+	}
+	if err := ensureDiagnosticTypeRoots(baseProjectDir, tmpProj); err != nil {
+		return nil, err
+	}
+	if err := copyDiagnosticTree(filepath.Join(baseProjectDir, "src", "helpers"), filepath.Join(tmpProj, "src", "helpers")); err != nil {
+		return nil, err
+	}
+	if err := copyDiagnosticFile(filepath.Join(baseProjectDir, "src", "services.d.ts"), filepath.Join(tmpProj, "src", "services.d.ts")); err != nil {
+		return nil, err
+	}
+	if err := copyDiagnosticFile(fixturePath, filepath.Join(tmpProj, filepath.FromSlash(plan.sourceRel))); err != nil {
+		return nil, err
+	}
 
-	_, diags, err := compile.CompileFileDetailedWithOptions(projectDir, filepath.ToSlash(filepath.Join("src", "__diagnostics", name)), compile.ProjectOptions{
+	_, diags, err := compile.CompileFileDetailedWithOptions(tmpProj, plan.sourceRel, compile.ProjectOptions{
 		AllowCommentDirectives: true,
 	})
 	if err != nil && len(diags) == 0 {
@@ -126,8 +154,86 @@ func ensureConformanceProjectDeps(projectDir string) error {
 }
 
 func skipReasonForDiagnosticFixture(tc DiagnosticFixture) string {
-	if reason, ok := skippedDiagnosticFixtures[tc.Name]; ok {
-		return reason
-	}
 	return skippedDiagnosticIDs[tc.ExpectedID]
+}
+
+func diagnosticFixtureTSConfig() string {
+	return `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"downlevelIteration": true,
+		"jsx": "react",
+		"jsxFactory": "Roact.jsx",
+		"module": "commonjs",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"resolveJsonModule": true,
+		"forceConsistentCasingInFileNames": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"typeRoots": ["node_modules/@rbxts"],
+		"experimentalDecorators": true,
+		"rootDir": "src",
+		"outDir": "out",
+		"checkers": 1,
+		"baseUrl": "src"
+	},
+	"include": ["src"]
+}`
+}
+
+func copyDiagnosticTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		return copyDiagnosticFile(path, target)
+	})
+}
+
+func copyDiagnosticFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0o644)
+}
+
+func ensureDiagnosticTypeRoots(baseProjectDir, tmpProj string) error {
+	src := filepath.Join(baseProjectDir, "node_modules", "@rbxts")
+	dst := filepath.Join(tmpProj, "node_modules", "@rbxts")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := os.Symlink(src, dst); err == nil {
+		return nil
+	}
+	if err := createDiagnosticJunction(dst, src); err == nil {
+		return nil
+	}
+	return copyDiagnosticTree(src, dst)
+}
+
+func createDiagnosticJunction(linkPath, targetPath string) error {
+	if runtime.GOOS != "windows" {
+		return fmt.Errorf("junctions unsupported on %s", runtime.GOOS)
+	}
+	cmd := exec.Command("cmd", "/c", fmt.Sprintf(`mklink /J "%s" "%s"`, linkPath, targetPath))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mklink /J %s -> %s: %w (%s)", linkPath, targetPath, err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }

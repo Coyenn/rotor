@@ -50,3 +50,27 @@ func TestNoRobloxSymbolInstanceofFixture(t *testing.T) {
 		t.Fatalf("got diagnostics %v, want [noRobloxSymbolInstanceof]", got)
 	}
 }
+
+func TestRojoTopologyDiagnosticFixtures(t *testing.T) {
+	root := repoRoot(t)
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "noIsolatedImport.ts", want: "noIsolatedImport"},
+		{name: "noRojoData.ts", want: "noRojoData"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := filepath.Join(root, "testdata", "conformance", "excluded", "diagnostics", tt.name)
+			got, err := compileDiagnosticFixture(root, fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, []string{tt.want}) {
+				t.Fatalf("got diagnostics %v, want [%s]", got, tt.want)
+			}
+		})
+	}
+}

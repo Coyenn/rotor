@@ -59,8 +59,11 @@ below, on the first full run.
 - `default.project.json` — **model**-type, same shape as the diff project's.
   Upstream uses a full DataModel (game) project that places
   `helpers/rojo/isolated.ts` in StarterGui; under a model project nothing is
-  isolated, and all files (including that one) still compile clean. Only the
-  `diagnostics/` rojo-dependent tests cared, and those are excluded anyway.
+  isolated, and all files (including that one) still compile clean. The
+  diagnostics harness keeps this model project for the portable fixtures, but
+  stages the two Rojo-topology diagnostics in a temporary upstream-shaped
+  DataModel project so their original isolation / missing-$path expectations
+  are still exercised.
 - `rbxtsc` is invoked with `--allowCommentDirectives` because the upstream
   sources use `@ts-ignore`/`@ts-expect-error`; upstream's own test driver sets
   `allowCommentDirectives: true` for the same reason. Rotor now honors the
@@ -101,9 +104,10 @@ go test ./internal/conformance/ -run TestDiagnosticsCorpus -count=1
 
 The harness installs `project/node_modules` on first use if needed, then
 overlays each vendored diagnostics fixture under `project/src/__diagnostics`
-and compiles it through the real conformance project config. The only
-remaining skips are the two Rojo-topology fixtures (`noRojoData.ts`,
-`noIsolatedImport.ts`), each with an explicit reason in the manifest.
+and compiles it through the real conformance project config. The two
+Rojo-topology fixtures (`noRojoData.ts`, `noIsolatedImport.ts`) are staged in
+temporary projects that copy the upstream `tests/default.project.json`, so the
+full vendored diagnostics corpus now runs without skips.
 
 ## Runtime suite
 
