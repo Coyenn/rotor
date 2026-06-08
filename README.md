@@ -4,7 +4,7 @@
 
 rotor targets `rbxtsc` compatibility: **byte-identical Luau output**, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler.
 
-> **Status: production hardening.** rotor already typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, and emits declarations for declaration-enabled builds. Remaining v1 blockers are true incremental rebuild selection, transformer-plugin sidecar integration, and the last Phase 5 closures: the Lune runtime suite, the randomness acceptance proof, and two Rojo-topology diagnostics fixtures.
+> **Status: production hardening.** rotor already typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, emits declarations for declaration-enabled builds, and now does manifest-backed incremental rebuild selection. Remaining v1 blockers are transformer-plugin sidecar integration, checker-parallelism restoration, and the last Phase 5 closures: the Lune runtime suite, the randomness acceptance proof, and two Rojo-topology diagnostics fixtures.
 
 ```
 $ rotor check ./my-game -w
@@ -76,7 +76,7 @@ rotor build testdata/diff/project
 Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 
 - The transformer covers the full language surface (JSX, classes, decorators, async/generators, try/catch, enums, namespaces, spread, the macro tables). Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
-- `build -w` is available today, but it is still a polling/full-rebuild watch path, not the final incremental manifest-based rebuild flow.
+- `build -w` is available today and now reuses Rotor's manifest-backed changed-file selection, but the watch loop is still polling-based rather than native-fsevent/debounced parity.
 - Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
 - The standalone transformer-plugin sidecar exists in `tools/sidecar`, but it is not yet wired into Rotor's Go build path, so pluginless projects are the current production target.
 - Phase 5 is in progress: the upstream differential/diagnostics/runtime/acceptance harnesses are in repo, but Rotor is not yet claiming full `rbxtsc` replacement parity until the runtime suite, acceptance run, and two topology-bound diagnostics fixtures are closed out.
@@ -88,7 +88,7 @@ Today Rotor is a good fit for **pluginless rbxts projects** that want native-spe
 Rotor is **not** yet claiming final v1 drop-in status for:
 
 - projects that require roblox-ts transformer plugins in the build path
-- teams that need manifest-based incremental rebuild selection rather than the current watch loop
+- teams that need transformer-plugin-backed builds today rather than pluginless incremental builds
 - users who need the full upstream behavioral suite plus the remaining topology-bound diagnostics fixtures closed out before rollout
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
@@ -104,7 +104,7 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 | **3a** | Imports & module resolution (Rojo-aware requires, `TS.import`/`TS.getModule`, export-from), `new` + constructor macros, math-op macros | ✅ |
 | **3b** | Macro tables (`Array`/`String`/`Set`/`Map`/`Promise` + call macros), optional chaining, full Map/Set/string/generator iteration, pnpm symlink + `baseUrl` resolution | ✅ |
 | **3c** | JSX (`@rbxts/react`), classes, decorators, object/array/call spread + logical assignments, async/generators, try/catch flow rerouting, enums, namespaces | ✅ |
-| **4** | Project layer — output pipeline, `.d.ts` emit, watch, remaining incremental/plugin integration | 🚧 |
+| **4** | Project layer — output pipeline, `.d.ts` emit, watch, remaining plugin/concurrency integration | 🚧 |
 | **5** | Conformance — upstream behavioral suite under Lune, diagnostics corpus, acceptance closure | 🚧 |
 | | **v1.0** — drop-in `rbxtsc` replacement | 🎯 |
 

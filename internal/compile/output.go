@@ -22,6 +22,7 @@ import (
 type BuildResult struct {
 	Outputs      map[string]string
 	EmittedFiles []string
+	OutputDir    string
 }
 
 // BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
@@ -44,7 +45,27 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		return nil, nil, err
 	}
 
-	outputs, diags, err := compileProjectProgram(dir, program, opts)
+	sourceFiles := projectSourceFiles(program)
+	selectedFiles := sourceFiles
+	var previousManifest *incrementalManifest
+	var currentManifest *incrementalManifest
+	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
+		if err != nil {
+			return nil, nil, err
+		}
+		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
+	}
+
+	pctx, diags, err := newProjectContext(dir, program, opts)
+	if err != nil {
+		return nil, diags, err
+	}
+	outputs, diags, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	if err != nil {
 		return nil, diags, err
 	}
@@ -67,19 +88,31 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	declFiles, err := emitDeclarations(program, opts.WriteOnlyChanged)
+	selectedPaths := make(map[string]struct{}, len(selectedFiles))
+	for _, sourceFile := range selectedFiles {
+		selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
+	}
+
+	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged)
 	if err != nil {
 		return nil, nil, err
 	}
 	emittedFiles = append(emittedFiles, declFiles...)
 
+	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
+		if err := writeIncrementalManifest(pathTranslator.BuildInfoOutputPath, currentManifest); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	return &BuildResult{
 		Outputs:      outputs,
 		EmittedFiles: emittedFiles,
+		OutputDir:    pathTranslator.OutDir,
 	}, nil, nil
 }
 
-func emitDeclarations(program *compiler.Program, writeOnlyChanged bool) ([]string, error) {
+func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool) ([]string, error) {
 	if !program.Options().Declaration.IsTrue() {
 		return nil, nil
 	}
@@ -89,6 +122,11 @@ func emitDeclarations(program *compiler.Program, writeOnlyChanged bool) ([]strin
 	for _, sourceFile := range program.SourceFiles() {
 		if sourceFile.IsDeclarationFile || !isCompilableFile(sourceFile.FileName()) {
 			continue
+		}
+		if selectedPaths != nil {
+			if _, ok := selectedPaths[normalizeSourceFilePath(sourceFile.FileName())]; !ok {
+				continue
+			}
 		}
 		result := program.Emit(ctx, compiler.EmitOptions{
 			TargetSourceFile: sourceFile,

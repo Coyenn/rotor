@@ -179,6 +179,9 @@ func detectProjectTreeChange(before, after map[string]fileStamp) (bool, string) 
 }
 
 func guessedOutputDir(projectDir string, result *compile.BuildResult) string {
+	if result != nil && result.OutputDir != "" {
+		return result.OutputDir
+	}
 	if result == nil || len(result.Outputs) == 0 {
 		return filepath.Join(projectDir, "out")
 	}

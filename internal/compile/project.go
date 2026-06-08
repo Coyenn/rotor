@@ -444,6 +444,23 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 	if err != nil {
 		return nil, diags, err
 	}
+	return compileProjectSourceFiles(dir, program, pctx, projectSourceFiles(program), opts)
+}
+
+func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
+	var sourceFiles []*ast.SourceFile
+	for _, sourceFile := range program.SourceFiles() {
+		fileName := sourceFile.FileName()
+		if sourceFile.IsDeclarationFile ||
+			(!strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx")) {
+			continue
+		}
+		sourceFiles = append(sourceFiles, sourceFile)
+	}
+	return sourceFiles
+}
+
+func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []string, error) {
 	ctx := context.Background()
 
 	// Program-level option diagnostics fail the compile before any file is
@@ -459,19 +476,6 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 	defer release()
 	multi := transformer.NewMultiState()
 
-	// Upstream compiles the root source files (getChangedSourceFiles filters
-	// declaration and JSON files; node_modules/lib files are declaration
-	// files and drop out the same way). Collected up front so the verbose
-	// progress fraction knows the total (compileFiles.ts L105).
-	var sourceFiles []*ast.SourceFile
-	for _, sourceFile := range program.SourceFiles() {
-		fileName := sourceFile.FileName()
-		if sourceFile.IsDeclarationFile ||
-			(!strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx")) {
-			continue
-		}
-		sourceFiles = append(sourceFiles, sourceFile)
-	}
 	progressMaxLength := len(fmt.Sprintf("%d/%d", len(sourceFiles), len(sourceFiles)))
 	cwd, cwdErr := os.Getwd()
 
