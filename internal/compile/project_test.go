@@ -2,6 +2,7 @@ package compile
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -519,6 +520,49 @@ func TestCompileProjectTypeOverridePackageEmission(t *testing.T) {
 		"return nil\n"
 	if got := files["out/main.luau"]; got != want {
 		t.Errorf("out/main.luau:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestNewProjectProgramUsesMultipleCheckerGroups(t *testing.T) {
+	dir := writeProject(t, "@scope/checkers-fixture", "")
+	tsconfig := `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out",
+		"checkers": 3
+	},
+	"include": ["src"]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.ts", "b.ts", "c.ts", "d.ts"} {
+		if err := os.WriteFile(filepath.Join(dir, "src", name), []byte("export {};\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, program, diags, err := newProjectProgram(dir, "")
+	if err != nil {
+		t.Fatalf("newProjectProgram: %v (diags: %v)", err, diags)
+	}
+	sourceFiles := projectSourceFiles(program)
+	checkers := 0
+	if program.Options().Checkers != nil {
+		checkers = *program.Options().Checkers
+	}
+	groups := groupSourceFilesByChecker(context.Background(), program, sourceFiles)
+	if len(groups) < 2 {
+		t.Fatalf("checker groups = %d, want at least 2 (source files=%d, singleThreaded=%v, options.checkers=%d)", len(groups), len(sourceFiles), program.SingleThreaded(), checkers)
 	}
 }
 

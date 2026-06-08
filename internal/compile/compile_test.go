@@ -198,3 +198,21 @@ func TestCompileFileMissingSource(t *testing.T) {
 		t.Fatal("expected error for missing source file")
 	}
 }
+
+func TestCompileFileUsesFileAffinedCheckerForImports(t *testing.T) {
+	got, diags, err := CompileFile(filepath.Join("testdata", "imports_model"), filepath.Join("src", "_scratch_once.ts"))
+	if err != nil {
+		t.Fatalf("CompileFile: %v (diags: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	want := "-- Compiled with roblox-ts v3.0.0\n" +
+		"local TS = require(script.Parent.include.RuntimeLib)\n" +
+		"local g = TS.import(script, script.Parent, \"_scratch_util\").greet\n" +
+		"print(g(\"once\"))\n" +
+		"return nil\n"
+	if got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
