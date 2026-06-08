@@ -50,7 +50,7 @@ func (l *lazyImportExp) set(value luau.IndexableExpression) {
 // ImportSpecifier); name is the bound identifier.
 func isReferencedAliasValue(s *State, declaration *ast.Node, name *ast.Node) bool {
 	symbol := getOriginalSymbolOfNode(s, name)
-	return s.EmitResolver().IsReferencedAliasDeclaration(declaration) && (symbol == nil || isSymbolOfValue(symbol))
+	return s.EmitResolver().IsReferencedAliasDeclarationUnsafe(declaration) && (symbol == nil || isSymbolOfValue(symbol))
 }
 
 // countImportExpUses ports transformImportDeclaration.ts countImportExpUses
@@ -256,7 +256,7 @@ func isExportSpecifierValue(s *State, element *ast.Node) bool {
 		return false
 	}
 
-	if s.EmitResolver().IsReferencedAliasDeclaration(element) {
+	if s.EmitResolver().IsReferencedAliasDeclarationUnsafe(element) {
 		return true
 	}
 

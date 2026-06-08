@@ -56,9 +56,17 @@ func (r *EmitResolver) GetJsxFactoryEntity(location *ast.Node) *ast.Node {
 	return r.checker.getJsxFactoryEntity(location)
 }
 
+func (r *EmitResolver) GetJsxFactoryEntityUnsafe(location *ast.Node) *ast.Node {
+	return r.checker.getJsxFactoryEntity(location)
+}
+
 func (r *EmitResolver) GetJsxFragmentFactoryEntity(location *ast.Node) *ast.Node {
 	r.checkerMu.Lock()
 	defer r.checkerMu.Unlock()
+	return r.checker.getJsxFragmentFactoryEntity(location)
+}
+
+func (r *EmitResolver) GetJsxFragmentFactoryEntityUnsafe(location *ast.Node) *ast.Node {
 	return r.checker.getJsxFragmentFactoryEntity(location)
 }
 
@@ -693,6 +701,29 @@ func (r *EmitResolver) IsReferencedAliasDeclaration(node *ast.Node) bool {
 
 	r.checkerMu.Lock()
 	defer r.checkerMu.Unlock()
+
+	if ast.IsAliasSymbolDeclaration(node) {
+		if symbol := c.getSymbolOfDeclaration(node); symbol != nil {
+			aliasLinks := c.aliasSymbolLinks.Get(symbol)
+			if aliasLinks.referenced {
+				return true
+			}
+			target := aliasLinks.aliasTarget
+			if target != nil && node.ModifierFlags()&ast.ModifierFlagsExport != 0 &&
+				c.getSymbolFlags(target)&ast.SymbolFlagsValue != 0 &&
+				(c.compilerOptions.ShouldPreserveConstEnums() || !isConstEnumOrConstEnumOnlyModule(target)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *EmitResolver) IsReferencedAliasDeclarationUnsafe(node *ast.Node) bool {
+	c := r.checker
+	if !c.canCollectSymbolAliasAccessibilityData || !ast.IsParseTreeNode(node) {
+		return true
+	}
 
 	if ast.IsAliasSymbolDeclaration(node) {
 		if symbol := c.getSymbolOfDeclaration(node); symbol != nil {

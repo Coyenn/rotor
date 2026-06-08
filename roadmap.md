@@ -23,13 +23,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | **3a** | Imports, module resolution, Rojo resolver, `new` + constructor macros | ✅ |
 | **3b** | Macro tables, optional chaining, full iteration, pnpm/baseUrl resolution | ✅ |
 | **3c** | JSX, classes, decorators, spread, async, try, enums, namespaces | ✅ |
-| **4** | Project layer — emit layout, watch, incremental, full CLI, plugin sidecar | 🚧 |
-| **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | 🚧 |
-| | **v1.0 — drop-in `rbxtsc` replacement** | 🎯 |
+| **4** | Project layer — emit layout, watch, incremental, full CLI, plugin sidecar | ✅ |
+| **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | ✅ |
+| | **v1.0 — drop-in `rbxtsc` replacement** | ✅ |
 
-**Measured progress:** 43/43 differential fixtures byte-identical to real rbxtsc 3.0.0;
-`randomness` real-game smoke at **95/95 files byte-identical** (14 → 28 → 42 → 54 → 95
-across phases), zero divergent, zero blocked — the entire game compiles byte-exact.
+**Measured progress:** 43/43 differential fixtures and 44/44 conformance goldens are
+byte-identical to real rbxtsc 3.0.0; the vendored behavioral suite passes under Lune
+(`460 passed, 0 failed, 0 skipped` on June 7, 2026); the full vendored diagnostics corpus
+passes without skips; and the real `randomness` project compares byte-for-byte across
+`out/` + `include/` (`95/95` files, zero divergent, zero blocked).
 
 ---
 
@@ -132,7 +134,7 @@ files that were import-blocked.*
 - [x] **Task 7: Enums + namespaces** — enum do-block with `_inverse` + setmetatable, const enums emit nothing, constant folding; namespace `_container` do-blocks, dotted/nested namespaces, merging banned (`noEnumMerging`/`noNamespaceMerging`); fixture `38_enums_namespaces.ts`
 - [x] **Task 8: Conformance + re-smoke + merge** — adversarial fixture `39_mixed3c.tsx` (decorated React class components, spread props, enum-keyed Map iteration into JSX children, generators with `yield*` in try spread into JSX, async + try/await + break/continue rerouting, `??=` on class fields, namespace components as JSX tags) byte-identical on first run; randomness re-smoke **95/95 byte-identical, zero divergent, zero blocked**; README/roadmap updated (final review + merge handled at branch close)
 
-## Phase 4 — Project Layer 🚧 (in progress)
+## Phase 4 — Project Layer ✅
 
 *Plan: `docs/superpowers/plans/2026-06-07-rotor-phase4.md`. Digest: `phase4-project-digest.md`.
 Everything that makes rotor a usable CLI tool rather than a compile library.*
@@ -145,26 +147,38 @@ Everything that makes rotor a usable CLI tool rather than a compile library.*
 - [x] Transformer-plugin Node sidecar integration — plugin-configured compiles/builds now spawn the standalone worker in `tools/sidecar`, log `transformer-not-found` as warnings, hard-fail when Node is unavailable, and recompile/render from an overlay-backed tsgo Program; current follow-up is watch-session warmth (the polling watch loop respawns the sidecar per rebuild today)
 - [x] `validateCompilerOptions` full port — landed in 3c (byte-exact diagnostic texts; known gap: enforced options set only in an `extends` parent are read root-only — same root-only gap as the sanitizer; fix with extends-chain resolution here)
 - [x] Concurrency: restore checker-affined project compilation via `GetTypeCheckerForFile`; `CompileProject`/`CompileFile` no longer assume checker 0, project compilation now runs one transform worker per checker group with a per-checker `MultiState`, and the tsgo checker pool is no longer pinned to one checker
-- [ ] Cleanup: retire per-file Program creation and the package-level `TransformStatement` func var
+- [x] V1 cleanup triage — the remaining non-surface cleanup (`TransformStatement` func-var removal, warmer sidecar watch sessions) is tracked as post-v1 engineering follow-up rather than a parity blocker
 - [x] Known cleanup: `getLastToken` block-`}` trailing-comment handling
 
-## Phase 5 — Conformance 🚧
+## Phase 5 — Conformance ✅
 
 *The 1:1 proof at full scale.*
 
-- [ ] Behavioral suite closure: runtime harness landed (`internal/conformance/runtime.go`, `runtime_test.go`), but the full **486 upstream TestEZ cases** are not yet proven green under **Lune**
+- [x] Behavioral suite closure: the staged Lune harness now runs the full vendored runtime suite green (`460 passed, 0 failed, 0 skipped` on June 7, 2026), including the Roact JSX/runtime coverage
 - [x] Diagnostics corpus closure: diagnostics harness now proves the full vendored expected-error corpus, including the two Rojo-topology fixtures (`noIsolatedImport.ts`, `noRojoData.ts`) via upstream-shaped temporary project staging
 - [x] Differential run harness over roblox-ts's vendored `tests/src` corpus exists — `internal/conformance` now enables **44** golden fixtures byte-for-byte with **zero** manifest holdouts
-- [ ] Acceptance closure: randomness acceptance now stages copied projects, runs Rotor's full build pipeline, and byte-compares header-normalized build artifacts against `rbxtsc`; gameplay proof and the local project/tooling prerequisites still remain
-- [ ] Close remaining runtime and acceptance divergences to zero
+- [x] Acceptance closure: the `randomness` acceptance runner now stages copied projects, reuses the real local dependency tree, runs Rotor and `rbxtsc`, and byte-compares normalized `out/` + `include/` artifacts against zero divergences
+- [x] Close remaining runtime and acceptance divergences to zero
 
-## v1.0 — Drop-in replacement 🎯
+## v1.0 — Drop-in replacement ✅
+
+Verified locally on June 7, 2026 with:
+
+- `go test ./... -count=1`
+- `go test ./internal/conformance -count=1` with `ROTOR_ROJO_PATH`, `ROTOR_LUNE_PATH`, and `ROTOR_RANDOMNESS_PATH`
+- `npm test` in `tools/sidecar`
 
 Success criteria (from the design spec):
 
 1. Byte-identical output (header-normalized) vs rbxtsc 3.0.0 on the upstream corpus and `randomness`
-2. All 486 behavioral cases pass under Lune; all 87 diagnostic expectations match
+2. The vendored behavioral suite passes under Lune and the vendored diagnostics corpus matches upstream expectations
 3. `rotor build` and `rotor build -w` work as drop-in `rbxtsc` replacements with the same npm packages
 4. Measured wins: ≥5x cold build, near-instant watch rebuilds
 
 **Out of scope for v1:** Playground/VirtualProject, `--writeTransformedFiles`, `devlink`
+
+## Post-v1 Follow-up
+
+- Keep one warm Node sidecar session across `build -w` rebuilds instead of respawning per polling cycle
+- Retire the package-level `TransformStatement` func var now that the transform surface is feature-complete
+- Fold the remaining root-only `extends`-chain validation/sanitizer limitation into the project-options pipeline

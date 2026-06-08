@@ -39,7 +39,7 @@ func transformJsxSelfClosingElement(s *State, node *ast.Node) luau.Expression {
 // placeholder appears ONLY when there are children and no attributes.
 func transformJsx(s *State, node *ast.Node, tagName *ast.Node, attributes *ast.Node, children []*ast.Node) luau.Expression {
 	// jsxFactoryEntity seems to always be defined and will default to `React.createElement`
-	jsxFactoryEntity := s.EmitResolver().GetJsxFactoryEntity(node)
+	jsxFactoryEntity := s.EmitResolver().GetJsxFactoryEntityUnsafe(node)
 	if jsxFactoryEntity == nil {
 		panic("Expected jsxFactoryEntity to be defined") // upstream assert
 	}
@@ -75,7 +75,7 @@ func transformJsx(s *State, node *ast.Node, tagName *ast.Node, attributes *ast.N
 // have attributes, so they ALWAYS push `nil` before children (vs the
 // attrs-or-nil asymmetry in transformJsx).
 func transformJsxFragment(s *State, node *ast.Node) luau.Expression {
-	jsxFactoryEntity := s.EmitResolver().GetJsxFactoryEntity(node)
+	jsxFactoryEntity := s.EmitResolver().GetJsxFactoryEntityUnsafe(node)
 	if jsxFactoryEntity == nil {
 		panic("Expected jsxFactoryEntity to be defined") // upstream assert
 	}
@@ -84,7 +84,7 @@ func transformJsxFragment(s *State, node *ast.Node) luau.Expression {
 
 	// getJsxFragmentFactoryEntity() doesn't seem to default to "Fragment"..
 	// but the typechecker does, so we should follow that behavior
-	jsxFragmentFactoryEntity := s.EmitResolver().GetJsxFragmentFactoryEntity(node)
+	jsxFragmentFactoryEntity := s.EmitResolver().GetJsxFragmentFactoryEntityUnsafe(node)
 	if jsxFragmentFactoryEntity == nil {
 		// upstream ts.parseIsolatedEntityName("Fragment", ESNext); tsgo's
 		// ParseIsolatedEntityName does not synthesize positions, so mirror

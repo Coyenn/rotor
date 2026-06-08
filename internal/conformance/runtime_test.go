@@ -54,24 +54,20 @@ func TestRuntimeSuiteSourceRels(t *testing.T) {
 		"tests/assignment.spec.ts",
 		"tests/delete.spec.ts",
 		"tests/roact.spec.tsx",
+		"tests/roact_spread.spec.tsx",
 		"tests/template.spec.ts",
 	} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("runtime sources missing %q in %v", want, got)
 		}
 	}
-	for _, blocked := range []string{
-		"tests/roact_spread.spec.tsx",
-	} {
-		if slices.Contains(got, blocked) {
-			t.Fatalf("runtime sources should exclude %q: %v", blocked, got)
-		}
-	}
 }
 
 func TestDisabledBehavioralFixturesHaveReasons(t *testing.T) {
-	if DisabledBehavioralFixtures["tests/roact_spread.spec.luau"] == "" {
-		t.Fatal("tests/roact_spread.spec.luau should have a behavioral skip reason")
+	for rel, reason := range DisabledBehavioralFixtures {
+		if reason == "" {
+			t.Fatalf("%s should have a behavioral skip reason", rel)
+		}
 	}
 }
 
@@ -88,6 +84,32 @@ func TestRuntimeRojoConfigUsesDataModelTopology(t *testing.T) {
 		if !strings.Contains(config, want) {
 			t.Fatalf("runtime rojo config missing %q:\n%s", want, config)
 		}
+	}
+}
+
+func TestWithRuntimeRoactCompatInjectsJsxShim(t *testing.T) {
+	input := "local Roact = {}\n\nreturn Roact\n"
+	got, err := withRuntimeRoactCompat(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`rawset(Roact, "Fragment", Fragment)`,
+		`rawset(Roact, "jsx", function(component, props, ...)`,
+		`normalized[Roact.Event[eventName]] = listener`,
+		`normalized[Roact.Change[propertyName]] = listener`,
+		`element._rotorKey = key`,
+		`return Roact`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("patched runtime missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestWithRuntimeRoactCompatRejectsUnexpectedInitShape(t *testing.T) {
+	if _, err := withRuntimeRoactCompat("local Roact = {}\n"); err == nil {
+		t.Fatal("expected patching error for runtime without return Roact")
 	}
 }
 

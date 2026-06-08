@@ -91,8 +91,8 @@ the shared `node_modules` tree while limiting the compile to the selected
 source plus shared helpers.
 
 As of June 7, 2026, **44 / 44** committed goldens are enabled. `DisabledFixtures`
-is now empty; the remaining Phase 5 work is runtime, diagnostics, and final
-acceptance closure rather than byte-diff holdouts.
+is empty and the vendored conformance corpus is fully closed: byte-diff,
+diagnostics, runtime, and real-project acceptance all have green harnesses.
 
 ## Diagnostics corpus
 
@@ -129,11 +129,8 @@ available it stages a temporary **runtime subset project** containing:
 - shared helpers and entrypoints,
 - an upstream-shaped DataModel Rojo config for `ServerScriptService.tests`.
 
-This keeps known compile blockers out of the runtime run while still executing
-real upstream TestEZ cases under Lune. The staged runtime subset currently
-excludes `tests/roact_spread.spec.luau`, which is byte-identical in the diff
-harness but still fails behaviorally under Lune; that exclusion is tracked in
-`DisabledBehavioralFixtures` in `internal/conformance/runtime.go`.
+This keeps the runtime run aligned with the upstream TestEZ corpus while still
+staging the temporary project topology that Lune needs.
 
 When the tools are available it:
 
@@ -141,9 +138,8 @@ When the tools are available it:
 2. runs `rojo build` to produce a place file,
 3. executes the upstream `reference/roblox-ts/tests/runTestsWithLune.lua`.
 
-With the current runtime subset, the staged suite executes the current enabled
-conformance specs locally, minus the fixtures still listed in
-`DisabledBehavioralFixtures`.
+With `rojo` + `lune` available, the staged suite now executes the full vendored
+runtime corpus green (`460 passed, 0 failed, 0 skipped` on June 7, 2026).
 
 ## randomness acceptance
 
@@ -163,4 +159,6 @@ skips with an explicit setup message when unset and otherwise:
 4. compares the normalized `out/` and `include/` trees byte-for-byte.
 
 This keeps the harness environment-gated while making it a real build/output
-acceptance proof rather than a compile-only smoke test.
+acceptance proof rather than a compile-only smoke test. With a local
+`randomness` checkout available, the staged compare is green byte-for-byte on
+both `out/` and `include/`.
