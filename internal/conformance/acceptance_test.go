@@ -109,6 +109,53 @@ func TestCompareOutputTrees(t *testing.T) {
 	}
 }
 
+func TestStageAcceptanceProjectCopySkipsGeneratedDirs(t *testing.T) {
+	src := t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(src, "src"),
+		filepath.Join(src, "node_modules"),
+		filepath.Join(src, "out"),
+		filepath.Join(src, "include"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "tsconfig.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "src", "main.ts"), []byte("export {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "node_modules", "sentinel.txt"), []byte("node_modules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "out", "stale.luau"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "include", "RuntimeLib.lua"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "staged")
+	if err := stageAcceptanceProjectCopy(src, dst); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dst, "src", "main.ts")); err != nil {
+		t.Fatalf("staged source missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "out")); !os.IsNotExist(err) {
+		t.Fatalf("staged out/ err = %v, want not-exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "include")); !os.IsNotExist(err) {
+		t.Fatalf("staged include/ err = %v, want not-exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "node_modules", "sentinel.txt")); err != nil {
+		t.Fatalf("staged node_modules missing: %v", err)
+	}
+}
+
 func TestRandomnessAcceptance(t *testing.T) {
 	path, err := resolveRandomnessProjectPath()
 	if err != nil {
@@ -120,10 +167,10 @@ func TestRandomnessAcceptance(t *testing.T) {
 
 	rotorCopy := filepath.Join(t.TempDir(), "rotor")
 	rbxtscCopy := filepath.Join(t.TempDir(), "rbxtsc")
-	if err := copyTree(path, rotorCopy); err != nil {
+	if err := stageAcceptanceProjectCopy(path, rotorCopy); err != nil {
 		t.Fatalf("copy rotor project: %v", err)
 	}
-	if err := copyTree(path, rbxtscCopy); err != nil {
+	if err := stageAcceptanceProjectCopy(path, rbxtscCopy); err != nil {
 		t.Fatalf("copy rbxtsc project: %v", err)
 	}
 
@@ -250,6 +297,9 @@ func collectOutputFiles(roots []string) (map[string]string, error) {
 			if d.IsDir() {
 				return nil
 			}
+			if strings.HasSuffix(path, ".tsbuildinfo") {
+				return nil
+			}
 			rel, err := filepath.Rel(root, path)
 			if err != nil {
 				return err
@@ -264,6 +314,38 @@ func collectOutputFiles(roots []string) (map[string]string, error) {
 	return files, nil
 }
 
+func stageAcceptanceProjectCopy(src, dst string) error {
+	if err := copyTreeFiltered(src, dst, func(rel string, d fs.DirEntry) bool {
+		rel = filepath.ToSlash(rel)
+		switch rel {
+		case "node_modules", "out", "include", ".git":
+			return false
+		}
+		return !strings.HasPrefix(rel, "node_modules/") &&
+			!strings.HasPrefix(rel, "out/") &&
+			!strings.HasPrefix(rel, "include/") &&
+			!strings.HasPrefix(rel, ".git/")
+	}); err != nil {
+		return err
+	}
+
+	srcNodeModules := filepath.Join(src, "node_modules")
+	if _, err := os.Stat(srcNodeModules); err == nil {
+		dstNodeModules := filepath.Join(dst, "node_modules")
+		if err := os.MkdirAll(filepath.Dir(dstNodeModules), 0o755); err != nil {
+			return err
+		}
+		if err := os.Symlink(srcNodeModules, dstNodeModules); err == nil {
+			return nil
+		}
+		if err := createJunction(srcNodeModules, dstNodeModules); err == nil {
+			return nil
+		}
+		return copyTree(srcNodeModules, dstNodeModules)
+	}
+	return nil
+}
+
 func normalizeCompiledHeader(text string) string {
 	const prefix = "-- Compiled with "
 	if !strings.HasPrefix(text, prefix) {
@@ -273,4 +355,37 @@ func normalizeCompiledHeader(text string) string {
 		return "-- Compiled with <normalized>\n" + text[newline+1:]
 	}
 	return "-- Compiled with <normalized>"
+}
+
+func copyTreeFiltered(src, dst string, keep func(rel string, d fs.DirEntry) bool) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(dst, 0o755)
+		}
+		if !keep(rel, d) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		return copyFile(path, target)
+	})
+}
+
+func createJunction(target, path string) error {
+	cmd := exec.Command("cmd", "/c", "mklink", "/J", path, target)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
