@@ -1,8 +1,10 @@
 name: Set up rotor toolchain
 description: >-
-  Install Go, Bun, Node.js and the Roblox tools (rojo, lune), then install the
-  fixture node_modules the test suite needs. Bun is the canonical installer for
-  fixtures — npm was the source of flaky CI installs.
+  Install Go, Bun and Node.js, then install the fixture node_modules the test
+  suite needs. Bun is the canonical installer for fixtures — npm was the source
+  of flaky CI installs. rojo/lune are intentionally NOT installed: the
+  conformance runtime suite (lune-executed) skips here and is exercised locally
+  (see aftman.toml); CI gates on the byte-parity tests, which need no Roblox tools.
 
 runs:
   using: composite
@@ -21,11 +23,6 @@ runs:
       uses: actions/setup-node@v4
       with:
         node-version: "22"
-
-    - name: Set up Roblox tools (rojo, lune)
-      # Reads aftman.toml and installs the pinned rojo/lune. Enables the
-      # conformance runtime suite; without these tools the suite skips.
-      uses: ok-nick/setup-aftman@v0.4.2
 
     - name: Install fixture dependencies (bun)
       shell: bash

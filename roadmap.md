@@ -173,13 +173,13 @@ Verified locally on June 7, 2026 with:
 - `bun test` in `tools/sidecar` (after `bun install --no-save`; `npm test` remains available as a fallback)
 
 Continuously verified in CI (June 8, 2026): `.github/workflows/ci.yml` runs gofmt +
-`go vet` + `go build` + full `go test ./...` on every push to `master` and PR via the
-shared `.github/actions/setup` composite action — which provisions Go, **Bun** (the
-canonical fixture installer; npm fallback was the source of flaky installs), Node (for
-the transformer sidecar), and rojo/lune (`aftman.toml`, so the conformance runtime suite
-runs rather than skips). `release.yml` reuses the same setup before GoReleaser. The clean
-checkout path was validated on Linux/amd64 in a `golang:1.26` container (all rotor
-packages green).
+`go vet` + `go build ./...` + full `go test ./...` on every push to `master` and PR via
+the shared `.github/actions/setup` composite action — which provisions Go, **Bun** (the
+canonical fixture installer; npm fallback was the source of flaky installs) and Node (for
+the transformer sidecar). rojo/lune are intentionally not installed in CI, so the
+lune-executed runtime suite skips there; it runs locally via `aftman install` and is
+exercised by the byte-parity differential/diagnostics tests regardless. `release.yml`
+reuses the same setup, runs the tests, then publishes CLI binaries via GoReleaser.
 
 Success criteria (from the design spec):
 
