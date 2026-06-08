@@ -24,9 +24,7 @@ var skippedDiagnosticFixtures = map[string]string{
 	"noRojoData.ts":       "requires a missing-Rojo-data project layout that the model conformance project intentionally does not model",
 }
 
-var skippedDiagnosticIDs = map[string]string{
-	"noRobloxSymbolInstanceof": "blocked on the project-layer nodeModulesPath gating noted in internal/transformer/binary.go",
-}
+var skippedDiagnosticIDs = map[string]string{}
 
 var installConformanceDepsOnce struct {
 	once sync.Once

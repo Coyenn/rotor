@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -35,5 +36,17 @@ func TestDiagnosticsCorpus(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestNoRobloxSymbolInstanceofFixture(t *testing.T) {
+	root := repoRoot(t)
+	fixture := filepath.Join(root, "testdata", "conformance", "excluded", "diagnostics", "noRobloxSymbolInstanceof.1.ts")
+	got, err := compileDiagnosticFixture(root, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"noRobloxSymbolInstanceof"}) {
+		t.Fatalf("got diagnostics %v, want [noRobloxSymbolInstanceof]", got)
 	}
 }

@@ -101,9 +101,9 @@ go test ./internal/conformance/ -run TestDiagnosticsCorpus -count=1
 
 The harness installs `project/node_modules` on first use if needed, then
 overlays each vendored diagnostics fixture under `project/src/__diagnostics`
-and compiles it through the real conformance project config. Two Rojo-topology
-fixtures (`noRojoData.ts`, `noIsolatedImport.ts`) and the pre-Phase-4
-`noRobloxSymbolInstanceof.*` family are explicitly skipped with reasons.
+and compiles it through the real conformance project config. The only
+remaining skips are the two Rojo-topology fixtures (`noRojoData.ts`,
+`noIsolatedImport.ts`), each with an explicit reason in the manifest.
 
 ## Runtime suite
 

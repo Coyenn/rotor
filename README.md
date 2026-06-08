@@ -4,7 +4,7 @@
 
 rotor targets `rbxtsc` compatibility: **byte-identical Luau output**, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler.
 
-> **Status: production hardening.** rotor already typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, and emits declarations for declaration-enabled builds. Remaining v1 blockers are true incremental rebuild selection, transformer-plugin sidecar integration, and full Phase 5 conformance closure.
+> **Status: production hardening.** rotor already typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, and emits declarations for declaration-enabled builds. Remaining v1 blockers are true incremental rebuild selection, transformer-plugin sidecar integration, and the last Phase 5 closures: the Lune runtime suite, the randomness acceptance proof, and two Rojo-topology diagnostics fixtures.
 
 ```
 $ rotor check ./my-game -w
@@ -29,7 +29,7 @@ The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) �
 Compatibility isn't a hope — it's enforced by construction:
 
 - **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
-- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The vendored corpus and harnesses are in-repo today (`testdata/conformance`, `internal/conformance`); all 44 upstream golden fixtures are now enabled byte-for-byte, and the remaining Phase 5 closure work is runtime, diagnostics, and final acceptance coverage.
+- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The vendored corpus and harnesses are in-repo today (`testdata/conformance`, `internal/conformance`); all 44 upstream golden fixtures are now enabled byte-for-byte, and the remaining Phase 5 closure work is runtime, two topology-bound diagnostics fixtures, and final acceptance coverage.
 - **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
 - **Same runtime**: `RuntimeLib.lua` and `Promise.lua` are reused verbatim from roblox-ts — zero behavioral drift at runtime.
 
@@ -79,7 +79,7 @@ Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 - `build -w` is available today, but it is still a polling/full-rebuild watch path, not the final incremental manifest-based rebuild flow.
 - Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
 - The standalone transformer-plugin sidecar exists in `tools/sidecar`, but it is not yet wired into Rotor's Go build path, so pluginless projects are the current production target.
-- Phase 5 is in progress: the upstream differential/diagnostics/runtime/acceptance harnesses are in repo, but Rotor is not yet claiming full `rbxtsc` replacement parity until those suites are closed out.
+- Phase 5 is in progress: the upstream differential/diagnostics/runtime/acceptance harnesses are in repo, but Rotor is not yet claiming full `rbxtsc` replacement parity until the runtime suite, acceptance run, and two topology-bound diagnostics fixtures are closed out.
 
 ## Production readiness
 
@@ -89,7 +89,7 @@ Rotor is **not** yet claiming final v1 drop-in status for:
 
 - projects that require roblox-ts transformer plugins in the build path
 - teams that need manifest-based incremental rebuild selection rather than the current watch loop
-- users who need the full upstream behavioral + diagnostics corpus closed out before rollout
+- users who need the full upstream behavioral suite plus the remaining topology-bound diagnostics fixtures closed out before rollout
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
 

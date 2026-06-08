@@ -152,10 +152,10 @@ Everything that makes rotor a usable CLI tool rather than a compile library.*
 *The 1:1 proof at full scale.*
 
 - [ ] Behavioral suite closure: runtime harness landed (`internal/conformance/runtime.go`, `runtime_test.go`), but the full **486 upstream TestEZ cases** are not yet proven green under **Lune**
-- [ ] Diagnostics corpus closure: diagnostics harness landed (`internal/conformance/diagnostics_test.go`) with explicit skip manifests, but not all **87 expected-error files** are closed out yet
+- [ ] Diagnostics corpus closure: diagnostics harness landed (`internal/conformance/diagnostics_test.go`) and now proves every portable vendored expected-error fixture; only `noIsolatedImport.ts` and `noRojoData.ts` remain intentionally skipped because the model conformance project does not emulate those Rojo topologies
 - [x] Differential run harness over roblox-ts's vendored `tests/src` corpus exists — `internal/conformance` now enables **44** golden fixtures byte-for-byte with **zero** manifest holdouts
 - [ ] Acceptance closure: randomness acceptance runner landed (`internal/conformance/acceptance_test.go`), but the final `rotor build` byte-identity + gameplay proof still depends on the local project path and remaining project-layer gaps
-- [ ] Close remaining runtime/diagnostics/acceptance divergences to zero
+- [ ] Close remaining runtime, Rojo-topology diagnostics, and acceptance divergences to zero
 
 ## v1.0 — Drop-in replacement 🎯
 

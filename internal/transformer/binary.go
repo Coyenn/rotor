@@ -195,11 +195,9 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 			luau.Nil(),
 		)
 	} else if operatorKind == ast.KindInstanceOfKeyword {
-		// Upstream gates a noRobloxSymbolInstanceof diagnostic on
-		// isPossiblyType(rightType, isRobloxType(state)); isRobloxType tests
-		// whether the symbol is declared under node_modules/@rbxts/types,
-		// which needs the project-layer nodeModulesPath — Phase 4 (the
-		// runtime-lib call below already aborts compilation until then).
+		if IsPossiblyType(s, s.GetType(expression.Right), IsRobloxType(s)) {
+			s.Diags.Add(DiagNoRobloxSymbolInstanceof(expression.Right))
+		}
 		return luau.NewCall(s.RuntimeLib(node, "instanceof"), luau.NewList[luau.Expression](left, right))
 	}
 
