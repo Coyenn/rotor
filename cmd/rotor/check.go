@@ -17,6 +17,7 @@ import (
 	"rotor/tsgo/diagnosticwriter"
 	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/tspath"
+	"rotor/tsgo/vfs/cachedvfs"
 	"rotor/tsgo/vfs/osvfs"
 )
 
@@ -73,7 +74,7 @@ func cmdCheck(args []string) int {
 		}
 	}
 
-	fmt.Println(banner)
+	newUI(os.Stdout).banner(filepath.Base(dir))
 
 	if watch {
 		return runWatch(dir, os.Stdout)
@@ -102,7 +103,11 @@ func runCheck(dir string, out io.Writer) checkResult {
 	// rejects (downlevelIteration, baseUrl, moduleResolution=node10) so
 	// standard roblox-ts projects check cleanly — same wrapping as
 	// compile.CompileFile.
-	fs := compile.SanitizeFS(bundled.WrapFS(osvfs.FS()))
+	// Cache filesystem metadata (Stat/FileExists/Realpath) for the lifetime of
+	// this check: module resolution re-stats overlapping node_modules paths
+	// once per file, and a check never mutates its source tree. Same wrapper
+	// tsgo's project host uses; see compile.newProjectProgram.
+	fs := cachedvfs.From(compile.SanitizeFS(bundled.WrapFS(osvfs.FS())))
 	host := compiler.NewCompilerHost(slashDir, fs, bundled.LibPath(), nil, nil)
 
 	formatOpts := &diagnosticwriter.FormattingOptions{
@@ -167,8 +172,7 @@ func runCheck(dir string, out io.Writer) checkResult {
 }
 
 func printSummary(out io.Writer, res checkResult) {
-	fmt.Fprintf(out, "checked %d files in %d ms — %d errors\n",
-		res.fileCount, res.elapsed.Milliseconds(), res.errorCount)
+	newUI(out).checkSummary(res.fileCount, res.errorCount, res.elapsed)
 }
 
 func writeDiagnostics(out io.Writer, diags []*ast.Diagnostic, formatOpts *diagnosticwriter.FormattingOptions) {

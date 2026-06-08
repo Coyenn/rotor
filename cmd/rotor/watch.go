@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	"rotor/internal/compile"
-	"rotor/internal/logservice"
 )
 
 const pollInterval = 250 * time.Millisecond
@@ -26,9 +24,10 @@ type fileStamp struct {
 // parsed file list plus tsconfig.json) and re-runs the full check whenever
 // anything changes. Exits only via Ctrl+C.
 func runWatch(dir string, out io.Writer) int {
+	u := newUI(out)
 	res := runCheck(dir, out)
 	stamps := snapshotFiles(res.watchFiles)
-	printWatching(out, len(res.watchFiles))
+	u.watchBanner(len(res.watchFiles))
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -37,17 +36,12 @@ func runWatch(dir string, out io.Writer) int {
 		if !changed {
 			continue
 		}
-		fmt.Fprintf(out, "\n%s\n", strings.Repeat("-", 72))
-		fmt.Fprintf(out, "[%s] change detected (%s) — rechecking...\n\n", timestamp(), file)
+		u.watchChange(file)
 		res = runCheck(dir, out)
 		stamps = snapshotFiles(res.watchFiles)
-		printWatching(out, len(res.watchFiles))
+		u.watchBanner(len(res.watchFiles))
 	}
 	return 0
-}
-
-func printWatching(out io.Writer, n int) {
-	fmt.Fprintf(out, "\n[%s] watching %d files for changes (Ctrl+C to exit)\n", timestamp(), n)
 }
 
 func timestamp() string {
@@ -72,8 +66,9 @@ func detectFileChange(files []string, stamps map[string]fileStamp) (bool, string
 }
 
 func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
+	u := newUI(os.Stdout)
 	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
-	reportBuildPass(result, diags, elapsed, err)
+	reportBuildPass(u, result, diags, elapsed, err)
 
 	outputDir := guessedOutputDir(dir, result)
 	stamps := snapshotProjectTree(dir, outputDir)
@@ -87,11 +82,10 @@ func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
 			continue
 		}
 
-		fmt.Printf("\n%s\n", strings.Repeat("-", 72))
-		fmt.Printf("[%s] File change detected. Starting rebuild... (%s)\n\n", timestamp(), path)
+		u.watchChange(path)
 
 		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
-		reportBuildPass(result, diags, elapsed, err)
+		reportBuildPass(u, result, diags, elapsed, err)
 
 		outputDir = guessedOutputDir(dir, result)
 		stamps = snapshotProjectTree(dir, outputDir)
@@ -99,26 +93,13 @@ func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
 	return 0
 }
 
-func reportBuildPass(result *compile.BuildResult, diags []string, elapsed time.Duration, err error) {
-	errorCount := len(diags)
-	for _, d := range diags {
-		fmt.Fprintln(os.Stderr, d)
-	}
+func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed time.Duration, err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		newUI(os.Stderr).buildFailure(err.Error(), diags)
+	} else if result != nil {
+		u.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	}
-	if result != nil {
-		logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
-			len(result.Outputs), len(result.EmittedFiles), elapsed.Milliseconds()))
-	}
-	fmt.Printf("[%s] Found %d error%s. Watching for file changes.\n", timestamp(), errorCount, pluralS(errorCount))
-}
-
-func pluralS(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
+	u.watchIdle()
 }
 
 func snapshotProjectTree(root, outputDir string) map[string]fileStamp {

@@ -290,39 +290,64 @@ func (r *RojoResolver) searchDirectory(directory, item string) {
 	if err != nil {
 		return
 	}
-	children := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		children = append(children, entry.Name())
-	}
 
-	if slices.Contains(children, rojoDefaultName) {
-		r.parseConfig(filepath.Join(directory, rojoDefaultName), false)
-		return
+	for _, entry := range entries {
+		if entry.Name() == rojoDefaultName {
+			r.parseConfig(filepath.Join(directory, rojoDefaultName), false)
+			return
+		}
 	}
 
 	if item != "" {
 		r.rbxPath = append(r.rbxPath, item)
 	}
 
-	// *.project.json
-	for _, child := range children {
-		childPath := filepath.Join(directory, child)
-		if st, err := os.Stat(childPath); err == nil && st.Mode().IsRegular() &&
-			child != rojoDefaultName && rojoFileRegex.MatchString(child) {
-			r.parseConfig(childPath, false)
+	// *.project.json (regular files). The reference stats realpathSync(child)
+	// for every entry; os.ReadDir already carries the entry kind, so we only
+	// fall back to a syscall for reparse points (junctions/symlinks), where
+	// following the link is load-bearing for pnpm installs. Plain files/dirs —
+	// the overwhelming majority of a source tree — need no extra stat.
+	for _, entry := range entries {
+		child := entry.Name()
+		if child == rojoDefaultName || !rojoFileRegex.MatchString(child) {
+			continue
+		}
+		if _, isRegular := entryKind(directory, entry); isRegular {
+			r.parseConfig(filepath.Join(directory, child), false)
 		}
 	}
 
 	// folders
-	for _, child := range children {
-		childPath := filepath.Join(directory, child)
-		if st, err := os.Stat(childPath); err == nil && st.IsDir() {
-			r.searchDirectory(childPath, child)
+	for _, entry := range entries {
+		if isDir, _ := entryKind(directory, entry); isDir {
+			r.searchDirectory(filepath.Join(directory, entry.Name()), entry.Name())
 		}
 	}
 
 	if item != "" {
 		r.rbxPath = r.rbxPath[:len(r.rbxPath)-1]
+	}
+}
+
+// entryKind reports whether a directory entry resolves to a directory or a
+// regular file, matching the reference's statSync(realpathSync(child)) calls.
+// os.ReadDir populates the entry kind from the directory scan itself (no extra
+// syscall), so the unambiguous plain-file and plain-directory cases are decided
+// for free; any reparse point (a Windows junction or symlink — the bits pnpm
+// relies on) falls back to a following os.Stat so behavior is byte-identical.
+func entryKind(directory string, entry os.DirEntry) (isDir, isRegular bool) {
+	switch entry.Type() {
+	case os.ModeDir:
+		return true, false
+	case 0: // regular file
+		return false, true
+	default:
+		st, err := os.Stat(filepath.Join(directory, entry.Name()))
+		if err != nil {
+			return false, false
+		}
+		mode := st.Mode()
+		return mode.IsDir(), mode.IsRegular()
 	}
 }
 

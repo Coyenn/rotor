@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -26,10 +27,11 @@ var projectTypeChoices = map[string]transformer.ProjectType{
 // CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
 // flags the user passed.
 type buildArgs struct {
-	project string
-	opts    partialProjectOptions
-	help    bool
-	version bool
+	project    string
+	opts       partialProjectOptions
+	help       bool
+	version    bool
+	cpuprofile string // rotor DX extension: write a pprof CPU profile here
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -131,6 +133,9 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			}
 			res.opts.typeName = &v
 			continue
+		case "cpuprofile":
+			res.cpuprofile = takeValue()
+			continue
 		}
 
 		// Boolean flags: --flag / --flag=bool / --no-flag.
@@ -208,6 +213,20 @@ func cmdBuild(args []string) int {
 		return 0
 	}
 
+	if parsed.cpuprofile != "" {
+		f, err := os.Create(parsed.cpuprofile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: cannot create cpu profile: %v\n", err)
+			return 1
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: cannot start cpu profile: %v\n", err)
+			return 1
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	tsConfigPath, err := findTsConfigPath(parsed.project)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
@@ -225,8 +244,11 @@ func cmdBuild(args []string) int {
 	// (createProjectData.ts L13).
 	dir := filepath.Dir(tsConfigPath)
 
+	out := newUI(os.Stdout)
+	out.banner(filepath.Base(dir))
+
 	if opts.writeTransformedFiles {
-		logservice.Warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
+		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
 		return runBuildWatch(dir, tsConfigPath, opts)
@@ -234,25 +256,17 @@ func cmdBuild(args []string) int {
 
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
 		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"rotor build: warning: %s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first\n",
-				dir)
+			out.warn(fmt.Sprintf("%s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first", filepath.Base(dir)))
 		}
 	}
 
 	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
 	if err != nil {
-		for _, d := range diags {
-			fmt.Fprintln(os.Stderr, d)
-		}
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		newUI(os.Stderr).buildFailure(err.Error(), diags)
 		return 1
 	}
 
-	// rotor's own summary line (rbxtsc 3.0.0 prints no total — deliberate UX
-	// addition, via LogService so partial-line tracking holds).
-	logservice.WriteLine(fmt.Sprintf("compiled %d files (%d written) in %d ms",
-		len(result.Outputs), len(result.EmittedFiles), elapsed.Milliseconds()))
+	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	return 0
 }
 

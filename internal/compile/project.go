@@ -19,6 +19,7 @@ import (
 	"rotor/tsgo/core"
 	"rotor/tsgo/outputpaths"
 	"rotor/tsgo/tspath"
+	"rotor/tsgo/vfs/cachedvfs"
 	"rotor/tsgo/vfs/osvfs"
 )
 
@@ -70,7 +71,15 @@ func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Progr
 		configPath = filepath.ToSlash(abs)
 	}
 
-	fs := SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath)
+	// PERF: a single compile reads each candidate path many times — module
+	// resolution alone re-stats overlapping node_modules/@rbxts directories
+	// once per importing file (profiled at ~40% of warm compile time, mostly
+	// GetFileAttributesEx syscalls). cachedvfs memoizes Stat/FileExists/
+	// DirectoryExists/Realpath/GetAccessibleEntries (ReadFile passes through, so
+	// no content blowup) behind thread-safe SyncMaps — the same wrapper tsgo's
+	// own project/LSP host uses. Safe because a build never mutates its source
+	// tree mid-pass, so cached file metadata cannot go stale.
+	fs := cachedvfs.From(SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath))
 	program, diags, err := newProjectProgramFromFS(dir, configPath, fs)
 	if err != nil {
 		return "", nil, diags, err
