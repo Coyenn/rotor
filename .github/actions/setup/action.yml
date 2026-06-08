@@ -23,9 +23,9 @@ runs:
         node-version: "22"
 
     - name: Set up Roblox tools (rojo, lune)
-      # Reads aftman.toml. Enables the conformance runtime suite; if this fails
-      # the suite skips rather than failing the build.
-      uses: rojo-rbx/setup-aftman@v1
+      # Reads aftman.toml and installs the pinned rojo/lune. Enables the
+      # conformance runtime suite; without these tools the suite skips.
+      uses: ok-nick/setup-aftman@v0.4.2
 
     - name: Install fixture dependencies (bun)
       shell: bash
