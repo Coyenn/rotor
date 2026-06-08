@@ -18,7 +18,6 @@ import (
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
 	"rotor/tsgo/outputpaths"
-	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/tspath"
 	"rotor/tsgo/vfs/osvfs"
 )
@@ -72,46 +71,10 @@ func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Progr
 	}
 
 	fs := SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath)
-	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
-	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
-	if len(configDiags) > 0 {
-		return "", nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
+	program, diags, err := newProjectProgramFromFS(dir, configPath, fs)
+	if err != nil {
+		return "", nil, diags, err
 	}
-
-	// Upstream order (getParsedCommandLine.ts L21-35): config parse errors
-	// throw first, then validateCompilerOptions over the parsed options. The
-	// raw (pre-sanitization) config is read separately because SanitizeTSConfig
-	// rewrites some of the very options the validation must inspect.
-	raw := readRawEnforcedOptions(filepath.FromSlash(configPath))
-	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {
-		return "", nil, []string{msg}, errors.New("compile: invalid tsconfig.json configuration")
-	}
-
-	// CHECKER-IDENTITY PIN (digest §7.3): `aliasSymbolLinks.referenced` marks
-	// — the data behind EmitResolver.IsReferencedAliasDeclaration, i.e.
-	// import/export elision — live on the checker INSTANCE that semantically
-	// checked a file. tsgo's built-in pool creates up to 4 checkers and
-	// assigns files round-robin (checkerpool.go: fileAssociations[file] =
-	// checkers[i%checkerCount]); GetSemanticDiagnostics(ctx, file) checks with
-	// the file-associated checker while Program.GetTypeChecker returns
-	// checkers[0] — so with the default pool the transformer would read
-	// elision marks from the WRONG checker for 3 of every 4 files. Pinning
-	// the pool to ONE checker makes both calls return the same instance,
-	// keeps every *ast.Symbol comparison (MacroManager registrations,
-	// MultiState caches) within a single checker, and matches upstream's
-	// one-typeChecker-per-Program model. The option is read exactly once, at
-	// pool construction (newCheckerPoolWithTracing), so mutating the parsed
-	// options before NewProgram is safe. Proven load-bearing: removing the
-	// pin makes TestCompileProjectImportsModel spuriously elide the imports
-	// of every file whose round-robin checker isn't checkers[0].
-	// Phase 4 perf: restore pool parallelism via GetTypeCheckerForFile + per-checker symbol caches.
-	one := 1
-	parsed.CompilerOptions().Checkers = &one
-
-	program := compiler.NewProgram(compiler.ProgramOptions{
-		Host:   host,
-		Config: parsed,
-	})
 	return dir, program, nil, nil
 }
 
@@ -440,11 +403,16 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 }
 
 func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []string, error) {
+	sourceFiles := projectSourceFiles(program)
+	program, sourceFiles, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
+	if err != nil {
+		return nil, diags, err
+	}
 	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
 		return nil, diags, err
 	}
-	return compileProjectSourceFiles(dir, program, pctx, projectSourceFiles(program), opts)
+	return compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
 }
 
 func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
@@ -460,6 +428,23 @@ func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
 	return sourceFiles
 }
 
+type checkerSourceFileGroup struct {
+	indices []int
+	files   []*ast.SourceFile
+}
+
+type compiledProjectSourceFile struct {
+	relOut string
+	text   string
+	diags  []string
+	err    error
+}
+
+type precheckedProjectSourceFile struct {
+	tsDiags      []*ast.Diagnostic
+	commentDiags []string
+}
+
 func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []string, error) {
 	ctx := context.Background()
 
@@ -472,87 +457,143 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	// compileFiles.ts L102 — note the TWO dots.
 	logservice.WriteLineIfVerbose("compiling as " + string(pctx.projectType) + "..")
 
-	chk, release := program.GetTypeChecker(ctx)
-	defer release()
-	multi := transformer.NewMultiState()
+	results := make([]compiledProjectSourceFile, len(sourceFiles))
+	prechecks := make([]precheckedProjectSourceFile, len(sourceFiles))
+	progressLabels := compileProjectProgressLabels(sourceFiles)
+	groups := groupSourceFilesByChecker(ctx, program, sourceFiles)
 
+	wg := core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
+	for _, group := range groups {
+		group := group
+		wg.Queue(func() {
+			for i, sourceFile := range group.files {
+				prechecks[group.indices[i]] = precheckProjectSourceFile(ctx, program, sourceFile, opts)
+			}
+		})
+	}
+	wg.RunAndWait()
+
+	for _, precheck := range prechecks {
+		if len(precheck.tsDiags) > 0 {
+			return nil, diagnosticStrings(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+		}
+		if len(precheck.commentDiags) > 0 {
+			return nil, precheck.commentDiags, errors.New("compile: comment directive diagnostics")
+		}
+	}
+	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
+		return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
+	}
+
+	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
+	for _, group := range groups {
+		group := group
+		wg.Queue(func() {
+			multi := transformer.NewMultiState()
+			for i, sourceFile := range group.files {
+				results[group.indices[i]] = compileProjectSourceFile(ctx, dir, program, pctx, sourceFile, opts, multi, progressLabels[group.indices[i]])
+			}
+		})
+	}
+	wg.RunAndWait()
+
+	outputs := make(map[string]string, len(results))
+	for _, result := range results {
+		if result.err != nil {
+			return nil, result.diags, result.err
+		}
+		outputs[result.relOut] = result.text
+	}
+
+	return outputs, nil, nil
+}
+
+func compileProjectProgressLabels(sourceFiles []*ast.SourceFile) []string {
 	progressMaxLength := len(fmt.Sprintf("%d/%d", len(sourceFiles), len(sourceFiles)))
 	cwd, cwdErr := os.Getwd()
-
-	results := make(map[string]string)
+	labels := make([]string, len(sourceFiles))
 	for i, sourceFile := range sourceFiles {
-		fileName := sourceFile.FileName()
-
-		// Per-file verbose benchmark line (compileFiles.ts L154-155):
-		// `${i+1}/${total} compile ${path.relative(cwd, fileName)}` with the
-		// fraction padStart'ed to len("total/total").
 		progress := fmt.Sprintf("%*s", progressMaxLength, fmt.Sprintf("%d/%d", i+1, len(sourceFiles)))
-		relName := filepath.FromSlash(fileName)
+		relName := filepath.FromSlash(sourceFile.FileName())
 		if cwdErr == nil {
 			if rel, err := filepath.Rel(cwd, relName); err == nil {
 				relName = rel
 			}
 		}
-
-		var fileDiags []string
-		var fileErr error
-		logservice.BenchmarkIfVerbose(progress+" compile "+relName, func() {
-			// Per-file pre-emit diagnostics (syntactic + semantic + checker
-			// globals); the first file with errors aborts the pass
-			// (compileFiles.ts L156-158 + the hasErrors early return). Running
-			// the semantic pass before transforming also populates the
-			// checker's alias-reference marks for this file (digest §7.3).
-			if tsDiags := preEmitDiagnostics(ctx, program, sourceFile); len(tsDiags) > 0 {
-				fileDiags = diagnosticStrings(tsDiags)
-				fileErr = errors.New("compile: TypeScript diagnostics")
-				return
-			}
-			if !opts.AllowCommentDirectives {
-				if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
-					fileDiags = diags
-					fileErr = errors.New("compile: comment directive diagnostics")
-					return
-				}
-			}
-
-			state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
-			// Macro registration audit (digest §6), mirroring upstream's
-			// ProjectError-at-construction: the first NewState built the pass
-			// MacroManager; fail before transforming anything when
-			// registrations are missing while the types packages are present.
-			if missing := state.Macros().Missing(); len(missing) > 0 {
-				fileDiags = missing
-				fileErr = errors.New("compile: macro registration failure")
-				return
-			}
-			state.SetRojoContext(pctx.rojoContext, pctx.projectType)
-			state.LogTruthyChanges = opts.LogTruthyChanges
-			state.OptimizedLoops = !opts.NoOptimizedLoops
-
-			text, tDiags, err := transformAndRender(state)
-			if err != nil {
-				fileErr = err
-				return
-			}
-			if len(tDiags) > 0 {
-				fileDiags = tDiags
-				fileErr = errors.New("compile: transformer diagnostics")
-				return
-			}
-
-			outPath := pctx.rojoContext.PathTranslator.GetOutputPath(fileName)
-			relOut, err := filepath.Rel(filepath.FromSlash(dir), outPath)
-			if err != nil {
-				relOut = outPath
-			}
-			results[filepath.ToSlash(relOut)] = text
-		})
-		if fileErr != nil {
-			return nil, fileDiags, fileErr
-		}
+		labels[i] = progress + " compile " + relName
 	}
+	return labels
+}
 
-	return results, nil, nil
+func groupSourceFilesByChecker(ctx context.Context, program *compiler.Program, sourceFiles []*ast.SourceFile) []checkerSourceFileGroup {
+	groupsByChecker := map[any]int{}
+	var groups []checkerSourceFileGroup
+	for i, sourceFile := range sourceFiles {
+		chk, release := program.GetTypeCheckerForFileExclusive(ctx, sourceFile)
+		key := any(chk)
+		release()
+
+		groupIndex, ok := groupsByChecker[key]
+		if !ok {
+			groupIndex = len(groups)
+			groupsByChecker[key] = groupIndex
+			groups = append(groups, checkerSourceFileGroup{})
+		}
+		groups[groupIndex].indices = append(groups[groupIndex].indices, i)
+		groups[groupIndex].files = append(groups[groupIndex].files, sourceFile)
+	}
+	return groups
+}
+
+func precheckProjectSourceFile(ctx context.Context, program *compiler.Program, sourceFile *ast.SourceFile, opts ProjectOptions) precheckedProjectSourceFile {
+	result := precheckedProjectSourceFile{}
+	result.tsDiags = preEmitProjectFileDiagnostics(ctx, program, sourceFile)
+	if len(result.tsDiags) == 0 && !opts.AllowCommentDirectives {
+		result.commentDiags = commentDirectiveDiagnostics(sourceFile)
+	}
+	return result
+}
+
+func compileProjectSourceFile(ctx context.Context, dir string, program *compiler.Program, pctx *projectContext, sourceFile *ast.SourceFile, opts ProjectOptions, multi *transformer.MultiState, progressLabel string) compiledProjectSourceFile {
+	result := compiledProjectSourceFile{}
+	logservice.BenchmarkIfVerbose(progressLabel, func() {
+		chk, release := program.GetTypeCheckerForFile(ctx, sourceFile)
+		defer release()
+
+		state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), multi)
+		// Macro registration audit (digest §6), mirroring upstream's
+		// ProjectError-at-construction: the first NewState built the pass
+		// MacroManager; fail before transforming anything when
+		// registrations are missing while the types packages are present.
+		if missing := state.Macros().Missing(); len(missing) > 0 {
+			result.diags = missing
+			result.err = errors.New("compile: macro registration failure")
+			return
+		}
+		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
+		state.LogTruthyChanges = opts.LogTruthyChanges
+		state.OptimizedLoops = !opts.NoOptimizedLoops
+
+		text, diags, err := transformAndRender(state)
+		if err != nil {
+			result.err = err
+			return
+		}
+		if len(diags) > 0 {
+			result.diags = diags
+			result.err = errors.New("compile: transformer diagnostics")
+			return
+		}
+
+		outPath := pctx.rojoContext.PathTranslator.GetOutputPath(sourceFile.FileName())
+		relOut, err := filepath.Rel(filepath.FromSlash(dir), outPath)
+		if err != nil {
+			relOut = outPath
+		}
+		result.relOut = filepath.ToSlash(relOut)
+		result.text = text
+	})
+	return result
 }
 
 // createPathTranslator ports Project/functions/createPathTranslator.ts:

@@ -60,6 +60,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 	}
+	program, selectedFiles, diags, err = prepareProjectProgramForCompile(dir, program, selectedFiles)
+	if err != nil {
+		return nil, diags, err
+	}
 
 	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {

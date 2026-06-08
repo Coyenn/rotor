@@ -1,6 +1,6 @@
 # Transformer Sidecar Protocol
 
-This repository now carries a standalone Node sidecar in `tools/sidecar/` for the Phase 4 transformer-plugin slice. It is intentionally separate from Rotor's Go compile path. No Go entrypoint wires it up yet.
+This repository now carries a standalone Node sidecar in `tools/sidecar/` for the Phase 4 transformer-plugin slice. Rotor's Go compile/build path now uses it for plugin-configured projects by spawning the worker, sending the current compile set, and recompiling from the returned overlay text through a second tsgo Program.
 
 ## Setup
 
@@ -22,6 +22,8 @@ node tools/sidecar/main.js
 ```
 
 The process reads newline-delimited JSON messages from `stdin` and writes one newline-delimited JSON response per request to `stdout`.
+
+Rotor itself currently spawns the worker per plugin-backed compile/build pass. The standalone server still supports warm multi-request sessions, but the polling watch loop has not yet been taught to keep the sidecar process alive across rebuilds.
 
 ## Protocol v1
 

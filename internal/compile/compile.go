@@ -58,21 +58,27 @@ func CompileFileWithOptions(projectDir, relPath string, opts ProjectOptions) (st
 
 // CompileFileDetailedWithOptions is the options-aware single-file fast path.
 func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []DiagnosticInfo, error) {
-	dir, program, diags, err := newProjectProgram(projectDir, "")
+	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
-	pctx, diags, err := newProjectContext(dir, program, opts)
-	if err != nil {
-		return "", stringDiagnostics(diags), err
-	}
-	ctx := context.Background()
 
 	filePath := dir + "/" + filepath.ToSlash(relPath)
 	sourceFile := program.GetSourceFile(filePath)
 	if sourceFile == nil {
 		return "", nil, fmt.Errorf("compile: source file not in program: %s", filePath)
 	}
+	program, preparedFiles, diags, err := prepareProjectProgramForCompile(dir, program, []*ast.SourceFile{sourceFile})
+	if err != nil {
+		return "", stringDiagnostics(diags), err
+	}
+	sourceFile = preparedFiles[0]
+
+	pctx, diags, err := newProjectContext(dir, program, opts)
+	if err != nil {
+		return "", stringDiagnostics(diags), err
+	}
+	ctx := context.Background()
 
 	// Program-level option diagnostics (e.g. removed-option checks) plus this
 	// file's pre-emit diagnostics (syntactic + semantic + checker globals); any
@@ -89,7 +95,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 		}
 	}
 
-	chk, release := program.GetTypeChecker(ctx)
+	chk, release := program.GetTypeCheckerForFile(ctx, sourceFile)
 	defer release()
 
 	state := transformer.NewState(program, chk, sourceFile, transformer.NewDiagService(), transformer.NewMultiState())
@@ -155,9 +161,14 @@ func transformAndRenderDetailed(state *transformer.State) (text string, diags []
 // Upstream sorts the combined list anyway, and any non-empty result aborts
 // the compile, so the global/semantic order swap is unobservable.
 func preEmitDiagnostics(ctx context.Context, program *compiler.Program, sourceFile *ast.SourceFile) []*ast.Diagnostic {
+	tsDiags := preEmitProjectFileDiagnostics(ctx, program, sourceFile)
+	tsDiags = append(tsDiags, program.GetGlobalDiagnostics(ctx)...)
+	return tsDiags
+}
+
+func preEmitProjectFileDiagnostics(ctx context.Context, program *compiler.Program, sourceFile *ast.SourceFile) []*ast.Diagnostic {
 	tsDiags := program.GetSyntacticDiagnostics(ctx, sourceFile)
 	tsDiags = append(tsDiags, program.GetSemanticDiagnostics(ctx, sourceFile)...)
-	tsDiags = append(tsDiags, program.GetGlobalDiagnostics(ctx)...)
 	return tsDiags
 }
 
