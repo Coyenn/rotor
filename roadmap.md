@@ -163,7 +163,7 @@ Success criteria (from the design spec):
 
 1. Byte-identical output (header-normalized) vs rbxtsc 3.0.0 on the upstream corpus and `randomness`
 2. All 486 behavioral cases pass under Lune; all 87 diagnostic expectations match
-3. `rotor build` and `rotor -w` work as drop-in `rbxtsc` replacements with the same npm packages
+3. `rotor build` and `rotor build -w` work as drop-in `rbxtsc` replacements with the same npm packages
 4. Measured wins: ≥5x cold build, near-instant watch rebuilds
 
 **Out of scope for v1:** Playground/VirtualProject, `--writeTransformedFiles`, `devlink`

@@ -2,9 +2,9 @@
 
 **A native-speed rewrite of the [roblox-ts](https://roblox-ts.com) compiler in Go — built on TypeScript's own native compiler.**
 
-rotor is a drop-in replacement for `rbxtsc` that compiles TypeScript to Luau with **byte-identical output**, the same `@rbxts/*` npm ecosystem, and the same CLI — at roughly **10x the speed**.
+rotor targets `rbxtsc` compatibility: **byte-identical Luau output**, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler.
 
-> **Status: pre-alpha, under heavy development.** rotor already compiles a real production game — all 95 files — **byte-identical to `rbxtsc` 3.0.0**, and typechecks at native speed. The project layer (watch, incremental, full CLI) is next. Watch the roadmap. ⬇️
+> **Status: production hardening.** rotor already typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, and emits declarations for declaration-enabled builds. Remaining v1 blockers are true incremental rebuild selection, transformer-plugin sidecar integration, and full Phase 5 conformance closure.
 
 ```
 $ rotor check ./my-game -w
@@ -29,7 +29,7 @@ The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) �
 Compatibility isn't a hope — it's enforced by construction:
 
 - **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
-- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune) — the corpus and gated harness are vendored in-repo (`testdata/conformance`), enablement is upcoming.
+- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The vendored corpus and harnesses are in-repo today (`testdata/conformance`, `internal/conformance`); 41 upstream golden fixtures are already enabled byte-for-byte, with diagnostics/runtime/acceptance harnesses in place for the remaining closure work.
 - **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
 - **Same runtime**: `RuntimeLib.lua` and `Promise.lua` are reused verbatim from roblox-ts — zero behavioral drift at runtime.
 
@@ -37,7 +37,7 @@ Your existing project — `tsconfig.json`, `default.project.json`, `node_modules
 
 ## Try it today
 
-rotor already **compiles multi-file TypeScript projects to byte-identical Luau** — the full language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, …), optional chaining, Map/Set/string/generator iteration, switch, `new` — verified continuously against real `rbxtsc` output (43/43 differential fixtures; **all 95 files of a real production game compile byte-identical**, zero divergent). It also **natively typechecks real rbxts projects** with watch mode.
+rotor already **compiles multi-file TypeScript projects to byte-identical Luau** across the full language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, ...), optional chaining, Map/Set/string/generator iteration, switch, `new` — verified continuously against real `rbxtsc` output (43/43 differential fixtures; **all 95 files of a real production game compile byte-identical**, zero divergent). It also **natively typechecks and watches real rbxts projects**.
 
 ### Build
 
@@ -55,14 +55,15 @@ Two commands so far:
 ```powershell
 rotor check path/to/your-game        # native, full-strictness typecheck: diagnostics + timing
 rotor check path/to/your-game -w     # watch mode: rechecks on save
-rotor build path/to/your-game        # compile the project to Luau (supports --type, --noInclude, --includePath)
+rotor build path/to/your-game        # compile the project to Luau
+rotor build path/to/your-game -w     # watch mode: rebuild on save
 ```
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).
-- Exit codes: `0` = no errors, `1` = errors found, `2` = usage/config failure — suitable for CI.
+- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`.
 
-`rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project to see it in action:
+`rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project to see it in action:
 
 ```powershell
 rotor build testdata/diff/project
@@ -74,7 +75,20 @@ rotor build testdata/diff/project
 Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 
 - The transformer covers the full language surface (JSX, classes, decorators, async/generators, try/catch, enums, namespaces, spread, the macro tables). Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
-- There's no watch/incremental mode for `build`, no `.d.ts` emit for packages, and no transformer-plugin support yet — that's the Phase 4 project layer.
+- `build -w` is available today, but it is still a polling/full-rebuild watch path, not the final incremental manifest-based rebuild flow.
+- Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
+- The standalone transformer-plugin sidecar exists in `tools/sidecar`, but it is not yet wired into Rotor's Go build path, so pluginless projects are the current production target.
+- Phase 5 is in progress: the upstream differential/diagnostics/runtime/acceptance harnesses are in repo, but Rotor is not yet claiming full `rbxtsc` replacement parity until those suites are closed out.
+
+## Production readiness
+
+Today Rotor is a good fit for **pluginless rbxts projects** that want native-speed `check`, `check -w`, `build`, and `build -w`, and that can live within the currently documented Phase 4/5 limits.
+
+Rotor is **not** yet claiming final v1 drop-in status for:
+
+- projects that require roblox-ts transformer plugins in the build path
+- teams that need manifest-based incremental rebuild selection rather than the current watch loop
+- users who need the full upstream behavioral + diagnostics corpus closed out before rollout
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
 
@@ -89,8 +103,8 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 | **3a** | Imports & module resolution (Rojo-aware requires, `TS.import`/`TS.getModule`, export-from), `new` + constructor macros, math-op macros | ✅ |
 | **3b** | Macro tables (`Array`/`String`/`Set`/`Map`/`Promise` + call macros), optional chaining, full Map/Set/string/generator iteration, pnpm symlink + `baseUrl` resolution | ✅ |
 | **3c** | JSX (`@rbxts/react`), classes, decorators, object/array/call spread + logical assignments, async/generators, try/catch flow rerouting, enums, namespaces | ✅ |
-| **4** | Project layer — `.d.ts` emit, incremental builds, watch, full `rbxtsc` CLI, transformer-plugin sidecar | 🚧 |
-| **5** | Conformance — full upstream behavioral suite under Lune, diagnostics corpus, byte-identical builds of real games | ⬜ |
+| **4** | Project layer — output pipeline, `.d.ts` emit, watch, remaining incremental/plugin integration | 🚧 |
+| **5** | Conformance — upstream behavioral suite under Lune, diagnostics corpus, acceptance closure | 🚧 |
 | | **v1.0** — drop-in `rbxtsc` replacement | 🎯 |
 
 ## Architecture
