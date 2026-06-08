@@ -63,11 +63,9 @@ below, on the first full run.
   `diagnostics/` rojo-dependent tests cared, and those are excluded anyway.
 - `rbxtsc` is invoked with `--allowCommentDirectives` because the upstream
   sources use `@ts-ignore`/`@ts-expect-error`; upstream's own test driver sets
-  `allowCommentDirectives: true` for the same reason. Note rotor currently
-  never emits `noCommentDirectives` (the diagnostic exists in
-  `internal/transformer/diagnostics.go` but is unwired), so this flag matches
-  rotor's present behavior; if rotor ever wires that pre-emit check it must
-  also honor an allowCommentDirectives-equivalent for this corpus.
+  `allowCommentDirectives: true` for the same reason. Rotor now honors the
+  same option in its project/build path, so this corpus stays aligned with the
+  upstream driver behavior.
 
 ## Regenerating goldens
 
@@ -89,13 +87,9 @@ each enabled fixture through a temp project rooted under `project/`, preserving
 the shared `node_modules` tree while limiting the compile to the selected
 source plus shared helpers.
 
-As of June 7, 2026, **40 / 44** committed goldens are enabled. The remaining
-four are tracked in `DisabledFixtures` with explicit reasons:
-
-- `tests/array.spec.luau` — byte mismatch against the upstream golden
-- `tests/delete.spec.luau` — `DeleteExpression` is still unsupported
-- `tests/roact.spec.luau` — byte mismatch against the upstream golden
-- `tests/template.spec.luau` — `TaggedTemplateExpression` is still unsupported
+As of June 7, 2026, **44 / 44** committed goldens are enabled. `DisabledFixtures`
+is now empty; the remaining Phase 5 work is runtime, diagnostics, and final
+acceptance closure rather than byte-diff holdouts.
 
 ## Diagnostics corpus
 
@@ -143,8 +137,9 @@ When the tools are available it:
 2. runs `rojo build` to produce a place file,
 3. executes the upstream `reference/roblox-ts/tests/runTestsWithLune.lua`.
 
-With the current runtime subset, the staged suite executes **378 upstream
-behavioral cases** locally.
+With the current runtime subset, the staged suite executes the current enabled
+conformance specs locally, minus the fixtures still listed in
+`DisabledBehavioralFixtures`.
 
 ## randomness acceptance
 

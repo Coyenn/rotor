@@ -115,5 +115,14 @@ func isMethodFromType(s *State, node *ast.Node, t *checker.Type) bool {
 
 // isMethod ports isMethod.ts isMethod (L93-98).
 func isMethod(s *State, node *ast.Node) bool {
-	return isMethodFromType(s, node, s.GetType(node))
+	t := s.GetType(node)
+	if isMethodFromType(s, node, t) {
+		return true
+	}
+	if s.Checker != nil && ast.IsFunctionExpression(node) {
+		if contextualType := s.Checker.GetContextualType(node, checker.ContextFlagsNone); contextualType != nil && contextualType != t {
+			return isMethodFromType(s, node, contextualType)
+		}
+	}
+	return false
 }

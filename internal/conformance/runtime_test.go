@@ -52,17 +52,16 @@ func TestRuntimeSuiteSourceRels(t *testing.T) {
 		"main.server.ts",
 		"services.d.ts",
 		"tests/assignment.spec.ts",
+		"tests/delete.spec.ts",
+		"tests/roact.spec.tsx",
+		"tests/template.spec.ts",
 	} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("runtime sources missing %q in %v", want, got)
 		}
 	}
 	for _, blocked := range []string{
-		"tests/array.spec.ts",
-		"tests/delete.spec.ts",
-		"tests/roact.spec.tsx",
 		"tests/roact_spread.spec.tsx",
-		"tests/template.spec.ts",
 	} {
 		if slices.Contains(got, blocked) {
 			t.Fatalf("runtime sources should exclude %q: %v", blocked, got)

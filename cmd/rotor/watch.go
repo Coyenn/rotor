@@ -88,7 +88,7 @@ func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
 		}
 
 		fmt.Printf("\n%s\n", strings.Repeat("-", 72))
-		fmt.Printf("[%s] File change detected. Starting incremental compilation... (%s)\n\n", timestamp(), path)
+		fmt.Printf("[%s] File change detected. Starting rebuild... (%s)\n\n", timestamp(), path)
 
 		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
 		reportBuildPass(result, diags, elapsed, err)

@@ -2,6 +2,7 @@ package transformer_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rotor/internal/luau/render"
@@ -107,5 +108,18 @@ func TestNoMixedTypeCall(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected noMixedTypeCall diagnostic; got: %v", ds)
+	}
+}
+
+func TestContextualMethodArrayCallbacksInjectSelf(t *testing.T) {
+	s := buildState(t, filepath.Join("testdata", "calls"), "src/contextual_method.ts")
+	got := render.RenderAST(transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil))
+	for _, want := range []string{"function(self)", "function(self, arg)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered output missing %q:\n%s", want, got)
+		}
+	}
+	if ds := s.Diags.Flush(); len(ds) != 0 {
+		t.Errorf("unexpected diagnostics: %v", ds)
 	}
 }

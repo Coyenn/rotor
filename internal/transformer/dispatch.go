@@ -56,6 +56,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformClassExpression(s, node)
 	case ast.KindConditionalExpression:
 		return transformConditionalExpression(s, node)
+	case ast.KindDeleteExpression:
+		return transformDeleteExpression(s, node)
 	case ast.KindElementAccessExpression:
 		return transformElementAccessExpression(s, node)
 	case ast.KindPropertyAccessExpression:
@@ -92,6 +94,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformSpreadElement(s, node)
 	case ast.KindStringLiteral:
 		return transformStringLiteral(s, node)
+	case ast.KindTaggedTemplateExpression:
+		return transformTaggedTemplateExpression(s, node)
 	case ast.KindTemplateExpression:
 		return transformTemplateExpression(s, node)
 	case ast.KindThisKeyword:

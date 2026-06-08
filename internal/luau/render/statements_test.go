@@ -141,6 +141,10 @@ func TestRenderComment(t *testing.T) {
 	if got := RenderAST(stmts(luau.NewComment("a]]b\nc"))); got != wantEq {
 		t.Errorf("got %q, want %q", got, wantEq)
 	}
+	wantCRLF := "--[[\n\tline1\n\tline2\n]]\n"
+	if got := RenderAST(stmts(luau.NewComment("line1\r\nline2"))); got != wantCRLF {
+		t.Errorf("got %q, want %q", got, wantCRLF)
+	}
 }
 
 func TestSemicolonAmbiguity(t *testing.T) {

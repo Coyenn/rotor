@@ -1,4 +1,5 @@
 *.exe
+/rotor.exe
 *.test
 /tmp/
 testdata/diff/project/node_modules/

@@ -54,9 +54,11 @@ func renderCallStatement(s *RenderState, node *luau.CallStatement) string {
 
 // renderComment.ts
 func renderComment(s *RenderState, node *luau.Comment) string {
-	lines := strings.Split(node.Text, "\n")
+	text := strings.ReplaceAll(node.Text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
 	if len(lines) > 1 {
-		eqStr := getSafeBracketEquals(node.Text)
+		eqStr := getSafeBracketEquals(text)
 		result := s.Line("--[" + eqStr + "[")
 		result += s.Block(func() string {
 			var b strings.Builder
@@ -68,7 +70,7 @@ func renderComment(s *RenderState, node *luau.Comment) string {
 		result += s.Line("]" + eqStr + "]")
 		return result
 	}
-	return s.Line("--" + node.Text)
+	return s.Line("--" + text)
 }
 
 // renderDoStatement.ts

@@ -76,7 +76,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --type <kind>             override project type (choices: game, model, package)")
 	fmt.Fprintln(w, "  -i, --includePath <dir>   folder to copy runtime files to (default <project>/include)")
 	fmt.Fprintln(w, "  --rojo <path>             manually select Rojo project file")
-	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al. (enforcement lands later in Phase 4)")
+	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al.")
 	fmt.Fprintln(w, "  --luau                    emit files with .luau extension (default true; --luau=false emits .lua)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options may also be set under the top-level \"rbxts\" key of tsconfig.json;")

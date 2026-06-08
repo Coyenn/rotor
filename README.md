@@ -29,7 +29,7 @@ The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) �
 Compatibility isn't a hope — it's enforced by construction:
 
 - **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
-- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The vendored corpus and harnesses are in-repo today (`testdata/conformance`, `internal/conformance`); 41 upstream golden fixtures are already enabled byte-for-byte, with diagnostics/runtime/acceptance harnesses in place for the remaining closure work.
+- **Behavioral conformance** (Phase 5): roblox-ts's ~486 runtime test cases, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The vendored corpus and harnesses are in-repo today (`testdata/conformance`, `internal/conformance`); all 44 upstream golden fixtures are now enabled byte-for-byte, and the remaining Phase 5 closure work is runtime, diagnostics, and final acceptance coverage.
 - **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
 - **Same runtime**: `RuntimeLib.lua` and `Promise.lua` are reused verbatim from roblox-ts — zero behavioral drift at runtime.
 
@@ -66,6 +66,7 @@ rotor build path/to/your-game -w     # watch mode: rebuild on save
 `rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project to see it in action:
 
 ```powershell
+npm install --prefix testdata/diff/project
 rotor build testdata/diff/project
 # out/01_literals.luau
 # ...
@@ -149,7 +150,7 @@ go test ./internal/spike/ -v                              # checker integration 
 go vet ./internal/...                                     # required clean before commits
 ```
 
-No Node required to run any of the above — the rbxtsc goldens are committed.
+No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs `npm install` inside the fixture projects (`testdata/diff/project`, `testdata/conformance/project`) before the project-layer and conformance suites that rely on `@rbxts/*` type packages.
 
 ### The differential suite (how rotor proves byte-parity)
 

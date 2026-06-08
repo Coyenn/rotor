@@ -94,6 +94,38 @@ func transformTemplateExpression(s *State, node *ast.Node) luau.Expression {
 	return luau.NewInterpolatedString(parts)
 }
 
+// transformTaggedTemplateExpression ports
+// expressions/transformTaggedTemplateExpression.ts: the tag is called with an
+// array of raw string segments followed by the ordered substitution
+// expressions.
+func transformTaggedTemplateExpression(s *State, node *ast.Node) luau.Expression {
+	tagged := node.AsTaggedTemplateExpression()
+	tagExp := TransformExpression(s, tagged.Tag)
+
+	var stringParts []luau.Expression
+	var args []luau.Expression
+
+	if ast.IsTemplateExpression(tagged.Template) {
+		template := tagged.Template.AsTemplateExpression()
+		stringParts = append(stringParts, luau.Str(template.Head.Text()))
+
+		spans := template.TemplateSpans.Nodes
+		expressions := make([]*ast.Node, len(spans))
+		for i, span := range spans {
+			stringParts = append(stringParts, luau.Str(span.AsTemplateSpan().Literal.Text()))
+			expressions[i] = span.AsTemplateSpan().Expression
+		}
+		args = ensureTransformOrder(s, expressions)
+	} else {
+		stringParts = append(stringParts, luau.Str(tagged.Template.Text()))
+	}
+
+	callArgs := append([]luau.Expression{
+		luau.NewArray(luau.NewList(stringParts...)),
+	}, args...)
+	return luau.NewCall(convertToIndexableExpression(tagExp), luau.NewList(callArgs...))
+}
+
 // transformArrayLiteralExpression ports
 // expressions/transformArrayLiteralExpression.ts. Non-spread fast path:
 // inline `{ e1, e2, ... }`. With spreads, an ArrayPointer materializes into
