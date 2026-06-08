@@ -3,6 +3,7 @@ package transformer
 import (
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/ls/lsutil"
 	"rotor/tsgo/scanner"
 )
 
@@ -73,7 +74,7 @@ func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, 
 	}
 
 	if !s.RemoveComments() {
-		if lastToken := getLastToken(parent, statements); lastToken != nil {
+		if lastToken := getLastToken(s.SourceFile, parent, statements); lastToken != nil {
 			result.PushList(s.GetLeadingComments(lastToken))
 		}
 	}
@@ -83,27 +84,39 @@ func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, 
 
 // getLastToken ports transformStatementList.ts getLastToken: the trailing
 // `}`/EOF token whose leading trivia holds the block's trailing comments.
-// Only the EndOfFileToken case is wired. Block-level last tokens (`}` of a
-// Block — upstream `lastStatement.parent.getLastToken()`) need real token
-// scanning (tsgo materializes no `}` node; lsutil.GetLastToken would build
-// one); no diff fixture places a trailing comment before a closing `}`, so
-// that case stays deferred — a block-trailing comment is dropped, never
-// mis-emitted. Phase 3: wire via token scan.
-func getLastToken(parent *ast.Node, statements []*ast.Node) *ast.Node {
+// tsgo does not materialize `}` nodes in the visited tree, so use the token
+// scanner-backed lsutil.GetLastToken helper and keep upstream's
+// !isNodeDescendantOf(lastToken, lastStatement) guard.
+func getLastToken(sourceFile *ast.SourceFile, parent *ast.Node, statements []*ast.Node) *ast.Node {
+	if sourceFile == nil {
+		return nil
+	}
 	if len(statements) > 0 {
 		lastStatement := statements[len(statements)-1]
-		if p := lastStatement.Parent; p != nil && ast.IsSourceFile(p) {
-			// The EOF token always follows the last statement (it is never
-			// a descendant of it), matching upstream's isNodeDescendantOf
-			// guard.
-			return p.AsSourceFile().EndOfFileToken
+		if p := lastStatement.Parent; p != nil {
+			lastToken := lsutil.GetLastToken(p, sourceFile)
+			if lastToken != nil && !isNodeDescendantOf(lastToken, lastStatement) {
+				return lastToken
+			}
 		}
 		return nil
 	}
-	if parent != nil && ast.IsSourceFile(parent) {
-		return parent.AsSourceFile().EndOfFileToken
+	if parent != nil {
+		return lsutil.GetLastToken(parent, sourceFile)
 	}
 	return nil
+}
+
+func isNodeDescendantOf(node, ancestor *ast.Node) bool {
+	if node == nil || ancestor == nil {
+		return false
+	}
+	for current := node; current != nil; current = current.Parent {
+		if current == ancestor {
+			return true
+		}
+	}
+	return false
 }
 
 // RemoveComments reports compilerOptions.removeComments === true, the gate

@@ -145,7 +145,7 @@ Everything that makes rotor a usable CLI tool rather than a compile library.*
 - [ ] Transformer-plugin Node sidecar integration — the standalone worker, protocol doc, and Node smoke suite landed in `tools/sidecar`, but the Go compile/build path still does not spawn or consume it
 - [x] `validateCompilerOptions` full port — landed in 3c (byte-exact diagnostic texts; known gap: enforced options set only in an `extends` parent are read root-only — same root-only gap as the sanitizer; fix with extends-chain resolution here)
 - [ ] Concurrency: restore parallel checker workers (per-checker alias-mark caches via `GetTypeCheckerForFile`); retire per-file Program creation and the package-level `TransformStatement` func var
-- [ ] Known cleanup: `getLastToken` block-`}` trailing-comment handling
+- [x] Known cleanup: `getLastToken` block-`}` trailing-comment handling
 
 ## Phase 5 — Conformance 🚧
 
