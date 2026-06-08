@@ -1,6 +1,8 @@
 package compile
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -9,6 +11,7 @@ import (
 	"rotor/internal/includefiles"
 	"rotor/internal/logservice"
 	"rotor/internal/rojo"
+	"rotor/tsgo/compiler"
 )
 
 // BuildResult is the disk-writing sibling of CompileProject's pure text map.
@@ -55,28 +58,78 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 
 	for _, relOut := range relOuts {
 		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
-		unchanged := false
-		if opts.WriteOnlyChanged {
-			if existing, err := os.ReadFile(absOut); err == nil && string(existing) == outputs[relOut] {
-				unchanged = true
-			}
-		}
-		if unchanged {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(absOut), 0o755); err != nil {
+		wrote, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
+		if err != nil {
 			return nil, nil, err
 		}
-		if err := os.WriteFile(absOut, []byte(outputs[relOut]), 0o644); err != nil {
-			return nil, nil, err
+		if wrote {
+			emittedFiles = append(emittedFiles, absOut)
 		}
-		emittedFiles = append(emittedFiles, absOut)
 	}
+
+	declFiles, err := emitDeclarations(program, opts.WriteOnlyChanged)
+	if err != nil {
+		return nil, nil, err
+	}
+	emittedFiles = append(emittedFiles, declFiles...)
 
 	return &BuildResult{
 		Outputs:      outputs,
 		EmittedFiles: emittedFiles,
 	}, nil, nil
+}
+
+func emitDeclarations(program *compiler.Program, writeOnlyChanged bool) ([]string, error) {
+	if !program.Options().Declaration.IsTrue() {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	var emittedFiles []string
+	for _, sourceFile := range program.SourceFiles() {
+		if sourceFile.IsDeclarationFile || !isCompilableFile(sourceFile.FileName()) {
+			continue
+		}
+		result := program.Emit(ctx, compiler.EmitOptions{
+			TargetSourceFile: sourceFile,
+			EmitOnly:         compiler.EmitOnlyDts,
+			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+				text = rewriteDeclarationTypeReferences(text)
+				wrote, err := writeOutputFile(filepath.FromSlash(fileName), text, writeOnlyChanged)
+				if !wrote && data != nil {
+					data.SkippedDtsWrite = true
+				}
+				return err
+			},
+		})
+		if result == nil {
+			continue
+		}
+		if len(result.Diagnostics) > 0 {
+			return nil, errors.New("compile: declaration emit diagnostics")
+		}
+		emittedFiles = append(emittedFiles, result.EmittedFiles...)
+	}
+	return emittedFiles, nil
+}
+
+func rewriteDeclarationTypeReferences(text string) string {
+	return strings.ReplaceAll(text, `types="types"`, `types="@rbxts/types"`)
+}
+
+func writeOutputFile(path string, text string, writeOnlyChanged bool) (bool, error) {
+	if writeOnlyChanged {
+		if existing, err := os.ReadFile(path); err == nil && string(existing) == text {
+			return false, nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func maybeCopyInclude(dir string, opts ProjectOptions) error {

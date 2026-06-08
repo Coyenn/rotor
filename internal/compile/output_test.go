@@ -154,3 +154,73 @@ func TestBuildProjectLuaExtension(t *testing.T) {
 		t.Fatalf("out/main.luau err = %v, want not-exist", err)
 	}
 }
+
+func TestBuildProjectEmitsDeclarationsForPackage(t *testing.T) {
+	dir := writeProject(t, "@scope/declaration-fixture", "")
+
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfigBytes, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := strings.Replace(string(tsconfigBytes), `"outDir": "out"`, `"outDir": "out",
+		"declaration": true,
+		"types": ["types"]`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "@rbxts", "types"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "@rbxts", "types", "package.json"), []byte("{\"name\":\"@rbxts/types\",\"types\":\"index.d.ts\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "@rbxts", "types", "index.d.ts"), []byte("interface TypesBox {\n\tmarker: string;\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := "export interface Box {\n\tvalue: TypesBox;\n}\nexport const value = undefined as unknown as TypesBox;\n"
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	if result == nil {
+		t.Fatal("nil result")
+	}
+
+	declPath := filepath.Join(dir, "out", "main.d.ts")
+	declBytes, err := os.ReadFile(declPath)
+	if err != nil {
+		t.Fatalf("read declaration output: %v", err)
+	}
+	declText := string(declBytes)
+	if !strings.Contains(declText, "export interface Box") || !strings.Contains(declText, "export declare const value: TypesBox;") {
+		t.Fatalf("unexpected declaration output:\n%s", declText)
+	}
+
+	if len(result.EmittedFiles) != 2 {
+		t.Fatalf("EmittedFiles = %v, want compiled file + declaration", result.EmittedFiles)
+	}
+}
+
+func TestRewriteDeclarationTypeReferences(t *testing.T) {
+	input := "/// <reference types=\"types\" />\n/// <reference types=\"other\" />\n"
+	got := rewriteDeclarationTypeReferences(input)
+	if !strings.Contains(got, "/// <reference types=\"@rbxts/types\" />") {
+		t.Fatalf("got %q, want rewritten @rbxts/types reference", got)
+	}
+	if !strings.Contains(got, "/// <reference types=\"other\" />") {
+		t.Fatalf("got %q, want unrelated reference preserved", got)
+	}
+	if strings.Contains(got, "/// <reference types=\"types\" />") {
+		t.Fatalf("got %q, want raw types reference removed", got)
+	}
+}

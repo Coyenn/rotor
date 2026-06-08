@@ -24,7 +24,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | **3b** | Macro tables, optional chaining, full iteration, pnpm/baseUrl resolution | ✅ |
 | **3c** | JSX, classes, decorators, spread, async, try, enums, namespaces | ✅ |
 | **4** | Project layer — emit layout, watch, incremental, full CLI, plugin sidecar | 🚧 |
-| **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | ⬜ |
+| **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | 🚧 |
 | | **v1.0 — drop-in `rbxtsc` replacement** | 🎯 |
 
 **Measured progress:** 43/43 differential fixtures byte-identical to real rbxtsc 3.0.0;
@@ -137,24 +137,24 @@ files that were import-blocked.*
 *Plan: `docs/superpowers/plans/2026-06-07-rotor-phase4.md`. Digest: `phase4-project-digest.md`.
 Everything that makes rotor a usable CLI tool rather than a compile library.*
 
-- [ ] Full emit layout — write `out/` tree (basic `rotor build` write landed in 3c), `index.*` ↔ `init.*` translation, cleanup/copyFiles passes; ~~`.lua`/`.luau` output selection~~ landed in 4 Task 1 (`--luau`); ~~include/ (RuntimeLib.lua + Promise.lua verbatim)~~ landed in 3c (`internal/includefiles`, `--noInclude`/`--includePath`)
-- [ ] `.d.ts` emit for Package projects
+- [x] Full emit layout — write `out/` tree, `index.*` ↔ `init.*` translation, cleanup/copyFiles passes landed in 4's output pipeline; `.lua`/`.luau` output selection landed via `--luau`; include/ emission had already landed in 3c (`internal/includefiles`, `--noInclude`/`--includePath`)
+- [x] `.d.ts` emit for declaration-enabled builds — Package projects now emit declarations through tsgo's declaration pass, with the `types="types"` rewrite handled in Rotor's write callback
 - [x] Full `rbxtsc` CLI flag surface — landed in 4 Task 1: ProjectOptions merge (defaults < tsconfig `rbxts` key < argv; absent CLI booleans don't clobber `rbxts` values), `-p/--project` file-path + upward tsconfig search, `--rojo` (empty-string falls through to discovery, quirk verbatim), `--luau`, `--logTruthyChanges`, `--optimizedLoops` (transformer gate wired), `--writeOnlyChanged` (cmd-level byte-compare; moves into the compile write phase with the output-pipeline task), `--verbose` + LogService analog (`internal/logservice`: yellow `Compiler Warning:` channel — now carries the previously-dropped Rojo resolver warnings — partial-line tracking, upstream benchmark/progress line formats), `--version`; usage errors now exit 1 for rbxtsc parity (was 2). Parsed-but-deferred: `--allowCommentDirectives` (plumbed; enforcement lands with the comment-directive pre-emit check), `-w`/`--usePolling` (build watch task), `--writeTransformedFiles` (warned NYS; out of v1). Comment-directive hoisting (`--!strict` above header) was already landed (`transformer/sourcefile.go`); ~~`build`, `--type`~~ landed in 3c
-- [ ] Watch mode — native fs events, debounced batching
+- [x] Watch mode v1 — `rotor build -w` landed with polling-based rebuilds (`--usePolling` semantics effectively always-on today); native fs events, debounced batch sets, and true incremental parity remain follow-up work
 - [ ] Incremental builds (tsbuildinfo-equivalent)
-- [ ] Transformer-plugin Node sidecar — real JS `typescript` package, text→text boundary (Flamework-class plugins unmodified); projects without plugins never spawn Node
+- [ ] Transformer-plugin Node sidecar integration — the standalone worker, protocol doc, and Node smoke suite landed in `tools/sidecar`, but the Go compile/build path still does not spawn or consume it
 - [x] `validateCompilerOptions` full port — landed in 3c (byte-exact diagnostic texts; known gap: enforced options set only in an `extends` parent are read root-only — same root-only gap as the sanitizer; fix with extends-chain resolution here)
 - [ ] Concurrency: restore parallel checker workers (per-checker alias-mark caches via `GetTypeCheckerForFile`); retire per-file Program creation and the package-level `TransformStatement` func var
 - [ ] Known cleanup: `getLastToken` block-`}` trailing-comment handling
 
-## Phase 5 — Conformance ⬜
+## Phase 5 — Conformance 🚧
 
 *The 1:1 proof at full scale.*
 
-- [ ] Behavioral suite: all **486 upstream TestEZ cases** compiled by rotor → `rojo build` → executed under **Lune**
-- [ ] Diagnostics corpus: all **87 expected-error files** report the same diagnostic IDs at the same locations
-- [ ] Differential run over roblox-ts's full `tests/src` corpus (~7k LOC)
-- [ ] Acceptance: `rotor build` on `randomness` byte-identical to rbxtsc 3.0.0 and the game runs
+- [ ] Behavioral suite closure: runtime harness landed (`internal/conformance/runtime.go`, `runtime_test.go`), but the full **486 upstream TestEZ cases** are not yet proven green under **Lune**
+- [ ] Diagnostics corpus closure: diagnostics harness landed (`internal/conformance/diagnostics_test.go`) with explicit skip manifests, but not all **87 expected-error files** are closed out yet
+- [x] Differential run harness over roblox-ts's vendored `tests/src` corpus exists — `internal/conformance` now enables **41** golden fixtures byte-for-byte and tracks **4** explicit holdouts in the manifest
+- [ ] Acceptance closure: randomness acceptance runner landed (`internal/conformance/acceptance_test.go`), but the final `rotor build` byte-identity + gameplay proof still depends on the local project path and remaining project-layer gaps
 - [ ] Fix divergences to zero
 
 ## v1.0 — Drop-in replacement 🎯
