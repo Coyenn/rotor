@@ -2,8 +2,11 @@ package conformance
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -64,6 +67,48 @@ func TestResolveRandomnessProjectPath(t *testing.T) {
 	})
 }
 
+func TestNormalizeCompiledHeader(t *testing.T) {
+	input := "-- Compiled with rotor v0.1.0-dev\nprint(\"ok\")\n"
+	got := normalizeCompiledHeader(input)
+	want := "-- Compiled with <normalized>\nprint(\"ok\")\n"
+	if got != want {
+		t.Fatalf("normalizeCompiledHeader = %q, want %q", got, want)
+	}
+}
+
+func TestCompareOutputTrees(t *testing.T) {
+	left := t.TempDir()
+	right := t.TempDir()
+
+	for _, root := range []string{left, right} {
+		if err := os.MkdirAll(filepath.Join(root, "out"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "include"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "out", "main.luau"), []byte("-- Compiled with rotor v0.1.0-dev\nprint(\"ok\")\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "include", "RuntimeLib.lua"), []byte("return {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(right, "out", "main.luau"), []byte("-- Compiled with roblox-ts v3.0.0\nprint(\"ok\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if diffs, err := compareOutputTrees(
+		[]string{filepath.Join(left, "out"), filepath.Join(left, "include")},
+		[]string{filepath.Join(right, "out"), filepath.Join(right, "include")},
+	); err != nil {
+		t.Fatal(err)
+	} else if len(diffs) != 0 {
+		t.Fatalf("compareOutputTrees diffs = %v, want none", diffs)
+	}
+}
+
 func TestRandomnessAcceptance(t *testing.T) {
 	path, err := resolveRandomnessProjectPath()
 	if err != nil {
@@ -73,14 +118,159 @@ func TestRandomnessAcceptance(t *testing.T) {
 		t.Fatalf("randomness tsconfig missing: %v", err)
 	}
 
-	out, diags, err := compile.CompileProject(path)
+	rotorCopy := filepath.Join(t.TempDir(), "rotor")
+	rbxtscCopy := filepath.Join(t.TempDir(), "rbxtsc")
+	if err := copyTree(path, rotorCopy); err != nil {
+		t.Fatalf("copy rotor project: %v", err)
+	}
+	if err := copyTree(path, rbxtscCopy); err != nil {
+		t.Fatalf("copy rbxtsc project: %v", err)
+	}
+
+	result, diags, err := compile.BuildProjectWithOptions(rotorCopy, compile.ProjectOptions{
+		EmitIncludeFiles:       true,
+		AllowCommentDirectives: true,
+	})
 	if err != nil {
-		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+		t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
 	}
 	if len(diags) > 0 {
 		t.Fatalf("unexpected diagnostics: %v", diags)
 	}
-	if len(out) == 0 {
+	if result == nil || len(result.Outputs) == 0 {
 		t.Fatal("no emitted files")
 	}
+
+	if err := runRbxtscBuild(rbxtscCopy); err != nil {
+		t.Fatalf("rbxtsc build: %v", err)
+	}
+
+	outputRel, err := filepath.Rel(rotorCopy, result.OutputDir)
+	if err != nil {
+		t.Fatalf("rel output dir: %v", err)
+	}
+	diffs, err := compareOutputTrees(
+		[]string{result.OutputDir, filepath.Join(rotorCopy, "include")},
+		[]string{filepath.Join(rbxtscCopy, outputRel), filepath.Join(rbxtscCopy, "include")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diffs) > 0 {
+		t.Fatalf("randomness output differs from rbxtsc:\n%s", strings.Join(diffs, "\n"))
+	}
+}
+
+func runRbxtscBuild(projectDir string) error {
+	cmdName := "npx"
+	args := []string{"rbxtsc"}
+	localBin := filepath.Join(projectDir, "node_modules", ".bin", "rbxtsc.cmd")
+	if _, err := os.Stat(localBin); err == nil {
+		cmdName = "cmd"
+		args = []string{"/c", localBin}
+	}
+	cmd := exec.Command(cmdName, args...)
+	cmd.Dir = projectDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func compareOutputTrees(leftRoots, rightRoots []string) ([]string, error) {
+	left, err := collectOutputFiles(leftRoots)
+	if err != nil {
+		return nil, err
+	}
+	right, err := collectOutputFiles(rightRoots)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(left)+len(right))
+	seen := make(map[string]struct{}, len(left)+len(right))
+	for rel := range left {
+		keys = append(keys, rel)
+		seen[rel] = struct{}{}
+	}
+	for rel := range right {
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		keys = append(keys, rel)
+	}
+	slices.Sort(keys)
+
+	var diffs []string
+	for _, rel := range keys {
+		leftPath, leftOK := left[rel]
+		rightPath, rightOK := right[rel]
+		if !leftOK || !rightOK {
+			diffs = append(diffs, fmt.Sprintf("%s presence mismatch (left=%v right=%v)", rel, leftOK, rightOK))
+			continue
+		}
+		leftBytes, err := os.ReadFile(leftPath)
+		if err != nil {
+			return nil, err
+		}
+		rightBytes, err := os.ReadFile(rightPath)
+		if err != nil {
+			return nil, err
+		}
+		leftText := string(leftBytes)
+		rightText := string(rightBytes)
+		if strings.HasSuffix(rel, ".lua") || strings.HasSuffix(rel, ".luau") {
+			leftText = normalizeCompiledHeader(leftText)
+			rightText = normalizeCompiledHeader(rightText)
+		}
+		if leftText != rightText {
+			diffs = append(diffs, fmt.Sprintf("%s content mismatch", rel))
+		}
+	}
+	return diffs, nil
+}
+
+func collectOutputFiles(roots []string) (map[string]string, error) {
+	files := map[string]string{}
+	for _, root := range roots {
+		info, err := os.Stat(root)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("%q is not a directory", root)
+		}
+		base := filepath.Base(root)
+		err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			files[filepath.ToSlash(filepath.Join(base, rel))] = path
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return files, nil
+}
+
+func normalizeCompiledHeader(text string) string {
+	const prefix = "-- Compiled with "
+	if !strings.HasPrefix(text, prefix) {
+		return text
+	}
+	if newline := strings.IndexByte(text, '\n'); newline >= 0 {
+		return "-- Compiled with <normalized>\n" + text[newline+1:]
+	}
+	return "-- Compiled with <normalized>"
 }

@@ -151,6 +151,12 @@ go test ./internal/conformance/ -run TestRandomnessAcceptance -count=1 -v
 
 Set `ROTOR_RANDOMNESS_PATH` to the local project root before running. The test
 accepts either the project root or a direct path to its `tsconfig.json`. It
-skips with an explicit setup message when unset and otherwise drives
-`compile.CompileProject` over the real project, surfacing the emitted-file
-count or the first failure.
+skips with an explicit setup message when unset and otherwise:
+
+1. copies the target project twice,
+2. runs Rotor's full build pipeline over one copy,
+3. runs the local `rbxtsc` install over the other copy,
+4. compares the normalized `out/` and `include/` trees byte-for-byte.
+
+This keeps the harness environment-gated while making it a real build/output
+acceptance proof rather than a compile-only smoke test.
