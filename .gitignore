@@ -1,5 +1,7 @@
 *.exe
 /rotor.exe
+bun.lock
+bun.lockb
 *.test
 /tmp/
 testdata/diff/project/node_modules/

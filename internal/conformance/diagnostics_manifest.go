@@ -22,8 +22,8 @@ type DiagnosticFixture struct {
 }
 
 type diagnosticFixtureProjectPlan struct {
-	sourceRel       string
-	rojoConfigFile  string
+	sourceRel      string
+	rojoConfigFile string
 }
 
 var skippedDiagnosticIDs = map[string]string{}
@@ -141,13 +141,19 @@ func ensureConformanceProjectDeps(projectDir string) error {
 		if _, err := os.Stat(filepath.Join(projectDir, "node_modules")); err == nil {
 			return
 		}
-		cmd := exec.Command("npm", "install", "--no-audit", "--no-fund")
+		name := "bun"
+		args := []string{"install", "--no-save"}
+		if _, err := exec.LookPath(name); err != nil {
+			name = "npm"
+			args = []string{"install", "--no-audit", "--no-fund"}
+		}
+		cmd := exec.Command(name, args...)
 		cmd.Dir = projectDir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		installConformanceDepsOnce.err = cmd.Run()
 		if installConformanceDepsOnce.err != nil {
-			installConformanceDepsOnce.err = fmt.Errorf("install conformance project dependencies: %w", installConformanceDepsOnce.err)
+			installConformanceDepsOnce.err = fmt.Errorf("install conformance project dependencies with %s: %w", name, installConformanceDepsOnce.err)
 		}
 	})
 	return installConformanceDepsOnce.err

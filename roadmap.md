@@ -170,7 +170,7 @@ Verified locally on June 7, 2026 with:
 
 - `go test ./... -count=1`
 - `go test ./internal/conformance -count=1` with `ROTOR_ROJO_PATH`, `ROTOR_LUNE_PATH`, and `ROTOR_RANDOMNESS_PATH`
-- `npm test` in `tools/sidecar`
+- `bun test` in `tools/sidecar` (after `bun install --no-save`; `npm test` remains available as a fallback)
 
 Success criteria (from the design spec):
 

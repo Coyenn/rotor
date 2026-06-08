@@ -66,7 +66,7 @@ rotor build path/to/your-game -w     # watch mode: rebuild on save
 `rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project to see it in action:
 
 ```powershell
-npm install --prefix testdata/diff/project
+bun install --cwd testdata/diff/project --no-save
 rotor build testdata/diff/project
 # out/01_literals.luau
 # ...
@@ -150,7 +150,7 @@ go test ./internal/spike/ -v                              # checker integration 
 go vet ./internal/...                                     # required clean before commits
 ```
 
-No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs `npm install` inside the fixture projects (`testdata/diff/project`, `testdata/conformance/project`) before the project-layer and conformance suites that rely on `@rbxts/*` type packages.
+No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs fixture dependencies installed inside `testdata/diff/project` and `testdata/conformance/project` before the project-layer and conformance suites that rely on `@rbxts/*` type packages. Use `bun install --no-save` first; `npm install --no-audit --no-fund` still works as a fallback.
 
 ### The differential suite (how rotor proves byte-parity)
 
@@ -159,7 +159,7 @@ No Node is required to run rotor itself or the committed differential goldens. A
 Adding a fixture:
 
 1. Write the TypeScript in `testdata/diff/project/src/` (it must compile cleanly under rbxtsc).
-2. Regenerate goldens: `powershell -File tools/oracle/oracle.ps1` (this is the only step that needs Node/npm — it runs the pinned `roblox-ts@3.0.0` over the fixture project).
+2. Regenerate goldens: `powershell -File tools/oracle/oracle.ps1` (this is the only step that needs the JS toolchain — the script prefers Bun for fixture installs, falls back to npm, and runs the pinned `roblox-ts@3.0.0` over the fixture project).
 3. Enable the fixture in `internal/diff/manifest.go` and run `go test ./internal/diff/ -v`.
 
 Existing goldens must stay byte-unchanged when regenerating — `git diff testdata/diff/golden/` should only show your new files.

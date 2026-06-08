@@ -76,9 +76,9 @@ below, on the first full run.
 powershell -File tools/oracle/conformance-oracle.ps1
 ```
 
-(Requires Node/npm — mise-managed; the script invokes
-`.\node_modules\.bin\rbxtsc.cmd` directly since `npx` may be off PATH. It
-npm-installs on first run, cleans `project/out/`, compiles, and mirrors
+(Requires Node plus Bun or npm — mise-managed; the script invokes
+`node .\node_modules\roblox-ts\out\CLI\cli.js` directly so Bun/npm installs behave the same. It
+prefers `bun install --no-save` on first run, falls back to npm, cleans `project/out/`, compiles, and mirrors
 `out/**/*.luau` into `golden/` preserving subdirectories.)
 
 ## Enabling fixtures

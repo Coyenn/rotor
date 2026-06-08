@@ -8,10 +8,10 @@ Install the sidecar-local dependency set:
 
 ```bash
 cd tools/sidecar
-npm install
+bun install --no-save
 ```
 
-The package pins `typescript@5.5.3` to match the upstream `roblox-ts` plugin runtime.
+The package pins `typescript@5.5.3` to match the upstream `roblox-ts` plugin runtime. `npm install --no-audit --no-fund` remains available if Bun is not on `PATH`.
 
 ## Invocation
 
@@ -98,7 +98,7 @@ Run the standalone smoke suite:
 
 ```bash
 cd tools/sidecar
-npm test
+bun test
 ```
 
 The smoke tests cover:
