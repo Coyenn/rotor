@@ -22,8 +22,9 @@ const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts pr
 // version is rotor's own release version, used for `--version` and the
 // `rotor build` emit header (`-- Compiled with rotor v...`). Library/test
 // compilation keeps the upstream rbxtsc header so differential
-// byte-comparison stays strict.
-const version = "1.0.0"
+// byte-comparison stays strict. Release builds override this via
+// `-ldflags=-X main.version=...`.
+var version = "dev"
 
 func main() {
 	os.Exit(run(os.Args[1:]))

@@ -39,9 +39,75 @@ Your existing project — `tsconfig.json`, `default.project.json`, `node_modules
 
 rotor already **compiles multi-file TypeScript projects to byte-identical Luau** across the full language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, ...), optional chaining, Map/Set/string/generator iteration, switch, `new` — verified continuously against real `rbxtsc` output (43/43 differential fixtures; **all 95 files of a real production game compile byte-identical**, zero divergent). It also **natively typechecks and watches real rbxts projects**.
 
-### Build
+### Install
 
-Requires **Go 1.25+** (no Node needed to build rotor itself; plugin-backed builds need Node.js at runtime for the transformer sidecar):
+rotor publishes cross-platform release binaries on [GitHub Releases](https://github.com/uproot/rotor/releases). Each `vX.Y.Z` tag produces:
+
+- `rotor-vX.Y.Z-windows-amd64.zip`
+- `rotor-vX.Y.Z-windows-arm64.zip`
+- `rotor-vX.Y.Z-linux-amd64.tar.gz`
+- `rotor-vX.Y.Z-linux-arm64.tar.gz`
+- `rotor-vX.Y.Z-darwin-amd64.tar.gz`
+- `rotor-vX.Y.Z-darwin-arm64.tar.gz`
+- `rotor-vX.Y.Z-checksums.txt`
+
+Requires **Go 1.25+** only if you want to build rotor from source. Plugin-backed builds still need Node.js at runtime for the transformer sidecar.
+
+#### mise
+
+`mise` can install GitHub release assets directly via its GitHub backend:
+
+```powershell
+mise use -g github:uproot/rotor@1.0.1
+rotor --version
+```
+
+#### aftman
+
+Add rotor to `aftman.toml`:
+
+```toml
+[tools]
+rotor = "uproot/rotor@1.0.1"
+```
+
+Then install:
+
+```powershell
+aftman install
+rotor --version
+```
+
+#### rokit
+
+If you use Rokit, add rotor directly:
+
+```powershell
+rokit add uproot/rotor@1.0.1
+rotor --version
+```
+
+Rokit is also drop-in compatible with existing `aftman.toml` / `foreman.toml`-based projects, so the Aftman and Foreman snippets below remain useful there too.
+
+#### foreman
+
+Add rotor to `foreman.toml`:
+
+```toml
+[tools]
+rotor = { github = "uproot/rotor", version = "1.0.1" }
+```
+
+Then install:
+
+```powershell
+foreman install
+rotor --version
+```
+
+#### Build from source
+
+Clone the repo and build it locally:
 
 ```powershell
 git clone https://github.com/uproot/rotor && cd rotor
@@ -72,6 +138,17 @@ rotor build testdata/diff/project
 # ...
 # compiled 43 files in 189 ms
 ```
+
+### Release a new version
+
+Maintainer flow:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+That tag triggers the `release` GitHub Actions workflow, which runs the test suite, cross-builds rotor for Windows/macOS/Linux, publishes the archives and checksums, and creates the GitHub Release automatically.
 
 Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 
