@@ -172,6 +172,15 @@ Verified locally on June 7, 2026 with:
 - `go test ./internal/conformance -count=1` with `ROTOR_ROJO_PATH`, `ROTOR_LUNE_PATH`, and `ROTOR_RANDOMNESS_PATH`
 - `bun test` in `tools/sidecar` (after `bun install --no-save`; `npm test` remains available as a fallback)
 
+Continuously verified in CI (June 8, 2026): `.github/workflows/ci.yml` runs gofmt +
+`go vet` + `go build` + full `go test ./...` on every push to `master` and PR via the
+shared `.github/actions/setup` composite action — which provisions Go, **Bun** (the
+canonical fixture installer; npm fallback was the source of flaky installs), Node (for
+the transformer sidecar), and rojo/lune (`aftman.toml`, so the conformance runtime suite
+runs rather than skips). `release.yml` reuses the same setup before GoReleaser. The clean
+checkout path was validated on Linux/amd64 in a `golang:1.26` container (all rotor
+packages green).
+
 Success criteria (from the design spec):
 
 1. Byte-identical output (header-normalized) vs rbxtsc 3.0.0 on the upstream corpus and `randomness`
