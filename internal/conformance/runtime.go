@@ -14,8 +14,7 @@ type RuntimeTools struct {
 	Lune string
 }
 
-var DisabledBehavioralFixtures = map[string]string{
-}
+var DisabledBehavioralFixtures = map[string]string{}
 
 func detectRuntimeTools() RuntimeTools {
 	return RuntimeTools{

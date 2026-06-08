@@ -1,0 +1,38 @@
+name: Set up rotor toolchain
+description: >-
+  Install Go, Bun, Node.js and the Roblox tools (rojo, lune), then install the
+  fixture node_modules the test suite needs. Bun is the canonical installer for
+  fixtures — npm was the source of flaky CI installs.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+
+    - name: Set up Node.js
+      # The transformer sidecar (tools/sidecar/main.js) runs under Node; plugin
+      # tests require `node` on PATH.
+      uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+
+    - name: Set up Roblox tools (rojo, lune)
+      # Reads aftman.toml. Enables the conformance runtime suite; if this fails
+      # the suite skips rather than failing the build.
+      uses: rojo-rbx/setup-aftman@v1
+
+    - name: Install fixture dependencies (bun)
+      shell: bash
+      run: |
+        set -euo pipefail
+        for dir in tools/sidecar testdata/diff/project testdata/conformance/project; do
+          echo "::group::bun install ($dir)"
+          (cd "$dir" && bun install --no-save)
+          echo "::endgroup::"
+        done

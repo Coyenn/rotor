@@ -5,3 +5,8 @@
 *.luau text eol=lf
 *.ts text eol=lf
 *.json text eol=lf
+# Keep CI shell/YAML LF-only so bash `run:` blocks don't break on Linux runners.
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf

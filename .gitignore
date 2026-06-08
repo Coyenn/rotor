@@ -4,6 +4,12 @@ bun.lock
 bun.lockb
 *.test
 /tmp/
+
+# Local Claude Code state (machine-specific symlinks, settings, worktrees)
+/.claude/
+
+# Aftman / rojo tool install dir
+/.aftman/
 testdata/diff/project/node_modules/
 testdata/diff/project/out/
 testdata/diff/project/include/
