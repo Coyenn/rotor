@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"rotor/internal/logservice"
 	"rotor/tsgo/ast"
@@ -83,7 +86,7 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		configPath = filepath.ToSlash(filepath.Join(filepath.FromSlash(dir), "tsconfig.json"))
 	}
 
-	response, err := runTransformerSidecar(dir, configPath, sourceFiles)
+	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program))
 	if err != nil {
 		return nil, []string{err.Error()}, err
 	}
@@ -112,12 +115,62 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	return newProjectProgramWithOverlay(dir, configPath, overlays)
 }
 
-func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile) (*sidecarResponse, error) {
-	sidecarDir, err := resolveSidecarDir()
-	if err != nil {
-		return nil, err
-	}
+type sidecarFileStamp struct {
+	modTime time.Time
+	size    int64
+}
 
+// sidecarSession is one warm Node worker. It lives for the rotor process
+// lifetime (the worker exits when our pipes close), so watch rebuilds reuse
+// the JS program — upstream's persistent transformerWatcher semantics.
+type sidecarSession struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+	stderr *sidecarStderrTail
+	stamps map[string]sidecarFileStamp
+	dead   bool
+}
+
+var (
+	sidecarMu       sync.Mutex
+	sidecarSessions = map[string]*sidecarSession{}
+)
+
+// sidecarStderrTail streams the worker's stderr to the compiler log (plugins
+// print progress there, e.g. Flamework) while keeping a tail for error
+// reporting.
+type sidecarStderrTail struct {
+	mu   sync.Mutex
+	tail []string
+}
+
+func newSidecarStderrTail(pipe io.Reader) *sidecarStderrTail {
+	t := &sidecarStderrTail{}
+	go func() {
+		scanner := bufio.NewScanner(pipe)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			t.mu.Lock()
+			t.tail = append(t.tail, line)
+			if len(t.tail) > 50 {
+				t.tail = t.tail[len(t.tail)-50:]
+			}
+			t.mu.Unlock()
+			logservice.WriteLine(line)
+		}
+	}()
+	return t
+}
+
+func (t *sidecarStderrTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Join(t.tail, "\n")
+}
+
+func spawnSidecarSession(dir, sidecarDir string) (*sidecarSession, error) {
 	nodeCommand := os.Getenv("ROTOR_NODE_PATH")
 	if nodeCommand != "" {
 		if _, err := os.Stat(nodeCommand); err != nil {
@@ -131,28 +184,14 @@ func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile
 		return nil, errors.New("node executable not found; rotor transformer plugins require Node.js on PATH")
 	}
 
-	request := sidecarRequest{
-		Protocol:         1,
-		TsConfigPath:     filepath.FromSlash(configPath),
-		ProjectDir:       filepath.FromSlash(dir),
-		CompileFileNames: make([]string, 0, len(sourceFiles)),
-		ChangedFiles:     []sidecarChangedFile{},
-	}
-	for _, sourceFile := range sourceFiles {
-		request.CompileFileNames = append(request.CompileFileNames, filepath.FromSlash(sourceFile.FileName()))
-	}
-
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-
 	cmd := exec.Command(nodePath, filepath.Join(sidecarDir, "main.js"))
 	cmd.Dir = filepath.FromSlash(dir)
 	cmd.Env = sidecarEnv(dir, sidecarDir)
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -164,38 +203,145 @@ func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	return &sidecarSession{
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: bufio.NewReader(stdout),
+		stderr: newSidecarStderrTail(stderrPipe),
+		stamps: map[string]sidecarFileStamp{},
+	}, nil
+}
 
-	if _, err := stdin.Write(append(payload, '\n')); err != nil {
-		_ = stdin.Close()
-		_ = cmd.Wait()
-		return nil, err
-	}
-	if err := stdin.Close(); err != nil {
-		_ = cmd.Wait()
-		return nil, err
-	}
-
-	line, err := bufio.NewReader(stdout).ReadBytes('\n')
+func (s *sidecarSession) roundTrip(request sidecarRequest) (*sidecarResponse, error) {
+	payload, err := json.Marshal(request)
 	if err != nil {
-		_ = cmd.Wait()
-		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("transformer sidecar failed: %s", strings.TrimSpace(stderr.String()))
-		}
 		return nil, err
 	}
-
-	if err := cmd.Wait(); err != nil {
-		if stderr.Len() > 0 {
-			return nil, fmt.Errorf("transformer sidecar failed: %s", strings.TrimSpace(stderr.String()))
-		}
-		return nil, err
+	if _, err := s.stdin.Write(append(payload, '\n')); err != nil {
+		return nil, s.fail(err)
 	}
-
+	line, err := s.stdout.ReadBytes('\n')
+	if err != nil {
+		return nil, s.fail(err)
+	}
 	var response sidecarResponse
 	if err := json.Unmarshal(bytes.TrimSpace(line), &response); err != nil {
-		return nil, err
+		return nil, s.fail(err)
 	}
 	return &response, nil
+}
+
+func (s *sidecarSession) fail(err error) error {
+	s.dead = true
+	if tail := s.stderr.String(); tail != "" {
+		return fmt.Errorf("transformer sidecar failed: %s", strings.TrimSpace(tail))
+	}
+	return err
+}
+
+func (s *sidecarSession) close() {
+	_ = s.stdin.Close()
+	if s.cmd.Process != nil {
+		done := make(chan struct{})
+		go func() { _ = s.cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			_ = s.cmd.Process.Kill()
+			<-done
+		}
+	}
+}
+
+// changedFilesFor stat-diffs the program's project files against the
+// session's last-seen stamps. Fresh sessions only record stamps (the worker
+// reads from disk); warm sessions ship new text so the LanguageService
+// snapshot versions advance (upstream updateFile semantics).
+func (s *sidecarSession) changedFilesFor(fileNames []string) ([]sidecarChangedFile, error) {
+	fresh := len(s.stamps) == 0
+	changed := []sidecarChangedFile{}
+	for _, fileName := range fileNames {
+		path := filepath.FromSlash(fileName)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		stamp := sidecarFileStamp{modTime: info.ModTime(), size: info.Size()}
+		if prev, ok := s.stamps[path]; !fresh && (!ok || prev != stamp) {
+			text, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			changed = append(changed, sidecarChangedFile{FileName: path, Text: string(text)})
+		}
+		s.stamps[path] = stamp
+	}
+	return changed, nil
+}
+
+func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*ast.SourceFile) (*sidecarResponse, error) {
+	sidecarDir, err := resolveSidecarDir()
+	if err != nil {
+		return nil, err
+	}
+
+	key := normalizeSourceFilePath(dir) + "|" + normalizeSourceFilePath(configPath)
+	sidecarMu.Lock()
+	defer sidecarMu.Unlock()
+
+	for attempt := 0; ; attempt++ {
+		session := sidecarSessions[key]
+		if session == nil || session.dead {
+			if session != nil {
+				session.close()
+			}
+			session, err = spawnSidecarSession(dir, sidecarDir)
+			if err != nil {
+				return nil, err
+			}
+			sidecarSessions[key] = session
+		}
+
+		stampNames := make([]string, 0, len(stampFiles))
+		for _, sourceFile := range stampFiles {
+			stampNames = append(stampNames, sourceFile.FileName())
+		}
+		changedFiles, err := session.changedFilesFor(stampNames)
+		if err != nil {
+			return nil, err
+		}
+
+		request := sidecarRequest{
+			Protocol:         1,
+			TsConfigPath:     filepath.FromSlash(configPath),
+			ProjectDir:       filepath.FromSlash(dir),
+			CompileFileNames: make([]string, 0, len(compileFiles)),
+			ChangedFiles:     changedFiles,
+		}
+		for _, sourceFile := range compileFiles {
+			request.CompileFileNames = append(request.CompileFileNames, filepath.FromSlash(sourceFile.FileName()))
+		}
+
+		response, err := session.roundTrip(request)
+		if err != nil {
+			delete(sidecarSessions, key)
+			session.close()
+			if attempt == 0 {
+				continue
+			}
+			return nil, err
+		}
+		return response, nil
+	}
+}
+
+func closeSidecarSessions() {
+	sidecarMu.Lock()
+	defer sidecarMu.Unlock()
+	for key, session := range sidecarSessions {
+		session.close()
+		delete(sidecarSessions, key)
+	}
 }
 
 func sidecarEnv(projectDir, sidecarDir string) []string {

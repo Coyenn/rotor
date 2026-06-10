@@ -57,7 +57,11 @@ module.exports = function programTransformer(program, config, helpers) {
 
 func TestBuildProjectTransformerPluginSidecar(t *testing.T) {
 	setRepoSidecarPath(t)
+	closeSidecarSessions()
 	dir := writeProject(t, "@scope/plugin-fixture", "")
+	// Registered after writeProject's t.TempDir so it runs before the temp
+	// dir is removed (the worker's cwd is the project dir).
+	t.Cleanup(closeSidecarSessions)
 	writeSidecarPluginFixture(t, dir, `{
 	"compilerOptions": {
 		"allowSyntheticDefaultImports": true,
@@ -170,7 +174,9 @@ func TestBuildProjectTransformerPluginRequiresNode(t *testing.T) {
 
 func TestBuildProjectMissingTransformerWarnsAndContinues(t *testing.T) {
 	setRepoSidecarPath(t)
+	closeSidecarSessions()
 	dir := writeProject(t, "@scope/plugin-warning-fixture", "")
+	t.Cleanup(closeSidecarSessions)
 	tsconfig := `{
 	"compilerOptions": {
 		"allowSyntheticDefaultImports": true,
@@ -227,6 +233,85 @@ func TestBuildProjectMissingTransformerWarnsAndContinues(t *testing.T) {
 	logText := warnings.String()
 	if !strings.Contains(logText, "Compiler Warning:") || !strings.Contains(logText, "Transformer `./plugins/does-not-exist.js` was not found!") {
 		t.Fatalf("warning output = %q, want transformer warning", logText)
+	}
+}
+
+const countingPlugin = `let buildCount = 0;
+
+module.exports = function (program, config, helpers) {
+	const ts = helpers.ts;
+	buildCount += 1;
+	return (context) => (sourceFile) => {
+		const visit = (node) => {
+			if (ts.isStringLiteral(node) && node.text === "BUILD_COUNT") {
+				return ts.factory.createStringLiteral("build:" + buildCount);
+			}
+			return ts.visitEachChild(node, visit, context);
+		};
+		return ts.visitNode(sourceFile, visit);
+	};
+};
+`
+
+func TestBuildProjectTransformerSidecarStaysWarmAcrossBuilds(t *testing.T) {
+	setRepoSidecarPath(t)
+	closeSidecarSessions()
+
+	dir := writeProject(t, "@scope/plugin-warm-fixture", "")
+	t.Cleanup(closeSidecarSessions)
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plugins", "counting.js"), []byte(countingPlugin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out",
+		"plugins": [{ "transform": "./plugins/counting.js" }]
+	},
+	"include": ["src"]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const tag = \"BUILD_COUNT\";\nexport const phase = \"first\";\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+	got := result.Outputs["out/main.luau"]
+	if !strings.Contains(got, `local tag = "build:1"`) || !strings.Contains(got, `local phase = "first"`) {
+		t.Fatalf("first build output unexpected:\n%s", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const tag = \"BUILD_COUNT\";\nexport const phase = \"second\";\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err = BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	got = result.Outputs["out/main.luau"]
+	if !strings.Contains(got, `local tag = "build:2"`) {
+		t.Fatalf("second build did not reuse a warm sidecar process:\n%s", got)
+	}
+	if !strings.Contains(got, `local phase = "second"`) {
+		t.Fatalf("warm sidecar served a stale snapshot (changedFiles overlay broken):\n%s", got)
 	}
 }
 
