@@ -137,12 +137,16 @@ var (
 	sidecarSessions = map[string]*sidecarSession{}
 )
 
-// sidecarStderrTail streams the worker's stderr to the compiler log (plugins
-// print progress there, e.g. Flamework) while keeping a tail for error
-// reporting.
+// sidecarStderrTail collects the worker's stderr (plugin console output —
+// Flamework logs there after the stdout-protocol redirect) for two readers:
+// drainTo forwards new lines to the compiler log, and String keeps a tail
+// for error reporting. The reader goroutine only buffers; logservice is not
+// goroutine-safe, so forwarding happens on the calling goroutine after each
+// round trip.
 type sidecarStderrTail struct {
-	mu   sync.Mutex
-	tail []string
+	mu      sync.Mutex
+	tail    []string
+	pending []string
 }
 
 func newSidecarStderrTail(pipe io.Reader) *sidecarStderrTail {
@@ -157,11 +161,22 @@ func newSidecarStderrTail(pipe io.Reader) *sidecarStderrTail {
 			if len(t.tail) > 50 {
 				t.tail = t.tail[len(t.tail)-50:]
 			}
+			t.pending = append(t.pending, line)
 			t.mu.Unlock()
-			logservice.WriteLine(line)
 		}
 	}()
 	return t
+}
+
+// drainTo writes lines buffered since the last drain to the compiler log.
+func (t *sidecarStderrTail) drainTo() {
+	t.mu.Lock()
+	pending := t.pending
+	t.pending = nil
+	t.mu.Unlock()
+	for _, line := range pending {
+		logservice.WriteLine(line)
+	}
 }
 
 func (t *sidecarStderrTail) String() string {
@@ -323,6 +338,7 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 		}
 
 		response, err := session.roundTrip(request)
+		session.stderr.drainTo()
 		if err != nil {
 			delete(sidecarSessions, key)
 			session.close()
