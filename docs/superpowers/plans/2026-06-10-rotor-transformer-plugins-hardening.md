@@ -119,7 +119,7 @@ class SidecarServer {
       return { diagnostics: [validationError], transformed: [] };
     }
 
-    const sessionKey = `${normalizePath(request.projectDir)}0000${normalizePath(request.tsConfigPath)}`;
+    const sessionKey = `${normalizePath(request.projectDir)}\u0000${normalizePath(request.tsConfigPath)}`;
     if (!this.session || this.sessionKey !== sessionKey) {
       let ts;
       try {
