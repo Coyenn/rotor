@@ -38,5 +38,9 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Sidecar tests
+        run: node --test test/*.test.js
+        working-directory: tools/sidecar
+
       - name: Test
         run: go test ./... -count=1

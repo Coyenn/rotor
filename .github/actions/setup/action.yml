@@ -28,7 +28,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        for dir in tools/sidecar testdata/diff/project testdata/conformance/project; do
+        for dir in tools/sidecar testdata/diff/project testdata/conformance/project testdata/transformers/project; do
           echo "::group::bun install ($dir)"
           (cd "$dir" && bun install --no-save)
           echo "::endgroup::"

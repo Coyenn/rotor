@@ -13,3 +13,7 @@ bun.lockb
 testdata/diff/project/node_modules/
 testdata/diff/project/out/
 testdata/diff/project/include/
+testdata/transformers/project/node_modules/
+testdata/transformers/project/out/
+testdata/transformers/project/include/
+testdata/transformers/project/flamework.build
