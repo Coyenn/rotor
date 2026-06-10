@@ -54,11 +54,6 @@ type sidecarOutputFile struct {
 	Text     string `json:"text"`
 }
 
-var (
-	sidecarMainPath = repoFile("tools", "sidecar", "main.js")
-	sidecarNodePath = repoFile("testdata", "diff", "project", "node_modules")
-)
-
 func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
 	if len(sourceFiles) == 0 {
 		return program, sourceFiles, nil, nil
@@ -118,6 +113,11 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 }
 
 func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile) (*sidecarResponse, error) {
+	sidecarDir, err := resolveSidecarDir()
+	if err != nil {
+		return nil, err
+	}
+
 	nodeCommand := os.Getenv("ROTOR_NODE_PATH")
 	if nodeCommand != "" {
 		if _, err := os.Stat(nodeCommand); err != nil {
@@ -147,9 +147,9 @@ func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile
 		return nil, err
 	}
 
-	cmd := exec.Command(nodePath, filepath.FromSlash(sidecarMainPath))
+	cmd := exec.Command(nodePath, filepath.Join(sidecarDir, "main.js"))
 	cmd.Dir = filepath.FromSlash(dir)
-	cmd.Env = sidecarEnv(dir)
+	cmd.Env = sidecarEnv(dir, sidecarDir)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -198,11 +198,10 @@ func runTransformerSidecar(dir, configPath string, sourceFiles []*ast.SourceFile
 	return &response, nil
 }
 
-func sidecarEnv(projectDir string) []string {
+func sidecarEnv(projectDir, sidecarDir string) []string {
 	nodePaths := []string{
 		filepath.Join(filepath.FromSlash(projectDir), "node_modules"),
-		filepath.FromSlash(filepath.Join(filepath.FromSlash(filepath.Dir(sidecarMainPath)), "node_modules")),
-		filepath.FromSlash(sidecarNodePath),
+		filepath.Join(sidecarDir, "node_modules"),
 	}
 
 	var filtered []string
@@ -372,13 +371,4 @@ func normalizeOverlayPath(path string, caseSensitive bool) string {
 		path = strings.ToLower(path)
 	}
 	return path
-}
-
-func repoFile(parts ...string) string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return filepath.Join(parts...)
-	}
-	segments := append([]string{filepath.Dir(file), "..", ".."}, parts...)
-	return filepath.Clean(filepath.Join(segments...))
 }

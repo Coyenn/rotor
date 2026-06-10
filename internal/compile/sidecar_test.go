@@ -4,11 +4,34 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"rotor/internal/logservice"
 )
+
+// repoSidecarDir returns tools/sidecar in this repo checkout. Synthetic
+// plugin fixtures have no typescript of their own, so tests point
+// ROTOR_SIDECAR_PATH here and the worker falls back to the sidecar's
+// pinned typescript install.
+func repoSidecarDir(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	dir := filepath.Join(filepath.Dir(file), "..", "..", "tools", "sidecar")
+	if _, err := os.Stat(filepath.Join(dir, "main.js")); err != nil {
+		t.Fatalf("repo sidecar missing: %v", err)
+	}
+	return filepath.Clean(dir)
+}
+
+func setRepoSidecarPath(t *testing.T) {
+	t.Helper()
+	t.Setenv("ROTOR_SIDECAR_PATH", repoSidecarDir(t))
+}
 
 const prefixStringPlugin = `const ts = require("typescript");
 
@@ -33,6 +56,7 @@ module.exports = function programTransformer(program, config, helpers) {
 `
 
 func TestBuildProjectTransformerPluginSidecar(t *testing.T) {
+	setRepoSidecarPath(t)
 	dir := writeProject(t, "@scope/plugin-fixture", "")
 	writeSidecarPluginFixture(t, dir, `{
 	"compilerOptions": {
@@ -109,6 +133,7 @@ func TestBuildProjectWithoutPluginsDoesNotRequireNode(t *testing.T) {
 }
 
 func TestBuildProjectTransformerPluginRequiresNode(t *testing.T) {
+	setRepoSidecarPath(t)
 	dir := writeProject(t, "@scope/plugin-node-fixture", "")
 	writeSidecarPluginFixture(t, dir, "", `{
 	"compilerOptions": {
@@ -144,6 +169,7 @@ func TestBuildProjectTransformerPluginRequiresNode(t *testing.T) {
 }
 
 func TestBuildProjectMissingTransformerWarnsAndContinues(t *testing.T) {
+	setRepoSidecarPath(t)
 	dir := writeProject(t, "@scope/plugin-warning-fixture", "")
 	tsconfig := `{
 	"compilerOptions": {
