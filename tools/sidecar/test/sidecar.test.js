@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const test = require("node:test");
@@ -156,4 +158,24 @@ test("main.js serves protocol v1 requests and reuses overlay updates", async () 
   }
 
   assert.deepEqual(stderr, []);
+});
+
+test("resolveTypeScript prefers the project's typescript copy", () => {
+  const stubProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-ts-"));
+  const stubDir = path.join(stubProjectDir, "node_modules", "typescript");
+  fs.mkdirSync(stubDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stubDir, "package.json"),
+    JSON.stringify({ name: "typescript", version: "0.0.0-stub", main: "index.js" }),
+  );
+  fs.writeFileSync(path.join(stubDir, "index.js"), "module.exports = { __rotorStub: true };\n");
+
+  const resolved = sidecar.resolveTypeScript(stubProjectDir);
+  assert.equal(resolved.__rotorStub, true);
+});
+
+test("resolveTypeScript falls back to the sidecar's own typescript", () => {
+  const emptyProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-nots-"));
+  const resolved = sidecar.resolveTypeScript(emptyProjectDir);
+  assert.equal(typeof resolved.transformNodes, "function");
 });

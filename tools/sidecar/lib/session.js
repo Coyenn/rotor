@@ -159,7 +159,7 @@ class SidecarProjectSession {
     }
 
     return {
-      diagnostics: parsed.errors.map(toProtocolDiagnostic),
+      diagnostics: parsed.errors.map((diagnostic) => toProtocolDiagnostic(this.ts, diagnostic)),
       parsed,
     };
   }
@@ -208,7 +208,7 @@ class SidecarProjectSession {
 
     try {
       return {
-        diagnostics: (result.diagnostics ?? []).map(toProtocolDiagnostic),
+        diagnostics: (result.diagnostics ?? []).map((diagnostic) => toProtocolDiagnostic(this.ts, diagnostic)),
         transformed: result.transformed
           .filter((node) => this.ts.isSourceFile(node))
           .map((sourceFile) => ({
@@ -302,8 +302,8 @@ function validateRequest(request) {
 }
 
 class SidecarServer {
-  constructor(ts) {
-    this.ts = ts;
+  constructor(tsOrLoader) {
+    this.loadTypeScript = typeof tsOrLoader === "function" ? tsOrLoader : () => tsOrLoader;
     this.session = undefined;
     this.sessionKey = "";
   }
@@ -316,7 +316,24 @@ class SidecarServer {
 
     const sessionKey = `${normalizePath(request.projectDir)}\u0000${normalizePath(request.tsConfigPath)}`;
     if (!this.session || this.sessionKey !== sessionKey) {
-      this.session = new SidecarProjectSession(this.ts, request.projectDir, request.tsConfigPath);
+      let ts;
+      try {
+        ts = this.loadTypeScript(request.projectDir);
+      } catch (error) {
+        return {
+          diagnostics: [
+            createProtocolDiagnostic(
+              "error",
+              "typescript-not-found",
+              `Could not resolve the \`typescript\` package from ${request.projectDir}.\n` +
+                `Transformer plugins require typescript in the project's node_modules (roblox-ts projects pin ~5.5.3).\n` +
+                `More info: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          ],
+          transformed: [],
+        };
+      }
+      this.session = new SidecarProjectSession(ts, request.projectDir, request.tsConfigPath);
       this.sessionKey = sessionKey;
     }
 

@@ -1,9 +1,6 @@
-const ts = require("typescript");
-
-function categoryToString(category) {
+function categoryToString(ts, category) {
   switch (category) {
     case ts.DiagnosticCategory.Warning:
-      return "warning";
     case ts.DiagnosticCategory.Message:
     case ts.DiagnosticCategory.Suggestion:
       return "warning";
@@ -13,9 +10,9 @@ function categoryToString(category) {
   }
 }
 
-function toProtocolDiagnostic(diagnostic) {
+function toProtocolDiagnostic(ts, diagnostic) {
   return {
-    category: categoryToString(diagnostic.category),
+    category: categoryToString(ts, diagnostic.category),
     code: String(diagnostic.code),
     file: diagnostic.file ? diagnostic.file.fileName : undefined,
     start: diagnostic.start,
