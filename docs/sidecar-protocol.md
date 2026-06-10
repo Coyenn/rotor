@@ -1,29 +1,73 @@
 # Transformer Sidecar Protocol
 
-This repository now carries a standalone Node sidecar in `tools/sidecar/` for the Phase 4 transformer-plugin slice. Rotor's Go compile/build path now uses it for plugin-configured projects by spawning the worker, sending the current compile set, and recompiling from the returned overlay text through a second tsgo Program.
+Rotor runs transformer plugins (`compilerOptions.plugins`) through a Node
+worker that mirrors upstream roblox-ts plugin semantics. The worker's source
+of truth is `tools/sidecar/`, and it is **embedded in the rotor binary**
+(`tools/sidecar/embed.go` + `internal/compile/sidecar_install.go`): released
+binaries extract it to `<user-cache>/rotor/sidecar-<content-hash>/` on first
+plugin build, so no repo checkout is required. `ROTOR_SIDECAR_PATH` overrides
+the worker location (repo development and tests point it at `tools/sidecar`).
 
-## Setup
+Projects without plugins never spawn Node.
 
-Install the sidecar-local dependency set:
+## TypeScript resolution
+
+The worker resolves the `typescript` package **from the project's
+`node_modules` first**, falling back to the worker's own directory. This
+matters for correctness, not just convenience: plugins `require("typescript")`
+themselves, and factory nodes only compose with `transformNodes` when both
+sides share one module instance — upstream roblox-ts guarantees this by
+construction (its own pinned 5.5.3 is the hoisted copy plugins see).
+roblox-ts projects pin `typescript@~5.5.3`; if a project has no typescript
+install, the worker reports a `typescript-not-found` diagnostic.
+
+## Setup (repo development)
 
 ```bash
 cd tools/sidecar
 bun install --no-save
 ```
 
-The package pins `typescript@5.5.3` to match the upstream `roblox-ts` plugin runtime. `npm install --no-audit --no-fund` remains available if Bun is not on `PATH`.
+The package pins `typescript@5.5.3` to match the upstream `roblox-ts` plugin
+runtime; this copy is only the fallback for synthetic test fixtures that have
+no `node_modules` of their own.
 
 ## Invocation
-
-Run the sidecar as a long-lived stdio worker:
 
 ```bash
 node tools/sidecar/main.js
 ```
 
-The process reads newline-delimited JSON messages from `stdin` and writes one newline-delimited JSON response per request to `stdout`.
+The process reads newline-delimited JSON requests from `stdin` and writes one
+newline-delimited JSON response per request to `stdout`.
 
-Rotor itself currently spawns the worker per plugin-backed compile/build pass. The standalone server still supports warm multi-request sessions, but the polling watch loop has not yet been taught to keep the sidecar process alive across rebuilds.
+**stdout is reserved for protocol responses.** `main.js` captures the real
+stdout writer and reroutes every other stdout write (plugin `console.log`,
+e.g. Flamework's logging) to stderr. Rotor streams the worker's stderr lines
+to the compiler log as they arrive and keeps a tail for error reporting.
+
+## Warm sessions
+
+Rotor keeps **one worker per `(projectDir, tsConfigPath)` for the life of the
+rotor process**, including across `rotor build -w` rebuilds — the JS program
+stays warm, mirroring upstream's persistent `transformerWatcher`. The worker
+exits when rotor's pipes close.
+
+Edits are communicated via `changedFiles`: rotor stat-diffs the project's
+`.ts`/`.tsx` files against the session's last-seen stamps and ships new text
+for anything that changed, which bumps the worker's LanguageService script
+versions (upstream `updateFile` semantics). A request on a fresh worker sends
+no overlays — the worker reads from disk. If a worker dies mid-request, rotor
+respawns it once and retries.
+
+Known limitation: a warm worker's *plugin-visible* view of an edited ambient
+`.d.ts` can be stale until the watch session restarts (stamps cover the
+`.ts`/`.tsx` compile surface). Rotor's own typecheck and emit always read
+fresh state.
+
+Inside the worker, one in-memory project session per
+`(projectDir, tsConfigPath)` holds the overlay map and reuses the TypeScript
+`LanguageService` program across requests.
 
 ## Protocol v1
 
@@ -70,12 +114,13 @@ Response shape:
 
 - TypeScript config/program diagnostics converted to `{ category, code, file, start, length, message }`
 - transformer resolution warnings using code `transformer-not-found`
+- a `typescript-not-found` error when the project has no resolvable `typescript` package
 - request validation errors using code `invalid-request`
 - internal worker failures using code `sidecar-internal`
 
 ## Semantics Mirrored From Upstream
 
-The standalone worker mirrors the upstream `roblox-ts` transformer behavior in these areas:
+The worker mirrors the upstream `roblox-ts` transformer behavior in these areas:
 
 - `getPluginConfigs` re-reads the raw `tsconfig`, keeps child `compilerOptions.plugins` entries before parent `extends` entries, and only accepts plugin objects with string `transform` fields.
 - transformer modules resolve relative to `projectDir`.
@@ -84,27 +129,25 @@ The standalone worker mirrors the upstream `roblox-ts` transformer behavior in t
 - transformer flatten order intentionally stays `after`, then `before`, then `afterDeclarations`.
 - transformed `SourceFile`s are reprinted with `typescript.createPrinter().printFile(...)`.
 
-## Warm Session Behavior
+## Verification
 
-The sidecar keeps one in-memory project session per `(projectDir, tsConfigPath)` pair:
-
-- `changedFiles` updates replace file contents in an overlay map and bump script versions.
-- the TypeScript `LanguageService` reuses its program across requests when the project identity stays the same.
-- source lookup for `compileFileNames` happens against the current overlay-backed program.
-
-## Local Verification
-
-Run the standalone smoke suite:
+JS worker suite (also run in CI):
 
 ```bash
 cd tools/sidecar
-bun test
+node --test test/*.test.js
 ```
 
-The smoke tests cover:
+Real-package integration (Flamework + rbxts-transform-env), exercising the
+full production path — embedded extraction, project typescript, warm session:
 
-- plugin discovery through `extends`
-- named/default transformer factory loading
-- `checker` and `compilerOptions` factory instantiation
-- the `after -> before -> afterDeclarations` execution quirk
-- stdio protocol handling with warm overlay updates
+```bash
+cd testdata/transformers/project && bun install --no-save && cd ../../..
+go test ./internal/compile -run TestTransformersFixtureFlameworkAndEnv -count=1
+```
+
+The JS suite covers plugin discovery through `extends`, named/default factory
+loading, `checker`/`compilerOptions` factory instantiation, the
+`after -> before -> afterDeclarations` execution quirk, stdio protocol
+handling with warm overlay updates, per-project typescript resolution, and
+the stdout-protection rule.

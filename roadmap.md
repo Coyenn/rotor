@@ -144,14 +144,14 @@ Everything that makes rotor a usable CLI tool rather than a compile library.*
 - [x] Full `rbxtsc` CLI flag surface — landed in 4 Task 1: ProjectOptions merge (defaults < tsconfig `rbxts` key < argv; absent CLI booleans don't clobber `rbxts` values), `-p/--project` file-path + upward tsconfig search, `--rojo` (empty-string falls through to discovery, quirk verbatim), `--luau`, `--logTruthyChanges`, `--optimizedLoops` (transformer gate wired), `--writeOnlyChanged` (cmd-level byte-compare; moves into the compile write phase with the output-pipeline task), `--verbose` + LogService analog (`internal/logservice`: yellow `Compiler Warning:` channel — now carries the previously-dropped Rojo resolver warnings — partial-line tracking, upstream benchmark/progress line formats), `--version`, and `--allowCommentDirectives`; usage errors now exit 1 for rbxtsc parity (was 2). Parsed-but-deferred: `--writeTransformedFiles` (warned NYS; out of v1). Comment-directive hoisting (`--!strict` above header) was already landed (`transformer/sourcefile.go`); ~~`build`, `--type`, `-w`, `--usePolling`~~ landed in 3c/4
 - [x] Watch mode v1 — `rotor build -w` landed with polling-based rebuilds (`--usePolling` semantics effectively always-on today); native fs events and debounced batch sets remain follow-up work, but build execution now reuses the manifest-backed changed-file selection path
 - [x] Incremental builds (tsbuildinfo-equivalent) — rotor now writes its own manifest at the configured buildinfo path and recompiles only changed `.ts`/`.tsx` files plus transitive importers; declaration emit follows the same selected set and failed builds do not advance the manifest
-- [x] Transformer-plugin Node sidecar integration — plugin-configured compiles/builds now spawn the standalone worker in `tools/sidecar`, log `transformer-not-found` as warnings, hard-fail when Node is unavailable, and recompile/render from an overlay-backed tsgo Program; current follow-up is watch-session warmth (the polling watch loop respawns the sidecar per rebuild today)
+- [x] Transformer-plugin Node sidecar integration — plugin-configured compiles/builds run the worker from `tools/sidecar`, log `transformer-not-found` as warnings, hard-fail when Node is unavailable, and recompile/render from an overlay-backed tsgo Program. Hardened June 10, 2026: the worker is **embedded in the binary** (extracted to a content-addressed user-cache dir; `ROTOR_SIDECAR_PATH` overrides), resolves **typescript from the project's node_modules** (the same instance plugins require — upstream's shared-instance guarantee), reroutes plugin `console.log` off the stdout protocol, and rotor keeps **one warm worker per project across builds and `-w` rebuilds** with stamp-diffed `changedFiles` overlays. Proven against real `rbxts-transformer-flamework@1.3.2` + `rbxts-transform-env@3.0.0` (`testdata/transformers/project`, identifier metadata + `Flamework.addPaths` rojo rewriting + env inlining asserted). Note: `@rbxts/transform-env` does not exist on npm; the real package is `rbxts-transform-env`. Known limitation: a warm worker's plugin-visible view of an edited ambient `.d.ts` can be stale until the watch session restarts (rotor's own typecheck is unaffected)
 - [x] `validateCompilerOptions` full port — landed in 3c (byte-exact diagnostic texts; known gap: enforced options set only in an `extends` parent are read root-only — same root-only gap as the sanitizer; fix with extends-chain resolution here)
 - [x] Concurrency: restore checker-affined project compilation via `GetTypeCheckerForFile`; `CompileProject`/`CompileFile` no longer assume checker 0, project compilation now runs one transform worker per checker group with a per-checker `MultiState`, and the tsgo checker pool is no longer pinned to one checker
 - [x] **Performance — filesystem-stat caching** (on top of the checker-group parallelism above; measured on the 95-file acceptance project, byte-identical output): full `rotor build` **545 ms → 355 ms**, incremental no-op rebuild (the watch case) **369 ms → 180 ms (~2×)**:
   - **`cachedvfs` host FS** — wraps the compiler host (build + `rotor check`) so module resolution's repeated `Stat`/`FileExists`/`Realpath`/`DirectoryExists` probes are memoized for the pass (was ~40% of warm time in `GetFileAttributesEx` syscalls; every checker group otherwise re-stats the same `node_modules/@rbxts` paths). Safe: a build never mutates its source tree mid-pass. Same wrapper tsgo's own project host uses.
   - **Rojo `searchDirectory`** — uses `os.ReadDir` entry kinds instead of an `os.Stat` per child ×2; only reparse points (junctions/symlinks) fall back to a following stat, so pnpm installs stay correct.
 - [x] **CLI logging + DX** — new `internal/term` color/style layer (NO_COLOR/FORCE_COLOR aware, Windows VT enablement, glyphs with ASCII fallbacks) and `cmd/rotor/ui.go`: clean colored `build`/`check`/`watch` output (banner, ✓/✗ result blocks, throughput, colored failures, watch change/idle lines). `internal/logservice` left byte-stable for differential tests. New `--cpuprofile <path>` diagnostics flag.
-- [x] V1 cleanup triage — the remaining non-surface cleanup (`TransformStatement` func-var removal, warmer sidecar watch sessions) is tracked as post-v1 engineering follow-up rather than a parity blocker
+- [x] V1 cleanup triage — the remaining non-surface cleanup (`TransformStatement` func-var removal) is tracked as post-v1 engineering follow-up rather than a parity blocker; warmer sidecar watch sessions landed June 10, 2026
 - [x] Known cleanup: `getLastToken` block-`}` trailing-comment handling
 
 ## Phase 5 — Conformance ✅
@@ -171,12 +171,15 @@ Verified locally on June 7, 2026 with:
 - `go test ./... -count=1`
 - `go test ./internal/conformance -count=1` with `ROTOR_ROJO_PATH`, `ROTOR_LUNE_PATH`, and `ROTOR_RANDOMNESS_PATH`
 - `bun test` in `tools/sidecar` (after `bun install --no-save`; `npm test` remains available as a fallback)
+- `go test ./internal/compile -run TestTransformersFixture -count=1` — real-package transformer coverage (Flamework + rbxts-transform-env; requires `bun install --no-save` in `testdata/transformers/project`)
 
 Continuously verified in CI (June 8, 2026): `.github/workflows/ci.yml` runs gofmt +
 `go vet` + `go build ./...` + full `go test ./...` on every push to `master` and PR via
 the shared `.github/actions/setup` composite action — which provisions Go, **Bun** (the
 canonical fixture installer; npm fallback was the source of flaky installs) and Node (for
-the transformer sidecar). rojo/lune are intentionally not installed in CI, so the
+the transformer sidecar). CI also runs the sidecar JS suite (`node --test` in
+`tools/sidecar`) and installs `testdata/transformers/project` so the real-package
+transformer test runs. rojo/lune are intentionally not installed in CI, so the
 lune-executed runtime suite skips there; it runs locally via `aftman install` and is
 exercised by the byte-parity differential/diagnostics tests regardless. `release.yml`
 reuses the same setup, runs the tests, then publishes CLI binaries via GoReleaser.
@@ -192,6 +195,7 @@ Success criteria (from the design spec):
 
 ## Post-v1 Follow-up
 
-- Keep one warm Node sidecar session across `build -w` rebuilds instead of respawning per polling cycle
+- ~~Keep one warm Node sidecar session across `build -w` rebuilds instead of respawning per polling cycle~~ — landed June 10, 2026 (transformer-plugin hardening; see Phase 4 sidecar entry)
 - Retire the package-level `TransformStatement` func var now that the transform surface is feature-complete
 - Fold the remaining root-only `extends`-chain validation/sanitizer limitation into the project-options pipeline
+- Warm sidecar `.d.ts` staleness: stamp-diffed `changedFiles` cover the `.ts`/`.tsx` compile surface; an edited ambient `.d.ts` is invisible to *plugins* (not to rotor) until the watch session restarts
