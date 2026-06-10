@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const test = require("node:test");
 const ts = require("typescript");
 
@@ -158,6 +158,58 @@ test("main.js serves protocol v1 requests and reuses overlay updates", async () 
   }
 
   assert.deepEqual(stderr, []);
+});
+
+test("main.js keeps plugin console.log off the protocol stream", () => {
+  const noisyProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-stdout-"));
+  fs.mkdirSync(path.join(noisyProjectDir, "src"), { recursive: true });
+  fs.writeFileSync(
+    path.join(noisyProjectDir, "noisy-plugin.js"),
+    `module.exports = function (program, config) {
+  console.log("plugin chatter on stdout");
+  return (context) => (sourceFile) => sourceFile;
+};\n`,
+  );
+  fs.writeFileSync(
+    path.join(noisyProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        moduleDetection: "force",
+        target: "ESNext",
+        types: [],
+        rootDir: "src",
+        outDir: "out",
+        plugins: [{ transform: "./noisy-plugin.js" }],
+      },
+      include: ["src"],
+    }),
+  );
+  const noisyMainFile = path.join(noisyProjectDir, "src", "main.ts");
+  fs.writeFileSync(noisyMainFile, 'export const phase = "start";\n');
+
+  const request = JSON.stringify({
+    protocol: 1,
+    tsConfigPath: path.join(noisyProjectDir, "tsconfig.json"),
+    projectDir: noisyProjectDir,
+    compileFileNames: [noisyMainFile],
+    changedFiles: [],
+  });
+
+  const result = spawnSync(process.execPath, [mainPath], {
+    input: `${request}\n`,
+    encoding: "utf8",
+    cwd: noisyProjectDir,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.split("\n").filter((line) => line.trim().length > 0);
+  assert.equal(lines.length, 1, `stdout must carry exactly one JSON response, got:\n${result.stdout}`);
+  const response = JSON.parse(lines[0]);
+  assert.deepEqual(response.diagnostics, []);
+  assert.match(result.stderr, /plugin chatter on stdout/);
 });
 
 test("resolveTypeScript prefers the project's typescript copy", () => {
