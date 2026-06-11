@@ -1,0 +1,269 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"rotor/internal/compile"
+)
+
+// cmdDoctor diagnoses the environment and project setup that `rotor build`
+// depends on: tsconfig discovery, installed @rbxts packages, Node.js and the
+// transformer sidecar when plugins are configured, and Rojo wiring. Rows are
+// ok/warn/fail with actionable hints; only hard failures exit 1.
+func cmdDoctor(args []string) int {
+	path := ""
+	for _, a := range args {
+		switch a {
+		case "-h", "--help":
+			usage(os.Stdout)
+			return 0
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "rotor doctor: unknown flag %q\n\n", a)
+				usage(os.Stderr)
+				return 1
+			}
+			if path != "" {
+				fmt.Fprintf(os.Stderr, "rotor doctor: unexpected extra argument %q\n\n", a)
+				usage(os.Stderr)
+				return 1
+			}
+			path = a
+		}
+	}
+	if path == "" {
+		path = "."
+	}
+
+	u := newUI(os.Stdout)
+	checks, projectName := runDoctor(path)
+	u.banner("doctor" + projectName)
+
+	fails, warns := 0, 0
+	for _, c := range checks {
+		u.doctorRow(c)
+		switch c.status {
+		case doctorFail:
+			fails++
+		case doctorWarn:
+			warns++
+		}
+	}
+	u.doctorSummary(len(checks), fails, warns)
+	if fails > 0 {
+		return 1
+	}
+	return 0
+}
+
+type doctorStatus int
+
+const (
+	doctorOK doctorStatus = iota
+	doctorInfo
+	doctorWarn
+	doctorFail
+)
+
+type doctorCheck struct {
+	status doctorStatus
+	label  string
+	detail string // muted context shown after the label
+	hint   string // indented remedy line, shown for warn/fail
+}
+
+// runDoctor evaluates every check for the project at path. It returns the
+// rows plus a " · <project>" banner suffix once the project dir is known.
+func runDoctor(path string) ([]doctorCheck, string) {
+	var checks []doctorCheck
+
+	tsConfigPath, err := findTsConfigPath(path)
+	if err != nil {
+		checks = append(checks, doctorCheck{
+			status: doctorFail,
+			label:  "tsconfig.json",
+			detail: "not found",
+			hint:   "run from a roblox-ts project, or pass a path: rotor doctor <project>",
+		})
+		return checks, ""
+	}
+	dir := filepath.Dir(tsConfigPath)
+	checks = append(checks, doctorCheck{status: doctorOK, label: "tsconfig.json", detail: tsConfigPath})
+
+	nodeModules := filepath.Join(dir, "node_modules")
+	hasPackageJSON := fileExists(filepath.Join(dir, "package.json"))
+	hasNodeModules := dirExists(nodeModules)
+	switch {
+	case !hasPackageJSON:
+		checks = append(checks, doctorCheck{
+			status: doctorWarn,
+			label:  "package.json",
+			detail: "not found next to tsconfig.json",
+			hint:   "roblox-ts projects resolve @rbxts/* types from npm packages",
+		})
+	case !hasNodeModules:
+		checks = append(checks, doctorCheck{
+			status: doctorFail,
+			label:  "node_modules",
+			detail: "missing",
+			hint:   "install dependencies first (npm install / bun install / pnpm install)",
+		})
+	default:
+		checks = append(checks, doctorCheck{status: doctorOK, label: "node_modules", detail: "installed"})
+	}
+
+	if hasNodeModules {
+		checks = append(checks, packageCheck(nodeModules, "@rbxts/compiler-types", doctorFail,
+			"npm install -D @rbxts/compiler-types"))
+		checks = append(checks, packageCheck(nodeModules, "@rbxts/types", doctorFail,
+			"npm install -D @rbxts/types"))
+	}
+
+	transforms := tsconfigTransformerPlugins(tsConfigPath)
+	nodeStatus := doctorInfo
+	nodeHint := ""
+	if len(transforms) > 0 {
+		// Transformer plugins hard-require Node (the sidecar host).
+		nodeStatus = doctorFail
+		nodeHint = "transformer plugins are configured; install Node.js (https://nodejs.org)"
+	}
+	nodeVersion, nodeOK := toolVersion("node", "--version")
+	if nodeOK {
+		checks = append(checks, doctorCheck{status: doctorOK, label: "Node.js", detail: nodeVersion})
+	} else {
+		checks = append(checks, doctorCheck{status: nodeStatus, label: "Node.js", detail: "not on PATH", hint: nodeHint})
+	}
+
+	if len(transforms) > 0 {
+		if hasNodeModules {
+			checks = append(checks, packageCheck(nodeModules, "typescript", doctorFail,
+				"transformer plugins resolve the project's own typescript package; npm install -D typescript"))
+		}
+		for _, name := range transforms {
+			if dirExists(filepath.Join(nodeModules, filepath.FromSlash(name))) {
+				checks = append(checks, doctorCheck{status: doctorOK, label: "transformer " + name, detail: "installed"})
+			} else {
+				// Builds log transformer-not-found as a warning and continue,
+				// so doctor matches that severity.
+				checks = append(checks, doctorCheck{
+					status: doctorWarn,
+					label:  "transformer " + name,
+					detail: "not found in node_modules",
+					hint:   "npm install -D " + name,
+				})
+			}
+		}
+		if sidecarDir, err := compile.ResolveSidecarDir(); err == nil {
+			checks = append(checks, doctorCheck{status: doctorOK, label: "transformer sidecar", detail: sidecarDir})
+		} else {
+			checks = append(checks, doctorCheck{
+				status: doctorFail,
+				label:  "transformer sidecar",
+				detail: err.Error(),
+				hint:   "the embedded worker could not be extracted to the user cache dir",
+			})
+		}
+	}
+
+	if projects, _ := filepath.Glob(filepath.Join(dir, "*.project.json")); len(projects) > 0 {
+		checks = append(checks, doctorCheck{status: doctorOK, label: "Rojo project", detail: filepath.Base(projects[0])})
+	} else {
+		checks = append(checks, doctorCheck{
+			status: doctorWarn,
+			label:  "Rojo project",
+			detail: "no *.project.json found",
+			hint:   "game projects need one for require-path resolution (default.project.json)",
+		})
+	}
+	if rojoVersion, ok := toolVersion("rojo", "--version"); ok {
+		checks = append(checks, doctorCheck{status: doctorOK, label: "rojo CLI", detail: rojoVersion})
+	} else {
+		checks = append(checks, doctorCheck{status: doctorInfo, label: "rojo CLI", detail: "not on PATH (only needed to sync/serve, not to compile)"})
+	}
+
+	return checks, "  " + filepath.Base(dir)
+}
+
+// packageCheck reports an installed package's version, or missStatus + hint
+// when it cannot be resolved.
+func packageCheck(nodeModules, pkg string, missStatus doctorStatus, hint string) doctorCheck {
+	if version, ok := readPackageVersion(nodeModules, pkg); ok {
+		return doctorCheck{status: doctorOK, label: pkg, detail: "v" + version}
+	}
+	return doctorCheck{status: missStatus, label: pkg, detail: "not installed", hint: hint}
+}
+
+// readPackageVersion reads node_modules/<pkg>/package.json's version field.
+func readPackageVersion(nodeModules, pkg string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(nodeModules, filepath.FromSlash(pkg), "package.json"))
+	if err != nil {
+		return "", false
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || manifest.Version == "" {
+		return "", false
+	}
+	return manifest.Version, true
+}
+
+// tsconfigTransformerPlugins lists compilerOptions.plugins[].transform names
+// from the tsconfig file (raw single-file read; mirrors the sidecar's own
+// plugin detection).
+func tsconfigTransformerPlugins(tsConfigPath string) []string {
+	data, err := os.ReadFile(tsConfigPath)
+	if err != nil {
+		return nil
+	}
+	var root struct {
+		CompilerOptions struct {
+			Plugins []struct {
+				Transform string `json:"transform"`
+			} `json:"plugins"`
+		} `json:"compilerOptions"`
+	}
+	if json.Unmarshal([]byte(compile.StripJSONC(string(data))), &root) != nil {
+		return nil
+	}
+	var transforms []string
+	for _, p := range root.CompilerOptions.Plugins {
+		if p.Transform != "" {
+			transforms = append(transforms, p.Transform)
+		}
+	}
+	return transforms
+}
+
+// toolVersion runs `<tool> <arg>` with a short timeout and returns the first
+// line of output (e.g. "v22.10.0", "Rojo 7.4.4").
+func toolVersion(tool, arg string) (string, bool) {
+	if _, err := exec.LookPath(tool); err != nil {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, tool, arg).Output()
+	if err != nil {
+		return "", false
+	}
+	version, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return strings.TrimSpace(version), version != ""
+}
+
+func fileExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular()
+}
+
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}

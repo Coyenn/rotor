@@ -11,7 +11,20 @@ import (
 	"rotor/internal/compile"
 )
 
-const pollInterval = 250 * time.Millisecond
+// Polling cadence. Snapshots are cheap (pruned os.ReadDir walks that reuse the
+// enumeration's own metadata), so the default tick is 100ms; the interval
+// self-throttles to 10x the measured walk cost on pathological trees. After a
+// change is detected, the watcher keeps re-snapshotting on a short quiet timer
+// so an editor "save all" burst lands in one rebuild instead of several.
+const (
+	watchMinInterval = 100 * time.Millisecond
+	watchMaxInterval = time.Second
+	watchQuietPeriod = 50 * time.Millisecond
+	watchSettleCap   = 500 * time.Millisecond
+)
+
+// watchHistoryLen caps the build-duration history kept for the idle sparkline.
+const watchHistoryLen = 12
 
 // fileStamp captures enough of a file's state to detect edits via polling.
 type fileStamp struct {
@@ -20,32 +33,211 @@ type fileStamp struct {
 	size    int64
 }
 
-// runWatch runs an initial check, then polls the watched file set (the
-// parsed file list plus tsconfig.json) and re-runs the full check whenever
-// anything changes. Exits only via Ctrl+C.
-func runWatch(dir string, out io.Writer) int {
-	u := newUI(out)
-	res := runCheck(dir, out)
-	stamps := snapshotFiles(res.watchFiles)
-	u.watchBanner(len(res.watchFiles))
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		changed, file := detectFileChange(res.watchFiles, stamps)
-		if !changed {
-			continue
-		}
-		u.watchChange(file)
-		res = runCheck(dir, out)
-		stamps = snapshotFiles(res.watchFiles)
-		u.watchBanner(len(res.watchFiles))
-	}
-	return 0
+// watchStats accumulates per-session build counts and durations for the watch
+// idle line.
+type watchStats struct {
+	builds  int
+	history []time.Duration // most recent last, capped at watchHistoryLen
 }
 
-func timestamp() string {
-	return time.Now().Format("15:04:05")
+func (s *watchStats) record(d time.Duration) {
+	s.builds++
+	s.history = append(s.history, d)
+	if len(s.history) > watchHistoryLen {
+		s.history = s.history[len(s.history)-watchHistoryLen:]
+	}
+}
+
+// treeWatcher snapshots a project tree for poll-based watching. node_modules,
+// dot-directories, and the build-written output/include dirs are pruned, and
+// editor junk files are ignored, so the walk stays proportional to the
+// project's own sources.
+type treeWatcher struct {
+	root     string
+	skipDirs []string      // absolute dirs pruned from the walk (out/, include/)
+	walkCost time.Duration // last snapshot duration; drives the adaptive interval
+}
+
+func newTreeWatcher(root string, skipDirs ...string) *treeWatcher {
+	w := &treeWatcher{root: root}
+	w.setSkipDirs(skipDirs...)
+	return w
+}
+
+func (w *treeWatcher) setSkipDirs(dirs ...string) {
+	w.skipDirs = w.skipDirs[:0]
+	for _, d := range dirs {
+		if d != "" {
+			w.skipDirs = append(w.skipDirs, filepath.Clean(d))
+		}
+	}
+}
+
+func (w *treeWatcher) snapshot() map[string]fileStamp {
+	start := time.Now()
+	stamps := make(map[string]fileStamp)
+	w.walk(w.root, stamps)
+	w.walkCost = time.Since(start)
+	return stamps
+}
+
+func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		path := filepath.Join(dir, name)
+		if entry.IsDir() {
+			if shouldPruneDir(name) || w.isSkipDir(path) {
+				continue
+			}
+			w.walk(path, stamps)
+			continue
+		}
+		if isJunkFile(name) {
+			continue
+		}
+		// entry.Info() reuses the metadata the directory enumeration already
+		// produced (free on Windows, one lstat elsewhere) instead of a fresh
+		// os.Stat per file.
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		stamps[path] = fileStamp{exists: true, modTime: info.ModTime(), size: info.Size()}
+	}
+}
+
+func (w *treeWatcher) isSkipDir(path string) bool {
+	for _, d := range w.skipDirs {
+		if strings.EqualFold(path, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// interval is the adaptive poll cadence: 10x the last walk cost, clamped.
+func (w *treeWatcher) interval() time.Duration {
+	iv := w.walkCost * 10
+	if iv < watchMinInterval {
+		return watchMinInterval
+	}
+	if iv > watchMaxInterval {
+		return watchMaxInterval
+	}
+	return iv
+}
+
+// shouldPruneDir reports whether a directory is never watched: dependency
+// trees and dot-directories (.git, .vscode, ...). Root lockfiles and
+// package.json stay in the walk, so installs still trigger rebuilds.
+func shouldPruneDir(name string) bool {
+	return name == "node_modules" || strings.HasPrefix(name, ".")
+}
+
+// isJunkFile reports whether a basename is editor write-noise that should
+// never trigger a rebuild (vim swap/backup probes, emacs locks, OS droppings).
+func isJunkFile(name string) bool {
+	if strings.HasPrefix(name, ".#") || name == "4913" || name == ".DS_Store" || name == "Thumbs.db" {
+		return true
+	}
+	if strings.HasSuffix(name, "~") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".swp", ".swo", ".tmp":
+		return true
+	}
+	return false
+}
+
+// diffStamps returns every path whose stamp differs between two snapshots
+// (modified, added, or removed), sorted.
+func diffStamps(before, after map[string]fileStamp) []string {
+	var changed []string
+	for path, st := range after {
+		if before[path] != st {
+			changed = append(changed, path)
+		}
+	}
+	for path := range before {
+		if _, ok := after[path]; !ok {
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// settleChanges waits out an editor write burst: starting from the first
+// changed snapshot, it re-snapshots on the quiet timer until a snapshot adds
+// nothing new (capped at watchSettleCap), then returns the settled snapshot
+// and every path that changed vs base.
+func settleChanges(base, first map[string]fileStamp, snap func() map[string]fileStamp, sleep func(time.Duration)) (map[string]fileStamp, []string) {
+	current := first
+	for waited := time.Duration(0); waited < watchSettleCap; waited += watchQuietPeriod {
+		sleep(watchQuietPeriod)
+		next := snap()
+		quiet := len(diffStamps(current, next)) == 0
+		current = next
+		if quiet {
+			break
+		}
+	}
+	return current, diffStamps(base, current)
+}
+
+// runWatch runs an initial check, then polls the watched file set (the parsed
+// file list plus tsconfig.json) and re-runs the full check whenever anything
+// changes. Exits only via Ctrl+C.
+func runWatch(dir string, out io.Writer) int {
+	u := newUI(out)
+	stats := &watchStats{}
+
+	res := runCheck(dir, out)
+	stats.record(res.elapsed)
+	stamps := snapshotFiles(res.watchFiles)
+	u.watchBanner(len(res.watchFiles), stats)
+
+	for {
+		time.Sleep(watchMinInterval)
+		next := snapshotFiles(res.watchFiles)
+		changed := diffStamps(stamps, next)
+		if len(changed) == 0 {
+			continue
+		}
+		snap := func() map[string]fileStamp { return snapshotFiles(res.watchFiles) }
+		var settled map[string]fileStamp
+		settled, changed = settleChanges(stamps, next, snap, time.Sleep)
+		if len(changed) == 0 {
+			stamps = settled
+			continue
+		}
+		u.watchChanges(changed)
+
+		res = runCheck(dir, out)
+		stats.record(res.elapsed)
+		// Stamp NEW files at their current state, but keep the pre-check
+		// stamps for surviving files so an edit made while the check ran is
+		// still detected on the next tick.
+		stamps = mergePreStamps(snapshotFiles(res.watchFiles), settled)
+		u.watchBanner(len(res.watchFiles), stats)
+	}
+}
+
+// mergePreStamps overlays pre-build stamps onto a fresh post-build snapshot:
+// files present in both keep their pre-build stamp (mid-build edits diff on
+// the next tick); files only in the fresh snapshot keep their fresh stamp.
+func mergePreStamps(post, pre map[string]fileStamp) map[string]fileStamp {
+	for path, st := range pre {
+		if _, ok := post[path]; ok {
+			post[path] = st
+		}
+	}
+	return post
 }
 
 func snapshotFiles(files []string) map[string]fileStamp {
@@ -56,107 +248,83 @@ func snapshotFiles(files []string) map[string]fileStamp {
 	return stamps
 }
 
-func detectFileChange(files []string, stamps map[string]fileStamp) (bool, string) {
-	for _, f := range files {
-		if stat(f) != stamps[f] {
-			return true, f
-		}
-	}
-	return false, ""
-}
-
 func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
 	u := newUI(os.Stdout)
+	stats := &watchStats{}
+
+	w := newTreeWatcher(dir)
+	w.setSkipDirs(guessedOutputDir(dir, nil), watchIncludeDir(dir, opts))
+
+	// The baseline snapshot is taken BEFORE the build, so a file saved while
+	// the build runs still differs from the baseline on the next tick instead
+	// of being silently absorbed (the v1 lost-update bug). Build outputs land
+	// in the pruned out/include dirs and never dirty the baseline.
+	baseline := w.snapshot()
 	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
-	reportBuildPass(u, result, diags, elapsed, err)
+	stats.record(elapsed)
+	reportBuildPass(u, result, diags, elapsed, err, stats)
+	// The build reveals the real output dir (it may not be out/); prune the
+	// baseline to match the refreshed skip set, or the now-unwalked entries
+	// would read as deletions and trigger a spurious rebuild.
+	w.setSkipDirs(guessedOutputDir(dir, result), watchIncludeDir(dir, opts))
+	pruneStamps(baseline, w.skipDirs)
 
-	outputDir := guessedOutputDir(dir, result)
-	stamps := snapshotProjectTree(dir, outputDir)
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		next := snapshotProjectTree(dir, outputDir)
-		changed, path := detectProjectTreeChange(stamps, next)
-		if !changed {
+	for {
+		time.Sleep(w.interval())
+		next := w.snapshot()
+		changed := diffStamps(baseline, next)
+		if len(changed) == 0 {
 			continue
 		}
-
-		u.watchChange(path)
+		baseline, changed = settleChanges(baseline, next, w.snapshot, time.Sleep)
+		if len(changed) == 0 {
+			continue
+		}
+		u.watchChanges(changed)
 
 		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
-		reportBuildPass(u, result, diags, elapsed, err)
-
-		outputDir = guessedOutputDir(dir, result)
-		stamps = snapshotProjectTree(dir, outputDir)
+		stats.record(elapsed)
+		reportBuildPass(u, result, diags, elapsed, err, stats)
+		w.setSkipDirs(guessedOutputDir(dir, result), watchIncludeDir(dir, opts))
+		pruneStamps(baseline, w.skipDirs)
 	}
-	return 0
 }
 
-func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed time.Duration, err error) {
+// pruneStamps drops snapshot entries that live under any of the skip dirs,
+// keeping an existing baseline consistent after the skip set changes.
+func pruneStamps(stamps map[string]fileStamp, skipDirs []string) {
+	for path := range stamps {
+		for _, d := range skipDirs {
+			if strings.EqualFold(path, d) ||
+				strings.HasPrefix(strings.ToLower(path), strings.ToLower(d)+string(filepath.Separator)) {
+				delete(stamps, path)
+				break
+			}
+		}
+	}
+}
+
+// watchIncludeDir mirrors compile.resolveIncludePath for tree pruning: the
+// include dir is rewritten by every build, so leaving it in the walk would
+// make the pre-build baseline self-trigger an endless rebuild loop.
+func watchIncludeDir(dir string, opts projectOptions) string {
+	if opts.includePath == "" {
+		return filepath.Join(dir, "include")
+	}
+	abs, err := filepath.Abs(filepath.FromSlash(opts.includePath))
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
+func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed time.Duration, err error, stats *watchStats) {
 	if err != nil {
 		newUI(os.Stderr).buildFailure(err.Error(), diags)
 	} else if result != nil {
 		u.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	}
-	u.watchIdle()
-}
-
-func snapshotProjectTree(root, outputDir string) map[string]fileStamp {
-	stamps := make(map[string]fileStamp)
-	walkSnapshotTree(root, root, outputDir, stamps)
-	return stamps
-}
-
-func walkSnapshotTree(root, dir, outputDir string, stamps map[string]fileStamp) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
-		if shouldSkipWatchPath(path, outputDir) {
-			continue
-		}
-		if entry.IsDir() {
-			walkSnapshotTree(root, path, outputDir, stamps)
-			continue
-		}
-		stamps[path] = stat(path)
-	}
-}
-
-func shouldSkipWatchPath(path, outputDir string) bool {
-	if filepath.Base(path) == ".git" {
-		return true
-	}
-	if outputDir == "" {
-		return false
-	}
-	rel, err := filepath.Rel(outputDir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func detectProjectTreeChange(before, after map[string]fileStamp) (bool, string) {
-	keys := make([]string, 0, len(before)+len(after))
-	seen := make(map[string]struct{}, len(before)+len(after))
-	for path := range before {
-		keys = append(keys, path)
-		seen[path] = struct{}{}
-	}
-	for path := range after {
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		keys = append(keys, path)
-	}
-	sort.Strings(keys)
-	for _, path := range keys {
-		if before[path] != after[path] {
-			return true, path
-		}
-	}
-	return false, ""
+	u.watchIdle(stats)
 }
 
 func guessedOutputDir(projectDir string, result *compile.BuildResult) string {

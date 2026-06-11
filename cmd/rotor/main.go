@@ -40,6 +40,8 @@ func run(args []string) int {
 		return cmdCheck(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "doctor":
+		return cmdDoctor(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -62,6 +64,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  rotor check [path] [-w]      typecheck the project (native, full strictness)")
 	fmt.Fprintln(w, "  rotor build [options] [path] compile the project to Luau (writes to tsconfig outDir")
 	fmt.Fprintln(w, "                               and copies the runtime library to the include folder)")
+	fmt.Fprintln(w, "  rotor doctor [path]          diagnose the project setup (tsconfig, @rbxts packages,")
+	fmt.Fprintln(w, "                               Node.js + transformer plugins, Rojo wiring)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")

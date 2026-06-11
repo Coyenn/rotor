@@ -12,6 +12,13 @@ import (
 	sidecarfs "rotor/tools/sidecar"
 )
 
+// ResolveSidecarDir exposes sidecar resolution/extraction for diagnostics
+// (`rotor doctor`): it returns the directory the transformer worker would run
+// from, extracting the embedded worker if needed.
+func ResolveSidecarDir() (string, error) {
+	return resolveSidecarDir()
+}
+
 // resolveSidecarDir locates the Node transformer worker. ROTOR_SIDECAR_PATH
 // overrides (repo-dev and tests); otherwise the embedded worker is extracted
 // once into a content-addressed cache dir so released binaries work without
@@ -39,20 +46,22 @@ func resolveSidecarDir() (string, error) {
 	if err := os.RemoveAll(tmp); err != nil {
 		return "", err
 	}
+	// 0o700/0o600: the extracted worker JS is executed by Node, so keep the
+	// cache user-private on Unix (no-op on Windows ACLs).
 	for _, name := range names {
 		data, err := sidecarfs.FS.ReadFile(name)
 		if err != nil {
 			return "", err
 		}
 		target := filepath.Join(tmp, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(target, data, 0o644); err != nil {
+		if err := os.WriteFile(target, data, 0o600); err != nil {
 			return "", err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(tmp, ".complete"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, ".complete"), nil, 0o600); err != nil {
 		return "", err
 	}
 	if err := os.Rename(tmp, dir); err != nil {

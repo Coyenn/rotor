@@ -116,13 +116,15 @@ go build -o rotor.exe ./cmd/rotor
 
 ### Use it
 
-Two commands so far:
+Three commands:
 
 ```powershell
 rotor check path/to/your-game        # native, full-strictness typecheck: diagnostics + timing
 rotor check path/to/your-game -w     # watch mode: rechecks on save
 rotor build path/to/your-game        # compile the project to Luau
 rotor build path/to/your-game -w     # watch mode: rebuild on save
+rotor doctor path/to/your-game       # diagnose the setup: tsconfig, @rbxts packages,
+                                     # Node.js + transformer plugins, Rojo wiring
 ```
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
@@ -153,7 +155,7 @@ That tag triggers the `release` GitHub Actions workflow, which runs the test sui
 Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 
 - The transformer covers the full language surface (JSX, classes, decorators, async/generators, try/catch, enums, namespaces, spread, the macro tables). Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
-- `build -w` is available today and now reuses Rotor's manifest-backed changed-file selection, but the watch loop is still polling-based rather than native-fsevent/debounced parity.
+- `build -w` reuses Rotor's manifest-backed changed-file selection and runs a debounced, pruned polling watcher: `node_modules`, dot-directories, and the build-written `out`/`include` trees are never walked, editor write bursts ("save all") settle into one rebuild, edits made *during* a build are not lost, and editor junk files (vim swap probes, emacs locks, `.DS_Store`) never trigger rebuilds. The poll adapts to the walk cost (100 ms floor), so idle watch CPU stays near zero even on big projects.
 - Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
 - Transformer plugins run through the Node sidecar that ships **embedded in the rotor binary** (extracted on first plugin build). The worker uses your project's own `typescript` install — the same instance plugins `require` — and stays warm across builds and watch rebuilds. Validated against real `rbxts-transformer-flamework` and `rbxts-transform-env` packages.
 - The conformance harnesses are in repo and green today. The external-project acceptance proof remains environment-gated because it needs a local `randomness` checkout plus Rojo/Lune on the machine running it.
@@ -164,7 +166,7 @@ Rotor is ready for production rbxts projects that want native-speed `check`, `ch
 
 Current follow-ups after v1:
 
-- `build -w` is still polling-based rather than native-fsevent/debounced parity
+- the watch engine is optimized polling (pruned + debounced); native FS events remain a possible future refinement
 - the `randomness` acceptance proof is intentionally environment-gated because the target project is external to this repo
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.

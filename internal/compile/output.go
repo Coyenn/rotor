@@ -3,6 +3,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,6 +83,11 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	sort.Strings(relOuts)
 
 	for _, relOut := range relOuts {
+		// Defense-in-depth: output paths are derived from source/Rojo path
+		// mappings; refuse any that would escape the project directory.
+		if err := assertLocalOutputPath(relOut); err != nil {
+			return nil, nil, err
+		}
 		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
 		wrote, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
 		if err != nil {
@@ -157,6 +163,15 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 
 func rewriteDeclarationTypeReferences(text string) string {
 	return strings.ReplaceAll(text, `types="types"`, `types="@rbxts/types"`)
+}
+
+// assertLocalOutputPath rejects project-relative output paths that are
+// absolute or traverse outside the project dir (e.g. "../x", "C:\x").
+func assertLocalOutputPath(relOut string) error {
+	if !filepath.IsLocal(filepath.FromSlash(relOut)) {
+		return fmt.Errorf("compile: refusing to write output outside the project directory: %q", relOut)
+	}
+	return nil
 }
 
 func writeOutputFile(path string, text string, writeOnlyChanged bool) (bool, error) {

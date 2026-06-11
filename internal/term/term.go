@@ -165,6 +165,39 @@ func (s *Styler) Hyperlink(uri, text string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\", uri, text)
 }
 
+// Spark renders values as a one-line sparkline, scaled to the largest value
+// (unicode bar ramp when color is on, an ASCII density ramp otherwise).
+func (s *Styler) Spark(values []float64) string {
+	if len(values) == 0 {
+		return ""
+	}
+	ramp := []rune("▁▂▃▄▅▆▇█")
+	if !s.color {
+		ramp = []rune(".:-=+*#%")
+	}
+	max := 0.0
+	for _, v := range values {
+		if v > max {
+			max = v
+		}
+	}
+	var b strings.Builder
+	for _, v := range values {
+		idx := 0
+		if max > 0 && v > 0 {
+			idx = int(v/max*float64(len(ramp)-1) + 0.5)
+			if idx < 0 {
+				idx = 0
+			}
+			if idx > len(ramp)-1 {
+				idx = len(ramp) - 1
+			}
+		}
+		b.WriteRune(ramp[idx])
+	}
+	return b.String()
+}
+
 // Rule returns a horizontal rule of the given width using box-drawing when
 // color is on, ASCII dashes otherwise.
 func (s *Styler) Rule(width int) string {

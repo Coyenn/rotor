@@ -98,30 +98,106 @@ func (u *ui) checkSummary(files int, errs int, elapsed time.Duration) {
 }
 
 // watchBanner prints the "watching N files" idle line.
-func (u *ui) watchBanner(n int) {
+func (u *ui) watchBanner(n int, stats *watchStats) {
 	g := u.s.Glyphs()
-	fmt.Fprintf(u.w, "\n  %s  %s %s\n",
-		u.s.Info(g.Watch),
-		u.s.Muted(fmt.Sprintf("watching %s for changes", plural(n, "file"))),
-		u.s.Muted("· Ctrl+C to exit"))
+	parts := []string{u.s.Muted(fmt.Sprintf("watching %s for changes", plural(n, "file")))}
+	parts = append(parts, u.watchStatParts(stats)...)
+	parts = append(parts, u.s.Muted("Ctrl+C to exit"))
+	fmt.Fprintf(u.w, "\n  %s  %s\n", u.s.Info(g.Watch), joinDot(u.s, parts))
 }
 
 // watchIdle prints the post-build "watching for changes" line for build watch,
 // where the watched set is the whole project tree rather than a fixed count.
-func (u *ui) watchIdle() {
+func (u *ui) watchIdle(stats *watchStats) {
 	g := u.s.Glyphs()
-	fmt.Fprintf(u.w, "  %s  %s\n",
-		u.s.Info(g.Watch),
-		u.s.Muted("watching for changes · Ctrl+C to exit"))
+	parts := []string{u.s.Muted("watching for changes")}
+	parts = append(parts, u.watchStatParts(stats)...)
+	parts = append(parts, u.s.Muted("Ctrl+C to exit"))
+	fmt.Fprintf(u.w, "  %s  %s\n", u.s.Info(g.Watch), joinDot(u.s, parts))
 }
 
-// watchChange prints the rule + change-detected line on a rebuild.
-func (u *ui) watchChange(file string) {
+// watchStatParts renders the rebuild counter and the build-time sparkline for
+// the idle lines: `rebuild #4 · 142 ms ▂▁▇▂`. Empty until the first rebuild.
+func (u *ui) watchStatParts(stats *watchStats) []string {
+	if stats == nil || stats.builds <= 1 {
+		return nil
+	}
+	parts := []string{u.s.Muted(fmt.Sprintf("rebuild #%d", stats.builds-1))}
+	if n := len(stats.history); n > 0 {
+		last := u.s.Muted(fmt.Sprintf("%d ms", stats.history[n-1].Milliseconds()))
+		// The sparkline is terminal chrome only — in piped/redirected output
+		// the ASCII ramp reads as noise, so it stays interactive-only.
+		if n > 1 && u.s.Color() {
+			values := make([]float64, n)
+			for i, d := range stats.history {
+				values[i] = float64(d.Milliseconds())
+			}
+			last += " " + u.s.Info(u.s.Spark(values))
+		}
+		parts = append(parts, last)
+	}
+	return parts
+}
+
+// watchChanges prints the rule + change-detected line on a rebuild, listing
+// the settled batch of changed files (up to three basenames).
+func (u *ui) watchChanges(paths []string) {
+	names := make([]string, 0, 3)
+	for i, p := range paths {
+		if i == 3 {
+			break
+		}
+		names = append(names, filepath.Base(p))
+	}
+	label := strings.Join(names, ", ")
+	if extra := len(paths) - len(names); extra > 0 {
+		label += fmt.Sprintf(", +%d more", extra)
+	}
 	fmt.Fprintf(u.w, "\n%s\n", u.s.Rule(64))
 	fmt.Fprintf(u.w, "  %s %s %s\n\n",
 		u.s.Muted(clock()),
-		u.s.Info("change detected"),
-		u.s.Muted(u.s.Glyphs().Dot+" "+filepath.Base(file)))
+		u.s.Info(plural(len(paths), "file")+" changed"),
+		u.s.Muted(u.s.Glyphs().Dot+" "+label))
+}
+
+// doctorRow prints one `rotor doctor` check: a status glyph, the label, the
+// muted detail, and (for warn/fail) an indented hint line.
+func (u *ui) doctorRow(c doctorCheck) {
+	g := u.s.Glyphs()
+	var mark string
+	switch c.status {
+	case doctorOK:
+		mark = u.s.SuccessBold(g.Check)
+	case doctorInfo:
+		mark = u.s.Muted(g.Dot)
+	case doctorWarn:
+		mark = u.s.WarnBold(g.Warn)
+	case doctorFail:
+		mark = u.s.ErrorBold(g.Cross)
+	}
+	fmt.Fprintf(u.w, "  %s  %s  %s\n", mark, u.s.Bold(c.label), u.s.Muted(c.detail))
+	if c.hint != "" && c.status >= doctorWarn {
+		fmt.Fprintf(u.w, "      %s %s\n", u.s.Muted(g.Arrow), u.s.Muted(c.hint))
+	}
+}
+
+// doctorSummary prints the closing tally line for `rotor doctor`.
+func (u *ui) doctorSummary(total, fails, warns int) {
+	g := u.s.Glyphs()
+	switch {
+	case fails > 0:
+		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.ErrorBold(g.Cross),
+			u.s.Bold(plural(fails, "problem")+" found"),
+			u.s.Muted(fmt.Sprintf("(%d checks, %d warnings)", total, warns)))
+	case warns > 0:
+		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.WarnBold(g.Warn),
+			u.s.Bold("ready, with "+plural(warns, "warning")),
+			u.s.Muted(fmt.Sprintf("(%d checks)", total)))
+	default:
+		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.SuccessBold(g.Check),
+			u.s.Bold("everything looks good"),
+			u.s.Muted(fmt.Sprintf("(%d checks)", total)))
+	}
 }
 
 // --- small formatting helpers ---
