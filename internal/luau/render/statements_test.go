@@ -10,6 +10,16 @@ func stmts(ss ...luau.Statement) *luau.List[luau.Statement] {
 	return luau.NewList[luau.Statement](ss...)
 }
 
+func TestRenderReturnWithEmptyExpressionList(t *testing.T) {
+	// `return $tuple()` reaches the renderer with an EMPTY expression list;
+	// upstream's unconditional `return ${join(", ")}` renders `return ` with
+	// a trailing space.
+	got := RenderAST(stmts(luau.NewReturn(luau.NewList[luau.Expression]())))
+	if want := "return \n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestRenderVariableDeclarationAndAssignment(t *testing.T) {
 	cases := []struct {
 		ast  *luau.List[luau.Statement]
