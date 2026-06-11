@@ -102,6 +102,8 @@ func TransformExpression(s *State, node *ast.Node) luau.Expression {
 		return transformThisExpression(s, node)
 	case ast.KindSuperKeyword:
 		return transformSuperKeyword()
+	case ast.KindVoidExpression:
+		return transformVoidExpression(s, node)
 
 	// type-only wrappers -> transformTypeExpression (inner expression)
 	case ast.KindAsExpression,

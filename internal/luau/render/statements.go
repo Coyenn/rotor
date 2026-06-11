@@ -37,6 +37,12 @@ func renderExprOrList(s *RenderState, v luau.NodeOrList) string {
 
 // renderReturnStatement.ts
 func renderReturnStatement(s *RenderState, node *luau.ReturnStatement) string {
+	// `return $tuple()` produces an EMPTY expression list; upstream's
+	// unconditional `return ${join(", ")}` renders it as `return ` (trailing
+	// space preserved for byte parity).
+	if list, ok := node.Expression.(*luau.List[luau.Expression]); ok && list.IsEmpty() {
+		return s.Line("return ")
+	}
 	return s.Line("return " + renderExprOrList(s, node.Expression))
 }
 
