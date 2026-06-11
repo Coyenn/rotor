@@ -23,6 +23,10 @@ jobs:
 
       - name: Run tests
         run: go test ./... -count=1
+        env:
+          # The setup action installs testdata/transformers/project; a release
+          # must never ship with the real-package transformer test skipped.
+          ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

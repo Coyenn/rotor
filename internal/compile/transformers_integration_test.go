@@ -17,12 +17,23 @@ func transformersFixtureDir(t *testing.T) string {
 	}
 	dir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "testdata", "transformers", "project"))
 	if _, err := os.Stat(filepath.Join(dir, "node_modules", "rbxts-transformer-flamework", "package.json")); err != nil {
-		t.Skipf("transformers fixture dependencies not installed (run `bun install --no-save` in testdata/transformers/project): %v", err)
+		skipOrFailFixture(t, "transformers fixture dependencies not installed (run `bun install --no-save` in testdata/transformers/project): %v", err)
 	}
 	if _, err := exec.LookPath("node"); err != nil {
-		t.Skipf("node not on PATH: %v", err)
+		skipOrFailFixture(t, "node not on PATH: %v", err)
 	}
 	return dir
+}
+
+// skipOrFailFixture skips locally but fails in CI: a silently skipped
+// real-package test would let a green run claim coverage it didn't have.
+// CI sets ROTOR_REQUIRE_TRANSFORMERS_FIXTURE after installing the fixture.
+func skipOrFailFixture(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("ROTOR_REQUIRE_TRANSFORMERS_FIXTURE") != "" {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
 }
 
 // TestTransformersFixtureFlameworkAndEnv runs the full production plugin

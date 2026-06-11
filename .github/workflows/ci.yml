@@ -44,3 +44,7 @@ jobs:
 
       - name: Test
         run: go test ./... -count=1
+        env:
+          # The setup action installs testdata/transformers/project, so the
+          # real-package transformer test must run here, never skip.
+          ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"

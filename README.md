@@ -155,7 +155,7 @@ Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
 - The transformer covers the full language surface (JSX, classes, decorators, async/generators, try/catch, enums, namespaces, spread, the macro tables). Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
 - `build -w` is available today and now reuses Rotor's manifest-backed changed-file selection, but the watch loop is still polling-based rather than native-fsevent/debounced parity.
 - Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
-- Transformer plugins now run through the bundled Node sidecar on plugin-configured builds. The current watch loop respawns the sidecar per rebuild instead of keeping one warm JS session alive across rebuilds.
+- Transformer plugins run through the Node sidecar that ships **embedded in the rotor binary** (extracted on first plugin build). The worker uses your project's own `typescript` install — the same instance plugins `require` — and stays warm across builds and watch rebuilds. Validated against real `rbxts-transformer-flamework` and `rbxts-transform-env` packages.
 - The conformance harnesses are in repo and green today. The external-project acceptance proof remains environment-gated because it needs a local `randomness` checkout plus Rojo/Lune on the machine running it.
 
 ## Production readiness
@@ -165,7 +165,6 @@ Rotor is ready for production rbxts projects that want native-speed `check`, `ch
 Current follow-ups after v1:
 
 - `build -w` is still polling-based rather than native-fsevent/debounced parity
-- plugin-backed watch rebuilds respawn the Node sidecar per rebuild instead of keeping one warm process alive
 - the `randomness` acceptance proof is intentionally environment-gated because the target project is external to this repo
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
@@ -227,7 +226,7 @@ go test ./internal/spike/ -v                              # checker integration 
 go vet ./internal/...                                     # required clean before commits
 ```
 
-No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs fixture dependencies installed inside `testdata/diff/project` and `testdata/conformance/project` before the project-layer and conformance suites that rely on `@rbxts/*` type packages. Use `bun install --no-save` first; `npm install --no-audit --no-fund` still works as a fallback.
+No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs fixture dependencies installed inside `testdata/diff/project`, `testdata/conformance/project`, and `testdata/transformers/project` (plus `tools/sidecar`) before the project-layer, conformance, and real-package transformer suites run. Use `bun install --no-save` first; `npm install --no-audit --no-fund` still works as a fallback.
 
 ### The differential suite (how rotor proves byte-parity)
 
