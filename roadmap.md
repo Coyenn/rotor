@@ -179,10 +179,22 @@ the shared `.github/actions/setup` composite action — which provisions Go, **B
 canonical fixture installer; npm fallback was the source of flaky installs) and Node (for
 the transformer sidecar). CI also runs the sidecar JS suite (`node --test` in
 `tools/sidecar`) and installs `testdata/transformers/project` so the real-package
-transformer test runs. rojo/lune are intentionally not installed in CI, so the
+transformer test runs. CI and `release.yml` set `ROTOR_REQUIRE_TRANSFORMERS_FIXTURE=1`
+so a missing fixture install fails the run instead of silently skipping the
+real-package test. rojo/lune are intentionally not installed in CI, so the
 lune-executed runtime suite skips there; it runs locally via `aftman install` and is
 exercised by the byte-parity differential/diagnostics tests regardless. `release.yml`
 reuses the same setup, runs the tests, then publishes CLI binaries via GoReleaser.
+
+Linux validation (June 10, 2026, golang:1.26-bookworm container + Node 22 + npm
+installs from a clean clone): sidecar JS suite, `go vet`, full `go test ./...`,
+sidecar/transformer tests under `-race`, and a release-style
+(`CGO_ENABLED=0 -trimpath -ldflags "-s -w -X main.version=..."`) `rotor build` of the
+transformers fixture — including embedded-sidecar extraction to `~/.cache/rotor` —
+all green. All six GoReleaser targets cross-compile; `goreleaser check` validates the
+config. Note: releases up to **v1.0.2 predate the embedded sidecar** — their
+transformer-plugin support only worked from a repo checkout; the first release after
+June 10, 2026 carries the fix.
 
 Success criteria (from the design spec):
 
