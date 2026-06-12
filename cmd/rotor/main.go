@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	rotorversion "rotor/internal/version"
 )
 
 const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts projects"
@@ -22,9 +24,10 @@ const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts pr
 // version is rotor's own release version, used for `--version` and the
 // `rotor build` emit header (`-- Compiled with rotor v...`). Library/test
 // compilation keeps the upstream rbxtsc header so differential
-// byte-comparison stays strict. Release builds override this via
-// `-ldflags=-X main.version=...`.
-var version = "dev"
+// byte-comparison stays strict. The value is defined in code
+// (internal/version) — no ldflags injection; kept as a var so tests can
+// override it.
+var version = rotorversion.Version
 
 func main() {
 	os.Exit(run(os.Args[1:]))
