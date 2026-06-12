@@ -231,11 +231,13 @@ Success criteria (from the design spec):
 
 ## Luau toolchain — v2 direction 🚧
 
-> **MVPs of all four sub-projects shipped (2026-06-12):** the Luau front-end
+> **MVPs of all five sub-projects shipped (2026-06-12):** the Luau front-end
 > (lexer + parser + faithful unparse, 405/405 corpus), `rotor minify`, `rotor bundle`
-> (Lune-verified to still run), and `rotor dev`. Remaining items below each sub-project
-> are depth/coverage follow-ups (readable generator, variable renaming, rojo
-> require-mode + aliases). The TS→Luau compiler is unchanged.
+> (Lune-verified to still run), `rotor dev`, and `rotor pack` (project → rbxm/rbxmx
+> model or self-reconstructing Luau script, azalea/wax style, Lune-verified to run).
+> Remaining items below each sub-project are depth/coverage follow-ups (readable
+> generator, variable renaming, rojo require-mode + aliases, native pack tree). The
+> TS→Luau compiler is unchanged.
 
 *Spec: `docs/superpowers/specs/2026-06-12-rotor-luau-toolchain-design.md`. Expands rotor
 from a `rbxtsc`-parity TS→Luau compiler into an all-in-one Luau toolchain — a
@@ -263,3 +265,8 @@ own plan.*
 
 - [x] **`rotor bundle <entry> [-o out] [--minify]` MVP** — `internal/bundle.Bundle`: path-require graph resolution (relative + `.luau`/`.lua` + `init.luau`/`init.lua`), require rewriting via `cst.UnparseWith` (no tree mutation), `__ROTOR_BUNDLE` module-table assembly with Roblox-faithful run-once caching + recursive-require error; unresolved/instance-path requires left verbatim; cycles terminate at build time. **GATE: bundler unit tests + a Lune behavioral test proving the bundle RUNS (`51 true`, single-instance caching); `rotor bundle ... --minify` verified end-to-end under Lune.**
 - [ ] rojo require mode (instance-path requires via `internal/rojo` + sourcemap), `.luaurc`/`sources` aliases, `excludes` globs, data-file embedding
+
+**Sub-project E — `rotor pack`** (project → distributable artifact, azalea/wax style; uses `rojo build` for the instance tree)
+
+- [x] **`rotor pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path]`** (`internal/pack`) — packages a Rojo project. `--as rbxmx`/`--as rbxm` → a real Roblox model via `rojo build` (full Rojo middleware for free). `--as luau` (default) → a **single self-reconstructing Luau script** that rebuilds the instance tree (Folder/ModuleScript/Script/LocalScript/StringValue with `.Name`/`.ClassName`/`.Parent`, child indexing, `FindFirstChild`/`WaitForChild`/`GetChildren`/`GetFullName`) + a memoized `require` polyfill (Roblox-faithful recursive-require error, real-require fallback); runs anywhere Luau runs, no Rojo at runtime. Per-module compile-check isolates bad modules. **GATE: rbxmx parse + emit unit tests, CLI arg validation, and a Lune end-to-end proving the packed Luau RUNS and resolves instance-path requires; all three formats smoke-tested end to end.** Authoritative tree comes from a rojo-built `.rbxmx` (wax's architecture).
+- [ ] Native instance-tree construction (no `rojo` dependency) via `internal/rojo` + FS middleware; `--entry` auto-detection; Script auto-run modes (deferred/task)
