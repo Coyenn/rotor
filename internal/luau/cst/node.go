@@ -27,6 +27,23 @@ func Unparse(n Node) string {
 	return b.String()
 }
 
+// EachToken calls visit for every TokenRef beneath n, in source order. Generators
+// (e.g. the dense/readable serializers) use it to walk the significant token stream.
+func EachToken(n Node, visit func(*TokenRef)) {
+	var walk func(Node)
+	walk = func(n Node) {
+		n.tokens(func(ref *TokenRef, child Node) {
+			switch {
+			case ref != nil:
+				visit(ref)
+			case child != nil:
+				walk(child)
+			}
+		})
+	}
+	walk(n)
+}
+
 // Nil is the simplest leaf node, used to bootstrap Unparse before the grammar lands.
 type Nil struct {
 	Tok TokenRef
