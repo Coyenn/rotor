@@ -9,6 +9,7 @@ import (
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/core"
+	"rotor/tsgo/tspath"
 )
 
 // nodeModules ports Shared/constants.ts NODE_MODULES.
@@ -236,6 +237,16 @@ func getProjectImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier
 // the node_modules or project pipeline. Every error path adds its diagnostic
 // and returns [none] (the compile bails on the diagnostic before rendering).
 func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node) []luau.Expression {
+	return getImportPartsImpl(s, sourceFile, moduleSpecifier, false)
+}
+
+// getModuleTreeImportParts is getImportParts with the rotor folder extension
+// enabled — only $getModuleTree opts in; regular imports stay upstream-exact.
+func getModuleTreeImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node) []luau.Expression {
+	return getImportPartsImpl(s, sourceFile, moduleSpecifier, true)
+}
+
+func getImportPartsImpl(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node, allowFolder bool) []luau.Expression {
 	// rotor guard (no upstream counterpart): every path below dereferences
 	// s.Rojo; a State without SetRojoContext (transformer-level unit tests)
 	// must get a diagnostic, not a nil-pointer panic.
@@ -246,6 +257,11 @@ func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.N
 
 	moduleFile := getSourceFileFromModuleSpecifier(s, moduleSpecifier)
 	if moduleFile == nil {
+		if allowFolder {
+			if parts, ok := getFolderImportParts(s, sourceFile, moduleSpecifier); ok {
+				return parts
+			}
+		}
 		s.Diags.Add(DiagNoModuleSpecifierFile(moduleSpecifier))
 		return []luau.Expression{luau.NewNone()}
 	}
@@ -276,6 +292,74 @@ func getImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.N
 		return []luau.Expression{luau.NewNone()}
 	}
 	return getProjectImportParts(s, sourceFile, moduleSpecifier, moduleOutPath, moduleRbxPath)
+}
+
+// getFolderImportParts is a rotor EXTENSION (no upstream counterpart):
+// $getModuleTree on a FOLDER. Upstream requires the specifier to resolve as
+// a module — a folder needs an index.ts — and declared folder support out of
+// scope. rotor resolves the specifier to a source DIRECTORY and emits its
+// instance path instead. Candidate bases, in order:
+//  1. relative specifiers — the importing file's directory (TS-faithful)
+//  2. non-relative — tsconfig `paths` substitutions (covers the sanitizer's
+//     baseUrl rewrite, so baseUrl-relative folder specifiers work)
+//  3. non-relative — the project directory ("src/shared/systems" style)
+//
+// Only $getModuleTree reaches this (allowFolder); a regular import of a
+// folder without index.ts still errors exactly like upstream. The first
+// candidate that is an existing directory with Rojo data wins; the emitted
+// parts go through getProjectImportParts, so Script/server-import/isolation
+// guards apply exactly as they would for a file in that folder.
+func getFolderImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node) ([]luau.Expression, bool) {
+	if !ast.IsStringLiteralLike(moduleSpecifier) || s.Program == nil {
+		return nil, false
+	}
+	spec := moduleSpecifier.Text()
+	fs := s.Program.Host().FS()
+
+	var candidates []string
+	if spec == "." || spec == ".." || strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../") {
+		candidates = append(candidates, tspath.ResolvePath(tspath.GetDirectoryPath(sourceFile.FileName()), spec))
+	} else {
+		options := s.Program.Options()
+		pathsBase := options.GetPathsBasePath(s.Program.GetCurrentDirectory())
+		for pattern, substitutions := range options.Paths.Entries() {
+			starText, ok := matchPathsPattern(pattern, spec)
+			if !ok {
+				continue
+			}
+			for _, substitution := range substitutions {
+				candidates = append(candidates, tspath.ResolvePath(pathsBase, strings.Replace(substitution, "*", starText, 1)))
+			}
+		}
+		candidates = append(candidates, tspath.ResolvePath(s.Program.GetCurrentDirectory(), spec))
+	}
+
+	for _, dir := range candidates {
+		if !fs.DirectoryExists(dir) {
+			continue
+		}
+		moduleOutPath := s.Rojo.PathTranslator.GetOutputPath(dir)
+		moduleRbxPath, ok := s.Rojo.Resolver.GetRbxPathFromFilePath(moduleOutPath)
+		if !ok {
+			continue
+		}
+		return getProjectImportParts(s, sourceFile, moduleSpecifier, moduleOutPath, moduleRbxPath), true
+	}
+	return nil, false
+}
+
+// matchPathsPattern matches a tsconfig `paths` pattern (at most one `*`)
+// against a specifier, returning the text the star matched.
+func matchPathsPattern(pattern, candidate string) (string, bool) {
+	star := strings.Index(pattern, "*")
+	if star < 0 {
+		return "", pattern == candidate
+	}
+	prefix, suffix := pattern[:star], pattern[star+1:]
+	if len(candidate) >= len(prefix)+len(suffix) && strings.HasPrefix(candidate, prefix) && strings.HasSuffix(candidate, suffix) {
+		return candidate[len(prefix) : len(candidate)-len(suffix)], true
+	}
+	return "", false
 }
 
 // createImportExpression ports createImportExpression.ts (L212-220):

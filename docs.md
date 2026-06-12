@@ -39,6 +39,12 @@ rotor **compiles multi-file TypeScript projects to byte-identical Luau** across 
 
 Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
 
+### rotor extensions (superset of rbxtsc)
+
+These compile under rotor but not under rbxtsc; everything rbxtsc accepts is still byte-identical:
+
+- **`$getModuleTree` on folders** — rbxtsc requires the specifier to resolve as a module, so pointing it at a folder only works if the folder has an `index.ts`. rotor resolves folder specifiers directly: relative ones (`"./systems"`) against the importing file, non-relative ones against `baseUrl`/`paths` (`"shared/systems"`) and then the project root (`"src/shared/systems"`). The usual server-import/isolation guards still apply.
+
 ## Commands
 
 ```

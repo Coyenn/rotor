@@ -100,8 +100,10 @@ var callMacroTable = map[string]CallMacro{
 	// needs the module specifier, not its transformed value.
 	// getSourceFileFromModuleSpecifier's resolveModuleName fallback
 	// (importexpr.go) covers specifiers of modules never imported normally.
+	// rotor extension: FOLDER specifiers (no index.ts) also resolve — see
+	// getFolderImportParts.
 	"$getModuleTree": func(s *State, node *ast.Node, expression luau.Expression, args []luau.Expression) luau.Expression {
-		parts := getImportParts(s, ast.GetSourceFileOfNode(node), node.Arguments()[0])
+		parts := getModuleTreeImportParts(s, ast.GetSourceFileOfNode(node), node.Arguments()[0])
 		rest := luau.NewList[luau.Expression]()
 		for _, part := range parts[1:] {
 			rest.Push(part)
