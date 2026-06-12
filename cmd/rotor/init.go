@@ -477,7 +477,10 @@ func packageJSON(opts initOptions) string {
 			"watch": "rotor dev",
 		},
 		DevDependencies: map[string]string{
-			"@rbxts/compiler-types": "^3.0.0",
+			// compiler-types only publishes prerelease-tagged versions
+			// (X.Y.Z-types.N); a plain ^X.Y.Z range matches none of them,
+			// so the range must carry the prerelease component.
+			"@rbxts/compiler-types": "^3.0.0-types.0",
 			"@rbxts/types":          "^1.0.800",
 			"typescript":            "^5.5.0",
 		},
@@ -526,17 +529,22 @@ func tsconfigJSON(declaration, jsx bool) string {
 		"jsxFragmentFactory": "React.Fragment",
 `
 	}
+	// NOTE: no "types" entry — "types": [] would disable the automatic
+	// inclusion of every package under typeRoots, which is exactly how
+	// @rbxts/types' globals (print, game, ...) get loaded.
 	return fmt.Sprintf(`{
 	"compilerOptions": {
 		// required
 		"allowSyntheticDefaultImports": true,
+		"downlevelIteration": true,
 		"module": "CommonJS",
 		"moduleResolution": "Node",
 		"noLib": true,
+		"resolveJsonModule": true,
+		"forceConsistentCasingInFileNames": true,
 		"moduleDetection": "force",
 		"strict": true,
 		"target": "ESNext",
-		"types": [],
 		"typeRoots": ["node_modules/@rbxts"],
 
 %s
