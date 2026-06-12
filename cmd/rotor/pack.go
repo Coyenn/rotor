@@ -17,12 +17,15 @@ func cmdPack(args []string) int {
 	output := ""
 	format := "luau"
 	entry := ""
+	rojoTree := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "-h" || a == "--help":
 			usage(os.Stdout)
 			return 0
+		case a == "--rojo-tree":
+			rojoTree = true
 		case a == "--as":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "rotor pack: --as requires a format (luau|rbxmx|rbxm)")
@@ -87,7 +90,7 @@ func cmdPack(args []string) int {
 		return 1
 	}
 
-	data, err := pack.Pack(pack.Options{Project: project, Format: f, Entry: entry})
+	data, err := pack.Pack(pack.Options{Project: project, Format: f, Entry: entry, RojoTree: rojoTree})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor pack: %v\n", err)
 		return 1

@@ -175,6 +175,23 @@ func (r *RojoResolver) warn(str string) {
 
 // FromPath parses the given Rojo config file (RojoResolver.ts L197-201). The
 // project name is NOT pushed onto rbx paths (doNotPush).
+// ParseProjectFile reads and parses a Rojo project file into its top-level instance
+// name and tree (the same order-preserving parse + validation FromPath uses). It is
+// exported so callers that need the raw project tree — e.g. a native instance-tree
+// builder — can reuse it without constructing a resolver.
+func ParseProjectFile(rojoConfigFilePath string) (name string, tree *Tree, err error) {
+	data, err := os.ReadFile(rojoConfigFilePath)
+	if err != nil {
+		return "", nil, err
+	}
+	configJSON := parseJSON(data)
+	if msg := validateConfig(configJSON); msg != "" {
+		return "", nil, fmt.Errorf("invalid Rojo configuration: %s", msg)
+	}
+	name, tree = configFromJSON(configJSON)
+	return name, tree, nil
+}
+
 func FromPath(rojoConfigFilePath string) *RojoResolver {
 	r := newRojoResolver()
 	abs, err := filepath.Abs(rojoConfigFilePath)

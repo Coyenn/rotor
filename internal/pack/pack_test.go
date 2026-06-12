@@ -1,14 +1,99 @@
 package pack
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"rotor/internal/luau/cst"
 )
+
+// writeFixtureProject builds a Rojo project exercising the native builder's supported
+// surface: nested folders, an init directory, .server/.client scripts, and a .txt
+// StringValue. Returns the project file path.
+func writeFixtureProject(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "src", "util"))
+	writeFile(t, filepath.Join(dir, "src", "Alpha.luau"), "return 1\n")
+	writeFile(t, filepath.Join(dir, "src", "boot.server.luau"), "print(\"server\")\n")
+	writeFile(t, filepath.Join(dir, "src", "ui.client.luau"), "print(\"client\")\n")
+	writeFile(t, filepath.Join(dir, "src", "util", "init.luau"), "return { v = require(script.Alpha) }\n")
+	writeFile(t, filepath.Join(dir, "src", "util", "Alpha.luau"), "return 2\n")
+	writeFile(t, filepath.Join(dir, "src", "util", "note.txt"), "hello\n")
+	writeFile(t, filepath.Join(dir, "default.project.json"),
+		"{ \"name\": \"demo\", \"tree\": { \"$className\": \"Folder\", \"src\": { \"$path\": \"src\" } } }\n")
+	return filepath.Join(dir, "default.project.json")
+}
+
+// canonical renders an instance tree as a stable, sibling-order-independent string of
+// (class, name, source, value), for structural equality checks.
+func canonical(inst *Instance) string {
+	var b strings.Builder
+	var walk func(n *Instance, depth int)
+	walk = func(n *Instance, depth int) {
+		fmt.Fprintf(&b, "%s%s:%s src=%q val=%q\n",
+			strings.Repeat("  ", depth), n.ClassName, n.Name, n.Source, n.Value)
+		kids := append([]*Instance(nil), n.Children...)
+		sort.Slice(kids, func(i, j int) bool { return kids[i].Name < kids[j].Name })
+		for _, c := range kids {
+			walk(c, depth+1)
+		}
+	}
+	walk(inst, 0)
+	return b.String()
+}
+
+// TestNativeMatchesRojo is the 1:1 gate: for a supported project, the native instance
+// tree must be structurally identical to the one `rojo build` produces (same classes,
+// names, sources, values, structure). Skips without rojo.
+func TestNativeMatchesRojo(t *testing.T) {
+	if _, err := exec.LookPath("rojo"); err != nil {
+		t.Skip("rojo not on PATH")
+	}
+	project := writeFixtureProject(t)
+
+	nativeRoot, supported, err := BuildNative(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !supported {
+		t.Fatal("fixture should be natively supported")
+	}
+
+	rojoRoots, err := buildTreeViaRojo(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rojoRoots) != 1 {
+		t.Fatalf("rojo produced %d roots", len(rojoRoots))
+	}
+
+	if got, want := canonical(nativeRoot), canonical(rojoRoots[0]); got != want {
+		t.Fatalf("native tree != rojo tree\n--- native ---\n%s\n--- rojo ---\n%s", got, want)
+	}
+}
+
+// TestNativeUnsupportedFallsBack verifies the native builder declines a project with a
+// non-script file (here a .json module), so Pack would fall back to rojo.
+func TestNativeUnsupportedFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	mkdir(t, filepath.Join(dir, "src"))
+	writeFile(t, filepath.Join(dir, "src", "config.json"), "{ \"x\": 1 }\n")
+	writeFile(t, filepath.Join(dir, "default.project.json"),
+		"{ \"name\": \"demo\", \"tree\": { \"$className\": \"Folder\", \"src\": { \"$path\": \"src\" } } }\n")
+	_, supported, err := BuildNative(filepath.Join(dir, "default.project.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if supported {
+		t.Fatal("a .json module should make the project natively unsupported")
+	}
+}
 
 const sampleRbxmx = `<roblox version="4">
   <Item class="Folder" referent="0">
