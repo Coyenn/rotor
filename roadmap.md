@@ -255,4 +255,5 @@ own plan.*
 
 **Sub-project D — Bundler** (`rotor bundle`; depends on A + `internal/rojo`)
 
-- [ ] Require-graph resolution (path + rojo modes) → module-table inlining with Roblox-faithful caching + recursive-require errors
+- [x] **`rotor bundle <entry> [-o out] [--minify]` MVP** — `internal/bundle.Bundle`: path-require graph resolution (relative + `.luau`/`.lua` + `init.luau`/`init.lua`), require rewriting via `cst.UnparseWith` (no tree mutation), `__ROTOR_BUNDLE` module-table assembly with Roblox-faithful run-once caching + recursive-require error; unresolved/instance-path requires left verbatim; cycles terminate at build time. **GATE: bundler unit tests + a Lune behavioral test proving the bundle RUNS (`51 true`, single-instance caching); `rotor bundle ... --minify` verified end-to-end under Lune.**
+- [ ] rojo require mode (instance-path requires via `internal/rojo` + sourcemap), `.luaurc`/`sources` aliases, `excludes` globs, data-file embedding
