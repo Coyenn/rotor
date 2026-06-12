@@ -289,3 +289,9 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 - [x] **`rotor asset sync|list`** (`internal/assets`) — own `**` glob walker, SHA-256 content hashing, `rotor-lock.json` (atomic, written after each upload — resume-safe), create vs update-in-place (stable asset ids), per-file moderation-failure isolation, deterministic codegen: nested `assets.luau` (cst-parse-verified) + matching `assets.d.ts`
 - [x] **`rotor deploy plan|apply`** (`internal/deploy`) — IaC engine: resource graph (`place_file`, `place_config`, `experience`, `badge`, `asset`) with DependsOn topo ordering, canonical-JSON input hashing, `.rotor/deploy/<env>.json` state (atomic, per-resource — resume-safe), pure plan diffing (create/update/noop/delete + `--allow-deletes` gate), terraform-style colored plan output, updateMask-precise universe/place PATCHes
 - [ ] Follow-ups: alpha-bleed image processing + animation upload (cookie auth) for assets; dev products/social links/remote state/`deploy destroy` + resource imports for deploy; real-network smoke gated behind `ROTOR_CLOUD_SMOKE=1`; verify legacy badge/game-pass endpoint paths against production
+
+## v1.4.0 — released June 12, 2026
+
+- [x] **`$env` macro, `$getModuleTree` folders, interactive `rotor init` wizard, house-style logging, perf pass** (see Post-v1 + v3 entries above) — all shipped in v1.4.0
+- [x] **npm distribution** — package `@rotor-rbx/cli` (binary-downloading shim; `bin/rotor.js` + `scripts/install.js`, ROTOR_INSTALL_BASE_URL override); GoReleaser uploads bare `-bin` executables; `npm-publish.yml` workflow publishes on release-published (needs `NPM_TOKEN` secret). **Live-verified end to end**: `bun add -d github:uproot/rotor` → first-run shim download → `rotor --version` = 1.4.0
+- [x] **Live cloud smoke** — `rotor asset sync` uploaded a real decal via Open Cloud with a user key (create → poll → lockfile → codegen → idempotent re-run), June 12, 2026
