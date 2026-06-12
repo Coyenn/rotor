@@ -46,6 +46,11 @@ func hasNewline(s string) bool { return strings.IndexByte(s, '\n') >= 0 }
 // become the leading trivia of the next significant token.
 func AttachTrivia(src string) []TokenRef {
 	toks, _ := lex.Tokenize(src)
+	return attachTrivia(toks)
+}
+
+// attachTrivia performs the trivia attachment on an already-tokenized stream.
+func attachTrivia(toks []lex.Token) []TokenRef {
 	var refs []TokenRef
 	var leading []Trivia
 	i := 0

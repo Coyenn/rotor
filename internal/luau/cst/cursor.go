@@ -15,7 +15,12 @@ type Diagnostic struct {
 }
 
 func newCursor(src string) *cursor {
-	return &cursor{refs: AttachTrivia(src)}
+	toks, ldiags := lex.Tokenize(src)
+	c := &cursor{refs: attachTrivia(toks)}
+	for _, d := range ldiags {
+		c.diags = append(c.diags, Diagnostic{Pos: d.Pos, Message: d.Message})
+	}
+	return c
 }
 
 // peek returns the current ref without consuming it. At/after EOF it returns the EOF

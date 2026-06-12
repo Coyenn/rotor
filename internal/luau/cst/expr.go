@@ -71,7 +71,20 @@ func (c *cursor) parseUnary() Node {
 		operand := c.parseBinary(unaryPrec)
 		return &Unary{Op: op, Operand: operand}
 	}
-	return c.parseSuffixed()
+	return c.parseAsExp()
+}
+
+// parseAsExp parses a value expression followed by zero or more `:: Type`
+// assertions. (Roundtrip is unaffected by how `::` associates with surrounding
+// operators, since Unparse depends only on token order.)
+func (c *cursor) parseAsExp() Node {
+	e := c.parseValue()
+	for c.atSymbol("::") {
+		op := c.next()
+		t := c.parseType()
+		e = &TypeAssert{Expr: e, ColonColon: op, Type: t}
+	}
+	return e
 }
 
 func (c *cursor) parseIfExpr() Node {
@@ -93,10 +106,59 @@ func (c *cursor) parseIfExpr() Node {
 	return n
 }
 
-// parseSuffixed parses a primary expression followed by any chain of suffixes:
+// parseValue parses a simple/primary expression. Only *prefix expressions* (a name
+// or a parenthesized expression) may take a suffix chain (.field, [i], call,
+// :method); *simple expressions* (literals, tables, function exprs, varargs,
+// strings, interpolated strings) may not. This mirrors Lua's prefixexp vs simpleexp
+// split — it stops a table constructor or literal from absorbing a following "(" on
+// the next line as a call (the classic ambiguity).
+func (c *cursor) parseValue() Node {
+	switch {
+	case c.atKeyword("nil"):
+		return &Nil{Tok: c.next()}
+	case c.atKeyword("true"):
+		return &True{Tok: c.next()}
+	case c.atKeyword("false"):
+		return &False{Tok: c.next()}
+	case c.atKeyword("function"):
+		fn := c.next()
+		return &FuncExpr{Func: fn, Body: c.parseFuncBody()}
+	case c.atSymbol("..."):
+		return &Vararg{Tok: c.next()}
+	case c.atSymbol("{"):
+		return c.parseTable()
+	case c.peek().Token.Kind == lex.Number:
+		return &Number{Tok: c.next()}
+	case c.peek().Token.Kind == lex.String:
+		return &String{Tok: c.next()}
+	case c.peek().Token.Kind == lex.InterpSimple || c.peek().Token.Kind == lex.InterpStart:
+		return c.parseInterpString()
+	case c.atSymbol("("), c.peek().Token.Kind == lex.Name:
+		return c.parseSuffixes(c.parsePrefixAtom())
+	default:
+		c.errHere("expected an expression")
+		return &Name{Tok: c.next()}
+	}
+}
+
+// parsePrefixExpr parses a prefix expression: a name or parenthesized expression
+// followed by any suffix chain. Used for assignment targets and call statements.
+func (c *cursor) parsePrefixExpr() Node {
+	return c.parseSuffixes(c.parsePrefixAtom())
+}
+
+// parsePrefixAtom parses the atom that begins a prefix expression: a parenthesized
+// expression or a bare name.
+func (c *cursor) parsePrefixAtom() Node {
+	if c.atSymbol("(") {
+		return c.parseParen()
+	}
+	return &Name{Tok: c.next()}
+}
+
+// parseSuffixes applies any chain of suffixes to a prefix-expression base:
 // .name, [expr], (args), {table}, "string", `interp`, :method(args).
-func (c *cursor) parseSuffixed() Node {
-	base := c.parsePrimary()
+func (c *cursor) parseSuffixes(base Node) Node {
 	for {
 		switch {
 		case c.atSymbol("."):
@@ -176,6 +238,9 @@ func (c *cursor) parsePrimary() Node {
 		return &True{Tok: c.next()}
 	case c.atKeyword("false"):
 		return &False{Tok: c.next()}
+	case c.atKeyword("function"):
+		fn := c.next()
+		return &FuncExpr{Func: fn, Body: c.parseFuncBody()}
 	case c.atSymbol("..."):
 		return &Vararg{Tok: c.next()}
 	case c.atSymbol("("):
