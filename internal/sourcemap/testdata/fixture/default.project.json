@@ -1,0 +1,12 @@
+{
+	"name": "fixture",
+	"tree": {
+		"$className": "Folder",
+		"Shared": {
+			"$path": "src/shared"
+		},
+		"Server": {
+			"$path": "src/server"
+		}
+	}
+}

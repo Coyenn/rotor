@@ -53,6 +53,10 @@ func run(args []string) int {
 		return cmdDev(args[1:])
 	case "pack":
 		return cmdPack(args[1:])
+	case "init":
+		return cmdInit(args[1:])
+	case "sourcemap":
+		return cmdSourcemap(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -87,6 +91,14 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "                               package a Rojo project into one self-reconstructing")
 	fmt.Fprintln(w, "                               Luau script (native, no rojo needed for script trees;")
 	fmt.Fprintln(w, "                               --rojo-tree forces rojo), or a Roblox model file")
+	fmt.Fprintln(w, "  rotor init [dir] [--template game|package|plain]")
+	fmt.Fprintln(w, "                               scaffold a new project (rbxts game by default; package")
+	fmt.Fprintln(w, "                               library, or plain Luau) with tsconfig, Rojo project,")
+	fmt.Fprintln(w, "                               rotor.config.ts, and starter src")
+	fmt.Fprintln(w, "  rotor sourcemap [path] [-o out.json]")
+	fmt.Fprintln(w, "                               emit a Rojo-compatible sourcemap.json for luau-lsp")
+	fmt.Fprintln(w, "                               (native for script trees, no rojo needed; falls back")
+	fmt.Fprintln(w, "                               to `rojo sourcemap` otherwise; stdout without -o)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
