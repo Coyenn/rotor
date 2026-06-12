@@ -181,6 +181,9 @@ var extraPackages = []extraPackage{
 	{label: "@rbxts/charm", desc: "atomic state management", deps: []dep{{"@rbxts/charm", "*"}}},
 	{label: "@rbxts/net", desc: "typed networking (rbx-net)", deps: []dep{{"@rbxts/net", "^3.0.0"}}},
 	{label: "@rbxts/lapis", desc: "DataStore abstraction", deps: []dep{{"@rbxts/lapis", "*"}}},
+	{label: "@rbxts/remo", desc: "typed remote events/functions", deps: []dep{{"@rbxts/remo", "*"}}},
+	{label: "@rbxts/ripple", desc: "spring/tween motion library", deps: []dep{{"@rbxts/ripple", "*"}}},
+	{label: "@rbxts/pretty-react-hooks", desc: "hook utilities for @rbxts/react", deps: []dep{{"@rbxts/pretty-react-hooks", "*"}}},
 }
 
 // scaffold returns the complete file set for the chosen options, including

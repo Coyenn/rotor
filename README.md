@@ -93,20 +93,20 @@ Grab a binary from [GitHub Releases](https://github.com/uproot/rotor/releases), 
 
 ```sh
 # mise
-mise use -g github:uproot/rotor@1.4.0
+mise use -g github:uproot/rotor@1.4.1
 
 # rokit
-rokit add uproot/rotor@1.4.0
+rokit add uproot/rotor@1.4.1
 ```
 
 ```toml
 # aftman.toml
 [tools]
-rotor = "uproot/rotor@1.4.0"
+rotor = "uproot/rotor@1.4.1"
 
 # foreman.toml
 [tools]
-rotor = { github = "uproot/rotor", version = "1.4.0" }
+rotor = { github = "uproot/rotor", version = "1.4.1" }
 ```
 
 ### Install via npm / bun
