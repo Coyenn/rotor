@@ -226,3 +226,32 @@ Success criteria (from the design spec):
 - Retire the package-level `TransformStatement` func var now that the transform surface is feature-complete
 - Fold the remaining root-only `extends`-chain validation/sanitizer limitation into the project-options pipeline
 - Warm sidecar `.d.ts` staleness: stamp-diffed `changedFiles` cover the `.ts`/`.tsx` compile surface; an edited ambient `.d.ts` is invisible to *plugins* (not to rotor) until the watch session restarts
+
+---
+
+## Luau toolchain — v2 direction 🚧
+
+*Spec: `docs/superpowers/specs/2026-06-12-rotor-luau-toolchain-design.md`. Expands rotor
+from a `rbxtsc`-parity TS→Luau compiler into an all-in-one Luau toolchain — a
+require-resolving **bundler** (still runnable, darklua-style), a **minifier**, and a
+**`rotor dev`** watch+serve loop. References: darklua + full_moon. The existing
+byte-parity compiler is untouched; this is additive. Four sub-projects, each with its
+own plan.*
+
+**Sub-project A — Luau front-end** (lexer + trivia-preserving CST + parser + generators; the critical path)
+
+- [x] **A.1 — Lexer** (`internal/luau/lex`; plan: `docs/superpowers/plans/2026-06-12-rotor-luau-lexer.md`) — hand-written single-pass tokenizer that keeps whitespace/comment trivia with byte offsets + line/col. Core invariant: concatenating every token's text reproduces the source exactly. Full Luau lexical surface (long strings/comments with bracket levels, backtick interpolation with nested holes, `//`/`::`/`->`/compound-assign longest-match, numeric separators + `0x`/`0b` + hex floats without swallowing `..`). Permissive lexemes, non-panicking recovery. **Verified: 405 real Luau files roundtrip byte-exact (RuntimeLib, Promise, 44 conformance specs, 224 `@rbxts` package files); fuzzed 5.2M execs, 0 failures.**
+- [ ] **A.2 — CST + parser** (`internal/luau/cst`) — Roslyn-style trivia attachment (`TokenRef` leading/trailing), surface-faithful node taxonomy, hand-written recursive-descent/Pratt parser with error recovery; byte-exact roundtrip via the generator
+- [ ] **A.3 — Generators** (`internal/luau/gen`) — `readable` / `dense` (minified) / `retain_lines` serializers
+
+**Sub-project B — `rotor dev`** (watch cwd + incremental build + supervise `rojo serve`; independent of A)
+
+- [ ] `rotor dev` command
+
+**Sub-project C — Minifier** (`rotor minify`; depends on A)
+
+- [ ] Scope-aware `rename_variables`, `remove_comments`, dense output, `convert_index_to_field`
+
+**Sub-project D — Bundler** (`rotor bundle`; depends on A + `internal/rojo`)
+
+- [ ] Require-graph resolution (path + rojo modes) → module-table inlining with Roblox-faithful caching + recursive-require errors
