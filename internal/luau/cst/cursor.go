@@ -27,6 +27,15 @@ func (c *cursor) peek() *TokenRef {
 	return &c.refs[c.pos]
 }
 
+// peek2 returns the ref after the current one (clamped at the EOF ref). Used for
+// one-token lookahead (e.g. distinguishing `name = value` table fields).
+func (c *cursor) peek2() *TokenRef {
+	if i := c.pos + 1; i < len(c.refs) {
+		return &c.refs[i]
+	}
+	return &c.refs[len(c.refs)-1]
+}
+
 // next consumes and returns the current ref (clamped at the EOF ref).
 func (c *cursor) next() TokenRef {
 	r := *c.peek()
@@ -69,5 +78,15 @@ func (c *cursor) expectKeyword(kw string) TokenRef {
 		return c.next()
 	}
 	c.errHere("expected '" + kw + "'")
+	return c.next()
+}
+
+// expectName consumes the current ref if it is a Name token; otherwise records a
+// diagnostic and returns the current ref as best-effort recovery.
+func (c *cursor) expectName() TokenRef {
+	if c.peek().Token.Kind == lex.Name {
+		return c.next()
+	}
+	c.errHere("expected a name")
 	return c.next()
 }
