@@ -18,8 +18,10 @@ builds:
       - arm64
     flags:
       - -trimpath
+    # rotor's version is defined in code (internal/version/version.go); the
+    # release workflow verifies the tag matches it, so no -X injection here.
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w
 
 archives:
   - id: rotor

@@ -1,10 +1,16 @@
-# ⚡ rotor
+<p align="center">
+  <img src="media/wordmark.png" alt="rotor — an all in one roblox toolchain" width="600">
+</p>
 
-**A native-speed rewrite of the [roblox-ts](https://roblox-ts.com) compiler in Go — built on TypeScript's own native compiler.**
+<p align="center"><em>TypeScript in, Roblox out — at native speed.</em></p>
 
-rotor targets `rbxtsc` compatibility: **byte-identical Luau output**, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler.
+<p align="center">
+  <a href="https://github.com/uproot/rotor/releases/latest"><img src="https://img.shields.io/github/v/release/uproot/rotor" alt="latest release"></a>
+  <a href="https://github.com/uproot/rotor/actions/workflows/ci.yml"><img src="https://github.com/uproot/rotor/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
+</p>
 
-> **Status: ready to ship.** rotor now typechecks and compiles a real 95-file production game **byte-identical to `rbxtsc` 3.0.0**, ships `check`, `check -w`, `build`, and `build -w`, emits declarations for declaration-enabled builds, does manifest-backed incremental rebuild selection, runs roblox-ts transformer plugins through the Node sidecar on plugin-configured builds, passes the vendored Lune runtime suite, and closes the real-project `randomness` acceptance compare.
+rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with **byte-identical Luau output** — alongside a native Luau bundler, minifier, dev loop, and packer (`bundle`, `minify`, `dev`, `pack`).
 
 ```
 $ rotor check ./my-game -w
@@ -12,247 +18,65 @@ rotor check — native TypeScript checking
 checked 222 files in 161 ms — 0 errors
 ```
 
-*That's a real rbxts game — 222 files, full strict typecheck, in the time a JS toolchain spends booting.*
+📖 [Documentation](docs.md) · 🤝 [Contributing](CONTRIBUTING.md) · 🗺️ [Roadmap](roadmap.md)
 
----
+## Install
 
-## Why
+Grab a binary from [GitHub Releases](https://github.com/uproot/rotor/releases), or use a toolchain manager:
 
-roblox-ts is a brilliant compiler with one structural problem: it runs on the JavaScript TypeScript compiler API. Every build boots Node, parses, binds, and typechecks your entire project in single-threaded JS. Watch-mode rebuilds, cold builds, startup — all of it is slow, and it gets slower as your game grows.
+```sh
+# mise
+mise use -g github:uproot/rotor@1.3.0
 
-You can't fix that with a syntax transpiler (SWC/esbuild-style), because roblox-ts's emit is **type-directed**: `for...of` compiles differently for an `Array` vs a `Map` vs a string, `+` becomes `+` or `..` by operand type, truthiness guards depend on whether a type can be `0` or `""`, and the entire macro system resolves through the type checker. No types, no correct Luau.
-
-The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) — Microsoft's official native port of the full TypeScript compiler (shipping as TypeScript 7), ~10x faster with parallel checking. It's the only native implementation of the *real* checker in existence. rotor ports roblox-ts's emit layer to Go on top of it.
-
-## How rotor stays 1:1
-
-Compatibility isn't a hope — it's enforced by construction:
-
-- **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
-- **Behavioral conformance**: roblox-ts's vendored runtime suite, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The in-repo corpus and harnesses (`testdata/conformance`, `internal/conformance`) are fully enabled today: all 44 upstream golden fixtures are byte-for-byte green, the full vendored diagnostics corpus passes, the Lune suite currently reports `460 passed, 0 failed, 0 skipped`, and the real `randomness` acceptance compare is byte-for-byte green when pointed at a local checkout.
-- **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
-- **Same runtime**: `RuntimeLib.lua` and `Promise.lua` are reused verbatim from roblox-ts — zero behavioral drift at runtime.
-
-Your existing project — `tsconfig.json`, `default.project.json`, `node_modules/@rbxts/*`, transformer plugins like Flamework — is the compatibility target, unchanged.
-
-## Try it today
-
-rotor already **compiles multi-file TypeScript projects to byte-identical Luau** across the full language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, ...), optional chaining, Map/Set/string/generator iteration, switch, `new` — verified continuously against real `rbxtsc` output (43/43 differential fixtures; **all 95 files of a real production game compile byte-identical**, zero divergent). It also **natively typechecks and watches real rbxts projects**.
-
-### Install
-
-rotor publishes cross-platform release binaries on [GitHub Releases](https://github.com/uproot/rotor/releases). Each `vX.Y.Z` tag produces:
-
-- `rotor-vX.Y.Z-windows-amd64.zip`
-- `rotor-vX.Y.Z-windows-arm64.zip`
-- `rotor-vX.Y.Z-linux-amd64.tar.gz`
-- `rotor-vX.Y.Z-linux-arm64.tar.gz`
-- `rotor-vX.Y.Z-darwin-amd64.tar.gz`
-- `rotor-vX.Y.Z-darwin-arm64.tar.gz`
-- `rotor-vX.Y.Z-checksums.txt`
-
-Requires **Go 1.25+** only if you want to build rotor from source. Plugin-backed builds still need Node.js at runtime for the transformer sidecar.
-
-#### mise
-
-`mise` can install GitHub release assets directly via its GitHub backend:
-
-```powershell
-mise use -g github:uproot/rotor@1.0.1
-rotor --version
+# rokit
+rokit add uproot/rotor@1.3.0
 ```
-
-#### aftman
-
-Add rotor to `aftman.toml`:
 
 ```toml
+# aftman.toml
 [tools]
-rotor = "uproot/rotor@1.0.1"
-```
+rotor = "uproot/rotor@1.3.0"
 
-Then install:
-
-```powershell
-aftman install
-rotor --version
-```
-
-#### rokit
-
-If you use Rokit, add rotor directly:
-
-```powershell
-rokit add uproot/rotor@1.0.1
-rotor --version
-```
-
-Rokit is also drop-in compatible with existing `aftman.toml` / `foreman.toml`-based projects, so the Aftman and Foreman snippets below remain useful there too.
-
-#### foreman
-
-Add rotor to `foreman.toml`:
-
-```toml
+# foreman.toml
 [tools]
-rotor = { github = "uproot/rotor", version = "1.0.1" }
+rotor = { github = "uproot/rotor", version = "1.3.0" }
 ```
 
-Then install:
+Or build from source (Go 1.25+):
 
-```powershell
-foreman install
-rotor --version
-```
-
-#### Build from source
-
-Clone the repo and build it locally:
-
-```powershell
+```sh
 git clone https://github.com/uproot/rotor && cd rotor
-go build -o rotor.exe ./cmd/rotor
+go build ./cmd/rotor
 ```
 
-### Use it
+Then point it at any rbxts project:
 
-Three commands:
-
-```powershell
-rotor check path/to/your-game        # native, full-strictness typecheck: diagnostics + timing
-rotor check path/to/your-game -w     # watch mode: rechecks on save
-rotor build path/to/your-game        # compile the project to Luau
-rotor build path/to/your-game -w     # watch mode: rebuild on save
-rotor doctor path/to/your-game       # diagnose the setup: tsconfig, @rbxts packages,
-                                     # Node.js + transformer plugins, Rojo wiring
+```sh
+rotor check ./my-game      # native, full-strictness typecheck
+rotor build ./my-game -w   # compile to Luau, watch mode
 ```
 
-- `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
-- Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).
-- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`.
+See the [documentation](docs.md) for all commands (`doctor`, `bundle`, `minify`, `dev`, `pack`) and options.
 
-`rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project to see it in action:
+## Benchmarks
 
-```powershell
-bun install --cwd testdata/diff/project --no-save
-rotor build testdata/diff/project
-# out/01_literals.luau
-# ...
-# compiled 43 files in 189 ms
-```
+Measured on real production rbxts games, with output byte-identical to `rbxtsc` 3.0.0:
 
-### Release a new version
+| Workload | rotor |
+|----------|------:|
+| Full strict typecheck — 222-file production game | **161 ms** |
+| Full build — 95-file production game | **355 ms** |
+| Incremental watch rebuild — same game | **180 ms** |
 
-Maintainer flow:
+The JS toolchain spends longer than this booting Node. The ~10× speedup is structural: rotor runs Microsoft's native, parallel TypeScript compiler ([typescript-go](https://github.com/microsoft/typescript-go)) instead of the single-threaded JS one.
 
-```powershell
-git tag v1.0.1
-git push origin v1.0.1
-```
+## Contributors
 
-That tag triggers the `release` GitHub Actions workflow, which runs the test suite, cross-builds rotor for Windows/macOS/Linux, publishes the archives and checksums, and creates the GitHub Release automatically.
+<a href="https://github.com/uproot"><img src="https://github.com/uproot.png" width="56" height="56" alt="uproot"></a>
+<a href="https://github.com/Coyenn"><img src="https://github.com/Coyenn.png" width="56" height="56" alt="Coyenn"></a>
 
-Caveats while the port is still in progress (see the [roadmap](roadmap.md)):
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-- The transformer covers the full language surface (JSX, classes, decorators, async/generators, try/catch, enums, namespaces, spread, the macro tables). Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
-- `build -w` reuses Rotor's manifest-backed changed-file selection and runs a debounced, pruned polling watcher: `node_modules`, dot-directories, and the build-written `out`/`include` trees are never walked, editor write bursts ("save all") settle into one rebuild, edits made *during* a build are not lost, and editor junk files (vim swap probes, emacs locks, `.DS_Store`) never trigger rebuilds. The poll adapts to the walk cost (100 ms floor), so idle watch CPU stays near zero even on big projects.
-- Declaration emit is available for declaration-enabled builds, but declaration-path alias rewriting still follows the current Phase 4 limitation called out in the roadmap.
-- Transformer plugins run through the Node sidecar that ships **embedded in the rotor binary** (extracted on first plugin build). The worker uses your project's own `typescript` install — the same instance plugins `require` — and stays warm across builds and watch rebuilds. Validated against real `rbxts-transformer-flamework` and `rbxts-transform-env` packages.
-- The conformance harnesses are in repo and green today. The external-project acceptance proof remains environment-gated because it needs a local `randomness` checkout plus Rojo/Lune on the machine running it.
+## License
 
-## Production readiness
-
-Rotor is ready for production rbxts projects that want native-speed `check`, `check -w`, `build`, and `build -w`, including declaration emit, incremental rebuild selection, and transformer-plugin support through the bundled Node sidecar. Plugin-configured builds require Node.js on `PATH` so Rotor can launch that sidecar.
-
-Current follow-ups after v1:
-
-- the watch engine is optimized polling (pruned + debounced); native FS events remain a possible future refinement
-- the `randomness` acceptance proof is intentionally environment-gated because the target project is external to this repo
-
-A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
-
-## Roadmap
-
-| Phase | Scope | Status |
-|:-----:|-------|:------:|
-| **0** | Foundation — Go module, vendored typescript-go mirror, TypeChecker driven from Go | ✅ |
-| **1** | Luau AST + renderer — full port of `@roblox-ts/luau-ast` (40 node kinds, temp-id solver, byte-exact formatting) | ✅ |
-| **2** | Transformer core — `TransformState`, prereq statement stack, core expression/statement transforms, **differential harness vs rbxtsc** | ✅ |
-| **2b** | Functions, arrows, destructuring, `for...of` (arrays), switch, loop closure semantics | ✅ |
-| **3a** | Imports & module resolution (Rojo-aware requires, `TS.import`/`TS.getModule`, export-from), `new` + constructor macros, math-op macros | ✅ |
-| **3b** | Macro tables (`Array`/`String`/`Set`/`Map`/`Promise` + call macros), optional chaining, full Map/Set/string/generator iteration, pnpm symlink + `baseUrl` resolution | ✅ |
-| **3c** | JSX (`@rbxts/react`), classes, decorators, object/array/call spread + logical assignments, async/generators, try/catch flow rerouting, enums, namespaces | ✅ |
-| **4** | Project layer — output pipeline, `.d.ts` emit, watch, plugin/concurrency integration | ✅ |
-| **5** | Conformance — upstream behavioral suite under Lune, diagnostics corpus, acceptance closure | ✅ |
-| | **v1.0** — drop-in `rbxtsc` replacement | ✅ |
-
-## Architecture
-
-```
-your-game/src/**/*.ts
-        │
-        ▼
-┌─────────────────────────────┐
-│  typescript-go  (vendored)  │   real TS parser + binder + checker,
-│  parse · bind · typecheck   │   native, parallel  (tsgo/)
-└──────────────┬──────────────┘
-               │  typed AST + TypeChecker queries
-               ▼
-┌─────────────────────────────┐
-│  rotor transformer          │   port of roblox-ts's TSTransformer
-│  TS AST ──► Luau AST        │   (internal/transformer — phase 2/3)
-└──────────────┬──────────────┘
-               ▼
-┌─────────────────────────────┐
-│  Luau AST + renderer        │   port of @roblox-ts/luau-ast
-│  byte-exact Luau text       │   (internal/luau — done ✅)
-└──────────────┬──────────────┘
-               ▼
-        out/**/*.lua   (+ RuntimeLib.lua, verbatim from roblox-ts)
-```
-
-- `tsgo/` — generated mirror of [microsoft/typescript-go](https://github.com/microsoft/typescript-go) internals (its packages are `internal/`-only upstream; the mirror rewrites import paths). Regenerate with `go run ./tools/mirror`. **Never edit by hand.**
-- `reference/` — pinned roblox-ts v3.0.0 + luau-ast 2.0.0 sources: the porting reference and differential-test oracle.
-- `internal/luau`, `internal/luau/render` — the Luau AST and renderer.
-- `cmd/rotor` — the CLI.
-
-## Development
-
-### Running the tests
-
-```powershell
-go test ./internal/... -count=1                           # full test suite
-go test ./internal/diff/ -v -run TestDifferential          # differential suite only (see below)
-go test ./internal/luau/render/ -bench . -benchmem        # renderer benchmarks
-go test ./internal/spike/ -v                              # checker integration spike
-go vet ./internal/...                                     # required clean before commits
-```
-
-No Node is required to run rotor itself or the committed differential goldens. A clean clone still needs fixture dependencies installed inside `testdata/diff/project`, `testdata/conformance/project`, and `testdata/transformers/project` (plus `tools/sidecar`) before the project-layer, conformance, and real-package transformer suites run. Use `bun install --no-save` first; `npm install --no-audit --no-fund` still works as a fallback.
-
-### The differential suite (how rotor proves byte-parity)
-
-`internal/diff` compiles every fixture project under `testdata/diff/project/src/` with rotor and byte-compares the output against committed goldens in `testdata/diff/golden/` — which were generated by the **real `rbxtsc` 3.0.0**. A fixture passes only when rotor's output is byte-identical; the first diverging line is reported.
-
-Adding a fixture:
-
-1. Write the TypeScript in `testdata/diff/project/src/` (it must compile cleanly under rbxtsc).
-2. Regenerate goldens: `powershell -File tools/oracle/oracle.ps1` (this is the only step that needs the JS toolchain — the script prefers Bun for fixture installs, falls back to npm, and runs the pinned `roblox-ts@3.0.0` over the fixture project).
-3. Enable the fixture in `internal/diff/manifest.go` and run `go test ./internal/diff/ -v`.
-
-Existing goldens must stay byte-unchanged when regenerating — `git diff testdata/diff/golden/` should only show your new files.
-
-### Project docs
-
-- Design doc: [`docs/superpowers/specs/2026-06-05-rotor-design.md`](docs/superpowers/specs/2026-06-05-rotor-design.md)
-- Full roadmap with every phase and task: [`roadmap.md`](roadmap.md)
-- Phase plans: `docs/superpowers/plans/` · porting digests (the transformer's source of truth): `docs/superpowers/research/`
-
-## Credits & licenses
-
-rotor stands on two giants:
-
-- [**roblox-ts**](https://github.com/roblox-ts/roblox-ts) (MIT) — the original compiler, whose emit semantics rotor faithfully ports. Vendored reference sources in `reference/` retain their MIT license.
-- [**typescript-go**](https://github.com/microsoft/typescript-go) (Apache-2.0) — Microsoft's native TypeScript compiler. The vendored mirror in `tsgo/` retains its license and NOTICE; see `tsgo/MIRROR.md` for provenance and the statement of changes.
-
-rotor itself is [MIT licensed](LICENSE).
+[MIT](LICENSE). rotor stands on [roblox-ts](https://github.com/roblox-ts/roblox-ts) (MIT) and [typescript-go](https://github.com/microsoft/typescript-go) (Apache-2.0) — see [credits](docs.md#credits--licenses).

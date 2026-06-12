@@ -21,6 +21,15 @@ jobs:
       - name: Set up rotor toolchain
         uses: ./.github/actions/setup
 
+      - name: Verify tag matches internal/version
+        run: |
+          code_version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          if [ "v${code_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match internal/version/version.go (v${code_version})"
+            echo "bump the Version constant before tagging a release"
+            exit 1
+          fi
+
       - name: Run tests
         run: go test ./... -count=1
         env:
