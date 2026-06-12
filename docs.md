@@ -61,7 +61,20 @@ rotor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio
 rotor pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path] [--rojo-tree]
                               package a Rojo project into one self-reconstructing
                               Luau script or a Roblox model file
+rotor init [dir] [--template game|package|plain]
+                              scaffold a new project (rbxts game, package library,
+                              or plain Luau)
+rotor sourcemap [path] [-o out.json]
+                              emit a Rojo-compatible sourcemap.json for luau-lsp
+rotor asset <sync|list> [path] [--dry-run]
+                              upload assets via Open Cloud: lockfile + typed
+                              assets.luau / assets.d.ts codegen (asphalt-style)
+rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
+                              declarative Open Cloud deployment with state +
+                              plan/apply diffing (mantle-style)
 ```
+
+`asset` and `deploy` are configured by a typed **`rotor.config.ts`** at the project root (evaluated natively — no Node needed; `rotor init` writes the skeleton plus `rotor-config.d.ts` for editor typing) and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).

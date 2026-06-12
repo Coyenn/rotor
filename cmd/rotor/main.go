@@ -19,7 +19,7 @@ import (
 	rotorversion "rotor/internal/version"
 )
 
-const banner = "rotor — native TypeScript-to-Luau compilation for roblox-ts projects"
+const banner = "rotor — an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)"
 
 // version is rotor's own release version, used for `--version` and the
 // `rotor build` emit header (`-- Compiled with rotor v...`). Library/test
@@ -57,6 +57,10 @@ func run(args []string) int {
 		return cmdInit(args[1:])
 	case "sourcemap":
 		return cmdSourcemap(args[1:])
+	case "asset":
+		return cmdAsset(args[1:])
+	case "deploy":
+		return cmdDeploy(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -99,6 +103,16 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "                               emit a Rojo-compatible sourcemap.json for luau-lsp")
 	fmt.Fprintln(w, "                               (native for script trees, no rojo needed; falls back")
 	fmt.Fprintln(w, "                               to `rojo sourcemap` otherwise; stdout without -o)")
+	fmt.Fprintln(w, "  rotor asset <sync|list> [path] [--dry-run]")
+	fmt.Fprintln(w, "                               upload project assets via Open Cloud (sync: scan the")
+	fmt.Fprintln(w, "                               assets globs from rotor.config.ts, upload new/changed,")
+	fmt.Fprintln(w, "                               write rotor-lock.json + typed assets.luau/.d.ts;")
+	fmt.Fprintln(w, "                               list: show the lockfile; needs ROBLOX_API_KEY)")
+	fmt.Fprintln(w, "  rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]")
+	fmt.Fprintln(w, "                               declarative Open Cloud deployment from rotor.config.ts:")
+	fmt.Fprintln(w, "                               plan diffs config vs .rotor/deploy/<env>.json state")
+	fmt.Fprintln(w, "                               (no network); apply publishes places, universe")
+	fmt.Fprintln(w, "                               settings, badges + icons (needs ROBLOX_API_KEY)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
