@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/wordmark.png" alt="rotor — an all in one roblox toolchain" width="600">
+  <img src="media/logo.png" alt="rotor — an all in one roblox toolchain" width="480">
 </p>
 
 <p align="center"><em>TypeScript in, Roblox out — at native speed.</em></p>
