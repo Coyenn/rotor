@@ -1,4 +1,4 @@
-import { defineConfig } from "rotor/config";
+import { defineConfig } from "@rotor-rbx/rotor";
 
 export default defineConfig({
 	assets: {

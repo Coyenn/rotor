@@ -13,7 +13,7 @@ import (
 	"rotor/internal/config"
 )
 
-// configTypeDeclarations is the `declare module "rotor/config"` declaration
+// configTypeDeclarations is the ambient config-module declaration
 // content written to rotor-config.d.ts so editors can type-check
 // rotor.config.ts. Kept as a var (rather than using the constant inline) so
 // the scaffold skips the file gracefully if the declarations are ever empty.
@@ -354,7 +354,7 @@ func rotorConfigTS(assets *assetsOptions, deploy *deployOptions) string {
 	var b strings.Builder
 	b.WriteString("// rotor project configuration — read by `rotor asset sync` and\n")
 	b.WriteString("// `rotor deploy`. Uncomment the sections you need.\n")
-	b.WriteString("import { defineConfig } from \"rotor/config\";\n")
+	b.WriteString("import { defineConfig } from \"@rotor-rbx/rotor\";\n")
 	b.WriteString("\nexport default defineConfig({\n")
 	if assets != nil {
 		fmt.Fprintf(&b, "\tassets: {\n")

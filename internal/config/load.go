@@ -83,8 +83,11 @@ func bundleConfig(projectDir, configPath string) (string, error) {
 	plugin := api.Plugin{
 		Name: "rotor-config",
 		Setup: func(build api.PluginBuild) {
-			// Resolve the virtual "rotor/config" module in-memory.
-			build.OnResolve(api.OnResolveOptions{Filter: `^rotor/config$`},
+			// Resolve the virtual config module in-memory. Accepted
+			// specifiers: the npm package name (canonical — configs write
+			// `import { defineConfig } from "@rotor-rbx/rotor"`), its
+			// /config subpath, and the original short "rotor/config".
+			build.OnResolve(api.OnResolveOptions{Filter: `^(rotor/config|@rotor-rbx/rotor(/config)?)$`},
 				func(args api.OnResolveArgs) (api.OnResolveResult, error) {
 					return api.OnResolveResult{
 						Path:      "rotor/config",
@@ -108,7 +111,7 @@ func bundleConfig(projectDir, configPath string) (string, error) {
 						return api.OnResolveResult{}, nil
 					}
 					return api.OnResolveResult{}, fmt.Errorf(
-						"npm imports are not supported in rotor.config.ts (cannot import %q); only relative imports of project files and the virtual \"rotor/config\" module are allowed",
+						"npm imports are not supported in rotor.config.ts (cannot import %q); only relative imports of project files and the virtual \"@rotor-rbx/rotor\" module are allowed",
 						args.Path)
 				})
 		},

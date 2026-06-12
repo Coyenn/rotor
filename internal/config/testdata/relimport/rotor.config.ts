@@ -1,4 +1,4 @@
-import { defineConfig } from "rotor/config";
+import { defineConfig } from "@rotor-rbx/rotor";
 import { CREATOR, universeFor } from "./shared";
 
 export default defineConfig({

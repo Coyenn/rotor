@@ -217,7 +217,7 @@ func TestValidate(t *testing.T) {
 }
 
 func TestTypeDeclarations(t *testing.T) {
-	if !strings.Contains(TypeDeclarations, `declare module "rotor/config"`) {
+	if !strings.Contains(TypeDeclarations, `declare module "@rotor-rbx/rotor"`) {
 		t.Fatal("missing declare module")
 	}
 	for _, name := range []string{

@@ -1,5 +1,5 @@
 {
-  "name": "@rotor-rbx/cli",
+  "name": "@rotor-rbx/rotor",
   "version": "1.4.0",
   "publishConfig": {
     "access": "public",

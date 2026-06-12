@@ -293,5 +293,5 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 ## v1.4.0 — released June 12, 2026
 
 - [x] **`$env` macro, `$getModuleTree` folders, interactive `rotor init` wizard, house-style logging, perf pass** (see Post-v1 + v3 entries above) — all shipped in v1.4.0
-- [x] **npm distribution** — package `@rotor-rbx/cli` (binary-downloading shim; `bin/rotor.js` + `scripts/install.js`, ROTOR_INSTALL_BASE_URL override); GoReleaser uploads bare `-bin` executables; `npm-publish.yml` workflow publishes on release-published (needs `NPM_TOKEN` secret). **Live-verified end to end**: `bun add -d github:uproot/rotor` → first-run shim download → `rotor --version` = 1.4.0
+- [x] **npm distribution** — package `@rotor-rbx/rotor` (binary-downloading shim; `bin/rotor.js` + `scripts/install.js`, ROTOR_INSTALL_BASE_URL override); GoReleaser uploads bare `-bin` executables; `npm-publish.yml` workflow publishes on release-published (needs `NPM_TOKEN` secret). **Live-verified end to end**: `bun add -d github:uproot/rotor` → first-run shim download → `rotor --version` = 1.4.0
 - [x] **Live cloud smoke** — `rotor asset sync` uploaded a real decal via Open Cloud with a user key (create → poll → lockfile → codegen → idempotent re-run), June 12, 2026

@@ -12,6 +12,10 @@
 
 rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with **byte-identical Luau output** — plus a native Luau toolchain and Open Cloud asset + deployment pipelines, all in one binary.
 
+```sh
+bun add -d @rotor-rbx/rotor    # or: npm i -D @rotor-rbx/rotor — see Install for more ways
+```
+
 📖 [Documentation](docs.md) · 🤝 [Contributing](CONTRIBUTING.md) · 🗺️ [Roadmap](roadmap.md)
 
 ## Features
@@ -51,7 +55,7 @@ rotor deploy apply -e prod   # publish places, settings, badges — only what dr
 One typed TypeScript config drives the cloud tools. rotor evaluates it natively (no Node needed), generates `rotor-config.d.ts` for editor typing, and refuses npm imports — it's config, not a program:
 
 ```ts
-import { defineConfig } from "rotor/config";
+import { defineConfig } from "@rotor-rbx/rotor";
 
 export default defineConfig({
 	assets: {
@@ -107,18 +111,18 @@ rotor = { github = "uproot/rotor", version = "1.4.0" }
 
 ### Install via npm / bun
 
-For rbxts projects that already live in the JS ecosystem, install [`@rotor-rbx/cli`](https://www.npmjs.com/package/@rotor-rbx/cli) as a dev dependency — a postinstall step downloads the prebuilt binary for your platform:
+For rbxts projects that already live in the JS ecosystem, install [`@rotor-rbx/rotor`](https://www.npmjs.com/package/@rotor-rbx/rotor) as a dev dependency — a postinstall step downloads the prebuilt binary for your platform:
 
 ```sh
-bun add -d @rotor-rbx/cli
-npm i -D @rotor-rbx/cli
-pnpm add -D @rotor-rbx/cli
-yarn add -D @rotor-rbx/cli
+bun add -d @rotor-rbx/rotor
+npm i -D @rotor-rbx/rotor
+pnpm add -D @rotor-rbx/rotor
+yarn add -D @rotor-rbx/rotor
 ```
 
 Installing straight from GitHub works too: `bun add -d github:uproot/rotor` (npm/pnpm/yarn equivalents likewise).
 
-> **bun note:** bun skips postinstall scripts by default. Either add `"trustedDependencies": ["@rotor-rbx/cli"]` to your project's `package.json` (then `bun install`), or do nothing — the `rotor` shim downloads the binary on first run. pnpm similarly asks you to approve build scripts (`pnpm approve-builds`), with the same first-run fallback.
+> **bun note:** bun skips postinstall scripts by default. Either add `"trustedDependencies": ["@rotor-rbx/rotor"]` to your project's `package.json` (then `bun install`), or do nothing — the `rotor` shim downloads the binary on first run. pnpm similarly asks you to approve build scripts (`pnpm approve-builds`), with the same first-run fallback.
 
 Or build from source (Go 1.25+):
 
