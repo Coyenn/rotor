@@ -231,6 +231,12 @@ Success criteria (from the design spec):
 
 ## Luau toolchain — v2 direction 🚧
 
+> **MVPs of all four sub-projects shipped (2026-06-12):** the Luau front-end
+> (lexer + parser + faithful unparse, 405/405 corpus), `rotor minify`, `rotor bundle`
+> (Lune-verified to still run), and `rotor dev`. Remaining items below each sub-project
+> are depth/coverage follow-ups (readable generator, variable renaming, rojo
+> require-mode + aliases). The TS→Luau compiler is unchanged.
+
 *Spec: `docs/superpowers/specs/2026-06-12-rotor-luau-toolchain-design.md`. Expands rotor
 from a `rbxtsc`-parity TS→Luau compiler into an all-in-one Luau toolchain — a
 require-resolving **bundler** (still runnable, darklua-style), a **minifier**, and a
@@ -246,7 +252,7 @@ own plan.*
 
 **Sub-project B — `rotor dev`** (watch cwd + incremental build + supervise `rojo serve`; independent of A)
 
-- [ ] `rotor dev` command
+- [x] **`rotor dev [path] [--no-serve]`** — runs the watch-v2 incremental TS→Luau build loop (`runBuildWatch`) while supervising a child `rojo serve <project>` so Studio live-syncs `out/`; Ctrl-C tears down both (signal handler kills the rojo child). Rojo project discovery (--rojo / default.project.json / first *.project.json); graceful degrade + hint when rojo/project absent. Native Rojo protocol is an explicit non-goal — launches the installed CLI.
 
 **Sub-project C — Minifier** (`rotor minify`; depends on A)
 
