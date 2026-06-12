@@ -10,3 +10,6 @@
 *.yaml text eol=lf
 *.sh text eol=lf
 *.toml text eol=lf
+# Go fuzz corpus seeds must keep their exact bytes (LF); no EOL conversion.
+testdata/fuzz/** -text
+**/testdata/fuzz/** -text
