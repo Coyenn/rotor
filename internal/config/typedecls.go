@@ -86,5 +86,47 @@ declare module "rotor/config" {
 // WriteTypeDeclarations writes rotor-config.d.ts into projectDir so editors
 // can resolve the virtual "rotor/config" module.
 func WriteTypeDeclarations(projectDir string) error {
-	return os.WriteFile(filepath.Join(projectDir, TypeDeclarationsFileName), []byte(TypeDeclarations), 0o644)
+	_, err := RefreshTypeDeclarations(projectDir)
+	return err
+}
+
+// RefreshTypeDeclarations writes rotor-config.d.ts into projectDir when the
+// file is missing or its content is stale (differs from the current
+// TypeDeclarations). The write is atomic (temp file + rename) so a concurrent
+// editor/tsserver read never sees a half-written declaration. It reports
+// whether the file was (re)written; an up-to-date file is left untouched.
+func RefreshTypeDeclarations(projectDir string) (bool, error) {
+	path := filepath.Join(projectDir, TypeDeclarationsFileName)
+	if existing, err := os.ReadFile(path); err == nil && string(existing) == TypeDeclarations {
+		return false, nil
+	}
+	if err := atomicWriteFile(path, []byte(TypeDeclarations)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// atomicWriteFile writes data to path via a temp file in the same directory
+// plus a rename, so readers observe either the old or the new content.
+func atomicWriteFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

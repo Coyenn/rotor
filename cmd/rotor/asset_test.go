@@ -71,11 +71,17 @@ export default defineConfig({
 		t.Fatalf("dry run: exit %d", code)
 	}
 
-	// A dry run must not upload, lock, or generate anything.
+	// A dry run must not upload, lock, or generate asset outputs.
 	for _, rel := range []string{"rotor-lock.json", "src/shared/assets.luau", "src/shared/assets.d.ts"} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err == nil {
 			t.Fatalf("dry run wrote %s", rel)
 		}
+	}
+
+	// ... but a successful config load always refreshes the config's editor
+	// types (rotor-config.d.ts) — that is metadata, not an asset output.
+	if !fileExists(filepath.Join(dir, "rotor-config.d.ts")) {
+		t.Error("asset sync did not auto-refresh rotor-config.d.ts after loading the config")
 	}
 }
 

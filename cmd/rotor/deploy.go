@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"rotor/internal/cloud"
 	"rotor/internal/config"
@@ -90,84 +91,96 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	u := newUI(stdout)
+	errUI := newUI(stderr)
+	u.banner("deploy " + sub + "  " + env)
+
 	// Load + validate the config, build the desired graph, load state, plan.
 	// None of this needs an API key or the network.
 	cfg, err := config.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			fmt.Fprintf(stderr, "rotor deploy: no rotor.config.ts found in %s\n", projectDir)
+			errUI.failLine(fmt.Sprintf("rotor deploy: no rotor.config.ts found in %s", projectDir))
 			return 1
 		}
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(stderr, "rotor deploy: warning: %s\n", w)
+		errUI.warn("rotor deploy: " + w)
+	}
+	// The config just loaded — keep its editor types fresh (best-effort).
+	if wrote, terr := config.RefreshTypeDeclarations(projectDir); terr != nil {
+		errUI.warn("could not refresh " + config.TypeDeclarationsFileName + ": " + terr.Error())
+	} else if wrote {
+		u.noteLine(config.TypeDeclarationsFileName + "  (types refreshed)")
 	}
 	if errs := cfg.Validate(); len(errs) > 0 {
 		for _, e := range errs {
-			fmt.Fprintf(stderr, "rotor deploy: config: %v\n", e)
+			errUI.failLine(fmt.Sprintf("rotor deploy: config: %v", e))
 		}
 		return 1
 	}
 
 	resources, universeID, err := deploy.BuildResources(projectDir, cfg, env)
 	if err != nil {
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
 	statePath := deploy.StatePath(projectDir, env)
 	state, err := deploy.LoadState(statePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
 	plan, err := deploy.BuildPlan(resources, state, deploy.PlanOptions{AllowDeletes: allowDeletes})
 	if err != nil {
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
 
 	if sub == "plan" {
-		printDeployPlan(stdout, plan, env)
+		printDeployPlan(stdout, plan)
 		return 0
 	}
 
 	// apply
 	if plan.BlockedDeletes > 0 {
-		fmt.Fprintf(stderr, "rotor deploy: plan contains %s no longer in the config; re-run with --allow-deletes to remove them\n",
-			plural(plan.BlockedDeletes, "resource"))
+		errUI.failLine(fmt.Sprintf("rotor deploy: plan contains %s no longer in the config; re-run with --allow-deletes to remove them",
+			plural(plan.BlockedDeletes, "resource")))
 		return 1
 	}
 	if !plan.HasChanges() {
-		printDeployPlan(stdout, plan, env)
+		printDeployPlan(stdout, plan)
 		s := term.For(stdout)
 		fmt.Fprintf(stdout, "  %s\n\n", s.Muted("nothing to apply"))
 		return 0
 	}
-	printDeployPlan(stdout, plan, env)
+	printDeployPlan(stdout, plan)
 
 	client, err := cloud.FromEnv()
 	if err != nil {
 		if errors.Is(err, cloud.ErrNoAPIKey) {
-			fmt.Fprintln(stderr, "rotor deploy: ROBLOX_API_KEY is not set")
-			fmt.Fprintln(stderr, "  create an Open Cloud API key at https://create.roblox.com/dashboard/credentials")
-			fmt.Fprintln(stderr, "  (scopes: universe + place publishing, badges, asset upload)")
+			errUI.failLine("rotor deploy: ROBLOX_API_KEY is not set")
+			fmt.Fprintln(stderr, "    create an Open Cloud API key at https://create.roblox.com/dashboard/credentials")
+			fmt.Fprintln(stderr, "    (scopes: universe + place publishing, badges, asset upload)")
 			return 1
 		}
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
 
 	if !yes {
-		fmt.Fprintf(stdout, "type the environment name to confirm: ")
+		s := term.For(stdout)
+		fmt.Fprintf(stdout, "  %s  type the environment name to confirm: ", s.WarnBold(s.Glyphs().Warn))
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		if strings.TrimSpace(line) != env {
-			fmt.Fprintln(stderr, "rotor deploy: confirmation did not match; aborted (use --yes to skip)")
+			errUI.failLine("rotor deploy: confirmation did not match; aborted (use --yes to skip)")
 			return 1
 		}
 	}
 
+	start := time.Now()
 	s := term.For(stdout)
 	result, err := deploy.Apply(context.Background(), plan, deploy.ApplyOptions{
 		Providers:  deploy.DefaultProviders(),
@@ -179,20 +192,21 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		OnStep:     func(r deploy.StepResult) { printDeployStep(stdout, s, r) },
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "rotor deploy: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
 		return 1
 	}
-	printDeploySummary(stdout, s, result)
+	printDeploySummary(stdout, s, result, time.Since(start))
 	if result.Failed > 0 {
 		return 1
 	}
 	return 0
 }
 
-// printDeployPlan renders the terraform-style plan listing.
-func printDeployPlan(w io.Writer, plan *deploy.Plan, env string) {
+// printDeployPlan renders the terraform-style plan listing (the banner above
+// it is printed by deployMain; the +/~/-/· row colors are deliberate
+// terraform idiom and stay as-is).
+func printDeployPlan(w io.Writer, plan *deploy.Plan) {
 	s := term.For(w)
-	fmt.Fprintf(w, "\n  %s %s\n\n", s.Bold("rotor deploy"), s.Muted("· environment "+env))
 	for _, step := range plan.Steps {
 		key := step.Ref.Key()
 		switch step.Op {
@@ -242,16 +256,17 @@ func printDeployStep(w io.Writer, s *term.Styler, r deploy.StepResult) {
 	}
 }
 
-// printDeploySummary renders the closing tally.
-func printDeploySummary(w io.Writer, s *term.Styler, r *deploy.ApplyResult) {
+// printDeploySummary renders the closing tally in the house ok/x shape.
+func printDeploySummary(w io.Writer, s *term.Styler, r *deploy.ApplyResult, elapsed time.Duration) {
 	line := fmt.Sprintf("Applied: %d created, %d updated, %d deleted, %d unchanged",
 		r.Created, r.Updated, r.Deleted, r.Unchanged)
+	suffix := s.Muted(fmt.Sprintf("in %d ms", elapsed.Milliseconds()))
 	if r.Failed > 0 || r.Skipped > 0 {
 		line += fmt.Sprintf(", %d failed, %d skipped", r.Failed, r.Skipped)
-		fmt.Fprintf(w, "\n  %s %s\n\n", s.ErrorBold(s.Glyphs().Cross), s.Bold(line))
+		fmt.Fprintf(w, "\n  %s  %s %s\n\n", s.ErrorBold(s.Glyphs().Cross), s.Bold(line), suffix)
 		return
 	}
-	fmt.Fprintf(w, "\n  %s %s\n\n", s.SuccessBold(s.Glyphs().Check), s.Bold(line))
+	fmt.Fprintf(w, "\n  %s  %s %s\n\n", s.SuccessBold(s.Glyphs().Check), s.Bold(line), suffix)
 }
 
 func deployUsage(w io.Writer) {

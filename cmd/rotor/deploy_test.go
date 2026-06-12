@@ -78,6 +78,10 @@ func TestCmdDeployPlanFreshState(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, out)
 		}
 	}
+	// A successful config load auto-refreshes the config's editor types.
+	if !fileExists(filepath.Join(dir, "rotor-config.d.ts")) {
+		t.Error("deploy plan did not auto-refresh rotor-config.d.ts after loading the config")
+	}
 }
 
 func TestCmdDeployPlanWithFakeState(t *testing.T) {

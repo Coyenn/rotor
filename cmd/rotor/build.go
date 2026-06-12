@@ -266,6 +266,9 @@ func cmdBuild(args []string) int {
 		return 1
 	}
 
+	if result.WroteEnvTypes {
+		out.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
+	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	return 0
 }

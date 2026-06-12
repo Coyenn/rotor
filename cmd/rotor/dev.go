@@ -48,6 +48,7 @@ func cmdDev(args []string) int {
 	dir := filepath.Dir(tsConfigPath)
 
 	out := newUI(os.Stdout)
+	out.banner("dev  " + filepath.Base(dir))
 
 	var rojoCmd *exec.Cmd
 	if !noServe {
@@ -92,7 +93,7 @@ func startRojoServe(dir string, rojoFlag string, out *ui) *exec.Cmd {
 		out.warn("failed to start rojo serve: " + err.Error())
 		return nil
 	}
-	fmt.Fprintf(os.Stdout, "dev: serving %s via rojo\n", filepath.Base(project))
+	out.okLine("serving "+filepath.Base(project), "via rojo serve")
 	return cmd
 }
 

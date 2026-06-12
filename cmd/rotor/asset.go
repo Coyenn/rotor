@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"rotor/internal/assets"
 	"rotor/internal/cloud"
@@ -89,33 +90,43 @@ func assetUsage(w io.Writer) {
 
 // assetSync implements `rotor asset sync`.
 func assetSync(dir string, dryRun bool) int {
-	s := term.For(os.Stdout)
+	u := newUI(os.Stdout)
+	errUI := newUI(os.Stderr)
+	s := u.s
+	start := time.Now()
+
+	sub := "asset sync"
+	if dryRun {
+		sub += "  (dry run)"
+	}
+	u.banner(sub)
 
 	cfg, err := config.Load(dir)
 	if errors.Is(err, config.ErrNotFound) {
-		fmt.Fprintf(os.Stderr, "rotor asset: no rotor.config.ts found in %q (asset sync needs an `assets` section)\n", dir)
+		errUI.failLine(fmt.Sprintf("rotor asset: no rotor.config.ts found in %q (asset sync needs an `assets` section)", dir))
 		return 1
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(os.Stderr, "rotor asset: warning: %s\n", w)
+		errUI.warn("rotor asset: " + w)
 	}
+	refreshConfigTypes(u, dir)
 	if cfg.Assets == nil || len(cfg.Assets.Paths) == 0 {
-		fmt.Fprintln(os.Stderr, "rotor asset: rotor.config.ts has no `assets` section (or assets.paths is empty)")
+		errUI.failLine("rotor asset: rotor.config.ts has no `assets` section (or assets.paths is empty)")
 		return 1
 	}
 
 	scan, err := assets.Scan(dir, cfg.Assets.Paths)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 	lock, err := assets.LoadLockfile(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 	plan := assets.BuildPlan(scan, lock)
@@ -143,7 +154,7 @@ func assetSync(dir string, dryRun bool) int {
 	}))
 
 	if dryRun {
-		fmt.Printf("  %s\n", s.Muted("dry run — nothing uploaded"))
+		fmt.Printf("  %s\n\n", s.Muted("dry run — nothing uploaded"))
 		return 0
 	}
 
@@ -151,7 +162,8 @@ func assetSync(dir string, dryRun bool) int {
 		if code := assetWriteOutputs(s, dir, cfg.Assets.Output, lock); code != 0 {
 			return code
 		}
-		fmt.Printf("  %s  %s\n", s.SuccessBold(s.Glyphs().Check), s.Bold("everything up to date"))
+		u.okLine("everything up to date", fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
+		fmt.Println()
 		return 0
 	}
 
@@ -163,22 +175,22 @@ func assetSync(dir string, dryRun bool) int {
 	case "group":
 		creator.GroupID = cfg.Assets.Creator.ID
 	default:
-		fmt.Fprintf(os.Stderr, "rotor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.config.ts\n", cfg.Assets.Creator.Type)
+		errUI.failLine(fmt.Sprintf("rotor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.config.ts", cfg.Assets.Creator.Type))
 		return 1
 	}
 	if cfg.Assets.Creator.ID == 0 {
-		fmt.Fprintln(os.Stderr, "rotor asset: assets.creator.id is required in rotor.config.ts (the user or group that owns uploaded assets)")
+		errUI.failLine("rotor asset: assets.creator.id is required in rotor.config.ts (the user or group that owns uploaded assets)")
 		return 1
 	}
 	client, err := cloud.FromEnv()
 	if errors.Is(err, cloud.ErrNoAPIKey) {
-		fmt.Fprintln(os.Stderr, "rotor asset: ROBLOX_API_KEY is not set")
-		fmt.Fprintln(os.Stderr, "  create an Open Cloud API key with the asset read/write scopes at")
-		fmt.Fprintln(os.Stderr, "  https://create.roblox.com/dashboard/credentials and export it as ROBLOX_API_KEY")
+		errUI.failLine("rotor asset: ROBLOX_API_KEY is not set")
+		fmt.Fprintln(os.Stderr, "    create an Open Cloud API key with the asset read/write scopes at")
+		fmt.Fprintln(os.Stderr, "    https://create.roblox.com/dashboard/credentials and export it as ROBLOX_API_KEY")
 		return 1
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 
@@ -193,7 +205,7 @@ func assetSync(dir string, dryRun bool) int {
 		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 
@@ -201,18 +213,34 @@ func assetSync(dir string, dryRun bool) int {
 		return code
 	}
 
-	parts := []string{
-		s.Bold(fmt.Sprintf("%d created", res.Created)),
-		s.Bold(fmt.Sprintf("%d updated", res.Updated)),
-	}
+	elapsed := fmt.Sprintf("in %d ms", time.Since(start).Milliseconds())
 	if len(res.Errors) > 0 {
-		parts = append(parts, s.Error(plural(len(res.Errors), "failure")))
-	}
-	fmt.Printf("  %s\n", joinDot(s, parts))
-	if len(res.Errors) > 0 {
+		errUI.failLine(fmt.Sprintf("synced with %s", plural(len(res.Errors), "failure")))
+		fmt.Printf("    %s\n\n", joinDot(s, []string{
+			s.Muted(fmt.Sprintf("%d created", res.Created)),
+			s.Muted(fmt.Sprintf("%d updated", res.Updated)),
+			s.Muted(elapsed),
+		}))
 		return 1
 	}
+	u.okLine(fmt.Sprintf("synced %s", plural(res.Created+res.Updated, "asset")),
+		joinDot(s, []string{fmt.Sprintf("%d created", res.Created), fmt.Sprintf("%d updated", res.Updated), elapsed}))
+	fmt.Println()
 	return 0
+}
+
+// refreshConfigTypes keeps rotor-config.d.ts current whenever a command has
+// just loaded rotor.config.ts successfully. Best-effort: a failed write only
+// warns, and an up-to-date file is untouched (and unreported).
+func refreshConfigTypes(u *ui, dir string) {
+	wrote, err := config.RefreshTypeDeclarations(dir)
+	if err != nil {
+		newUI(os.Stderr).warn("could not refresh " + config.TypeDeclarationsFileName + ": " + err.Error())
+		return
+	}
+	if wrote {
+		u.noteLine(config.TypeDeclarationsFileName + "  (types refreshed)")
+	}
 }
 
 // assetWriteOutputs regenerates the configured codegen targets from the
@@ -235,14 +263,16 @@ func assetWriteOutputs(s *term.Styler, dir string, out config.AssetsOutput, lock
 
 // assetList implements `rotor asset list`: a lockfile view.
 func assetList(dir string) int {
-	s := term.For(os.Stdout)
+	u := newUI(os.Stdout)
+	u.banner("asset list")
+	s := u.s
 	lock, err := assets.LoadLockfile(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		newUI(os.Stderr).failLine(fmt.Sprintf("rotor asset: %v", err))
 		return 1
 	}
 	if len(lock.Assets) == 0 {
-		fmt.Printf("  %s\n", s.Muted("no assets in "+assets.LockfileName+" (run `rotor asset sync` first)"))
+		fmt.Printf("  %s\n\n", s.Muted("no assets in "+assets.LockfileName+" (run `rotor asset sync` first)"))
 		return 0
 	}
 	paths := make([]string, 0, len(lock.Assets))
@@ -260,7 +290,7 @@ func assetList(dir string) int {
 			s.Bold(fmt.Sprintf("rbxassetid://%d", e.AssetID)),
 			s.Muted(shortHash(e.Hash)))
 	}
-	fmt.Printf("  %s\n", s.Muted(plural(len(paths), "asset")))
+	fmt.Printf("  %s\n\n", s.Muted(plural(len(paths), "asset")))
 	return 0
 }
 

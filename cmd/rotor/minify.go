@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"rotor/internal/luau/cst"
 )
@@ -11,6 +13,10 @@ import (
 // cmdMinify minifies a single Luau file: it strips comments (except leading `--!`
 // directives) and superfluous whitespace, preserving program semantics. Output goes
 // to --output, or to stdout when no output path is given.
+//
+// Output discipline: when the artifact goes to stdout (no -o), NO chrome is
+// written to stdout — errors go to stderr and the pipe stays clean. With -o,
+// the rotor banner + summary are printed to stdout like build/check.
 func cmdMinify(args []string) int {
 	input := ""
 	output := ""
@@ -50,16 +56,23 @@ func cmdMinify(args []string) int {
 		return 1
 	}
 
+	errUI := newUI(os.Stderr)
+	if output != "" {
+		newUI(os.Stdout).banner("minify  " + filepath.Base(input))
+	}
+
+	start := time.Now()
 	src, err := os.ReadFile(input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor minify: cannot read %q: %v\n", input, err)
+		errUI.failLine(fmt.Sprintf("rotor minify: cannot read %q: %v", input, err))
 		return 1
 	}
 
 	minified, diags := cst.Minify(string(src))
 	if len(diags) != 0 {
+		errUI.failLine(fmt.Sprintf("rotor minify: %s has %s", input, plural(len(diags), "syntax error")))
 		for _, d := range diags {
-			fmt.Fprintf(os.Stderr, "rotor minify: %s:%d:%d: %s\n", input, d.Pos.Line, d.Pos.Col, d.Message)
+			fmt.Fprintf(os.Stderr, "    %s:%d:%d: %s\n", input, d.Pos.Line, d.Pos.Col, d.Message)
 		}
 		return 1
 	}
@@ -69,8 +82,22 @@ func cmdMinify(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, []byte(minified), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor minify: cannot write %q: %v\n", output, err)
+		errUI.failLine(fmt.Sprintf("rotor minify: cannot write %q: %v", output, err))
 		return 1
 	}
+
+	out := newUI(os.Stdout)
+	out.okLine("minified "+filepath.Base(input), fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
+	out.noteLine(fmt.Sprintf("%s  %s %s %s (%s)", output,
+		formatBytes(len(src)), out.s.Glyphs().Arrow, formatBytes(len(minified)), shrinkPercent(len(src), len(minified))))
+	fmt.Println()
 	return 0
+}
+
+// shrinkPercent renders the size delta of a minify/bundle pass ("43% smaller").
+func shrinkPercent(before, after int) string {
+	if before <= 0 || after >= before {
+		return "no smaller"
+	}
+	return fmt.Sprintf("%d%% smaller", (before-after)*100/before)
 }

@@ -99,6 +99,12 @@ func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
 		if isJunkFile(name) {
 			continue
 		}
+		// rotor's own generated companions are refreshed by the build itself;
+		// watching them would turn the first auto-write into a spurious
+		// rebuild (and a user edit is overwritten on the next pass anyway).
+		if strings.EqualFold(name, compile.EnvDeclFileName) {
+			continue
+		}
 		// entry.Info() reuses the metadata the directory enumeration already
 		// produced (free on Windows, one lstat elsewhere) instead of a fresh
 		// os.Stat per file.
@@ -322,6 +328,9 @@ func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed
 	if err != nil {
 		newUI(os.Stderr).buildFailure(err.Error(), diags)
 	} else if result != nil {
+		if result.WroteEnvTypes {
+			u.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
+		}
 		u.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	}
 	u.watchIdle(stats)

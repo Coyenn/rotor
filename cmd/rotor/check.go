@@ -159,6 +159,10 @@ func runCheck(dir string, out io.Writer) checkResult {
 		program.GetBindDiagnostics, semanticProjectFilesOnly)
 	diags = compiler.SortAndDeduplicateDiagnostics(diags)
 
+	// rotor extension: refresh the rotor-env.d.ts editor companion when the
+	// project references $env (silent — check's stdout is byte-stable).
+	refreshEnvTypesForCheck(dir, parsed.FileNames(), program)
+
 	writeDiagnostics(out, diags, formatOpts)
 
 	res := checkResult{
@@ -169,6 +173,26 @@ func runCheck(dir string, out io.Writer) checkResult {
 	}
 	printSummary(out, res)
 	return res
+}
+
+// refreshEnvTypesForCheck mirrors the build-side rotor-env.d.ts refresh for
+// `rotor check`: when any non-declaration project file references $env, the
+// on-disk editor companion is (re)written if missing or stale. Failures only
+// warn on stderr — they never affect the check result or its stdout shape.
+func refreshEnvTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
+	for _, name := range fileNames {
+		if strings.HasSuffix(name, ".d.ts") {
+			continue
+		}
+		sf := program.GetSourceFile(name)
+		if sf == nil || !strings.Contains(sf.Text(), "$env") {
+			continue
+		}
+		if _, err := compile.WriteEnvDeclarations(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.EnvDeclFileName, err)
+		}
+		return
+	}
 }
 
 func printSummary(out io.Writer, res checkResult) {

@@ -453,8 +453,13 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	}
 
 	// ... and append it to the program's root files AFTER config parse so
-	// the config-derived file set (and its order) is untouched.
-	parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, declPath)
+	// the config-derived file set (and its order) is untouched. Skipped when
+	// the project already includes an on-disk rotor-env.d.ts (the generated
+	// editor companion): appending the synthetic declaration as well would be
+	// a duplicate-identifier error (see projectDeclaresEnvOnDisk).
+	if !projectDeclaresEnvOnDisk(fs, parsed.ParsedConfig.FileNames) {
+		parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, declPath)
+	}
 
 	return compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,

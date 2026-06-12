@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"rotor/internal/compile"
 )
 
 // stripJSONCComments removes //-comment lines so JSONC (tsconfig.json) can be
@@ -102,6 +104,15 @@ func TestCmdInitGame(t *testing.T) {
 	if want := configTypeDeclarations != ""; hasDecls != want {
 		t.Errorf("rotor-config.d.ts present = %v, want %v", hasDecls, want)
 	}
+
+	// rotor-env.d.ts gives editors the $env macro types; the tsconfig include
+	// must list it so tsserver actually picks it up.
+	if got := mustReadFile(t, filepath.Join(dir, compile.EnvDeclFileName)); got != compile.EnvDeclFileText {
+		t.Errorf("%s content differs from compile.EnvDeclFileText", compile.EnvDeclFileName)
+	}
+	if !strings.Contains(tsconfig, `"include": ["src", "rotor-env.d.ts"]`) {
+		t.Error(`tsconfig include should list rotor-env.d.ts alongside src`)
+	}
 }
 
 func TestCmdInitRefusesExistingProject(t *testing.T) {
@@ -131,7 +142,7 @@ func TestCmdInitPackageTemplate(t *testing.T) {
 	if code := cmdInit([]string{dir, "--template=package"}); code != 0 {
 		t.Fatalf("cmdInit exit code = %d", code)
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "default.project.json", "src/init.ts"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "default.project.json", "src/init.ts", "rotor-env.d.ts"} {
 		if !fileExists(filepath.Join(dir, f)) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
@@ -154,7 +165,7 @@ func TestCmdInitPlainTemplate(t *testing.T) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "rotor.config.ts", "rotor-config.d.ts"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "rotor.config.ts", "rotor-config.d.ts", "rotor-env.d.ts"} {
 		if fileExists(filepath.Join(dir, f)) {
 			t.Errorf("plain template should not write %s", f)
 		}

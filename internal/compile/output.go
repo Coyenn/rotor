@@ -24,6 +24,15 @@ type BuildResult struct {
 	Outputs      map[string]string
 	EmittedFiles []string
 	OutputDir    string
+
+	// UsesEnvMacro reports whether any project source file references the
+	// rotor $env macro (cheap text scan over the already-loaded sources).
+	// When true the build also refreshes the on-disk rotor-env.d.ts editor
+	// companion (see envdecl.go).
+	UsesEnvMacro bool
+	// WroteEnvTypes reports whether rotor-env.d.ts was (re)written this pass
+	// (false when it was already current, or when UsesEnvMacro is false).
+	WroteEnvTypes bool
 }
 
 // BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
@@ -47,6 +56,22 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 
 	sourceFiles := projectSourceFiles(program)
+
+	// rotor extension: detect $env usage on the already-loaded source text
+	// (no extra IO; a substring scan per file). Drives the rotor-env.d.ts
+	// editor-companion refresh after a successful compile. Files that import
+	// the rbxts-transform-env plugin are excluded: their `$env` is the
+	// plugin's MODULE export (which shadows the global per-file), so rotor's
+	// macro never fires there and no editor companion is needed.
+	usesEnvMacro := false
+	for _, sourceFile := range sourceFiles {
+		text := sourceFile.Text()
+		if strings.Contains(text, "$env") && !strings.Contains(text, "rbxts-transform-env") {
+			usesEnvMacro = true
+			break
+		}
+	}
+
 	selectedFiles := sourceFiles
 	var previousManifest *incrementalManifest
 	var currentManifest *incrementalManifest
@@ -115,10 +140,24 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
+	// rotor extension: keep the on-disk rotor-env.d.ts editor companion fresh
+	// for projects that reference $env (written only when missing or stale;
+	// see envdecl.go). Editors never see the synthetic in-memory declaration,
+	// so this file is what stops $env from red-squiggling in VS Code.
+	wroteEnvTypes := false
+	if usesEnvMacro {
+		wroteEnvTypes, err = WriteEnvDeclarations(filepath.FromSlash(dir))
+		if err != nil {
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", EnvDeclFileName, err)
+		}
+	}
+
 	return &BuildResult{
-		Outputs:      outputs,
-		EmittedFiles: emittedFiles,
-		OutputDir:    pathTranslator.OutDir,
+		Outputs:       outputs,
+		EmittedFiles:  emittedFiles,
+		OutputDir:     pathTranslator.OutDir,
+		UsesEnvMacro:  usesEnvMacro,
+		WroteEnvTypes: wroteEnvTypes,
 	}, nil, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"rotor/internal/sourcemap"
 )
@@ -48,9 +49,18 @@ func cmdSourcemap(args []string) int {
 		}
 	}
 
+	// Output discipline: without -o the sourcemap JSON IS the stdout stream
+	// (piped into luau-lsp and tests), so no chrome touches stdout; with -o
+	// the rotor banner + summary appear on stdout.
+	errUI := newUI(os.Stderr)
+	if output != "" {
+		newUI(os.Stdout).banner("sourcemap")
+	}
+
+	start := time.Now()
 	data, err := sourcemap.Generate(project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor sourcemap: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor sourcemap: %v", err))
 		return 1
 	}
 	if output == "" {
@@ -58,8 +68,13 @@ func cmdSourcemap(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, data, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor sourcemap: cannot write %q: %v\n", output, err)
+		errUI.failLine(fmt.Sprintf("rotor sourcemap: cannot write %q: %v", output, err))
 		return 1
 	}
+
+	u := newUI(os.Stdout)
+	u.okLine("wrote sourcemap", fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
+	u.noteLine(fmt.Sprintf("%s  %s", output, formatBytes(len(data))))
+	fmt.Println()
 	return 0
 }

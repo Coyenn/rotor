@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"rotor/internal/pack"
 )
@@ -90,9 +91,18 @@ func cmdPack(args []string) int {
 		return 1
 	}
 
+	// Output discipline: without -o the packed artifact IS the stdout stream
+	// (luau format only), so chrome is omitted; with -o the rotor banner +
+	// summary appear on stdout.
+	errUI := newUI(os.Stderr)
+	if output != "" {
+		newUI(os.Stdout).banner("pack  " + format)
+	}
+
+	start := time.Now()
 	data, err := pack.Pack(pack.Options{Project: project, Format: f, Entry: entry, RojoTree: rojoTree})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor pack: %v\n", err)
+		errUI.failLine(fmt.Sprintf("rotor pack: %v", err))
 		return 1
 	}
 
@@ -101,8 +111,13 @@ func cmdPack(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, data, 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor pack: cannot write %q: %v\n", output, err)
+		errUI.failLine(fmt.Sprintf("rotor pack: cannot write %q: %v", output, err))
 		return 1
 	}
+
+	u := newUI(os.Stdout)
+	u.okLine("packed project as "+format, fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
+	u.noteLine(fmt.Sprintf("%s  %s", output, formatBytes(len(data))))
+	fmt.Println()
 	return 0
 }

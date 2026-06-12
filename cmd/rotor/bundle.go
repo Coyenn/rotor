@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"rotor/internal/bundle"
 	"rotor/internal/luau/cst"
@@ -12,6 +14,9 @@ import (
 // cmdBundle bundles a Luau require graph rooted at an entry file into one runnable
 // file. Output goes to --output, or stdout when no output path is given. With
 // --minify the bundle is also minified.
+//
+// Output discipline: without -o the bundle itself is the stdout stream, so no
+// chrome is printed there; with -o the rotor banner + summary appear on stdout.
 func cmdBundle(args []string) int {
 	entry := ""
 	output := ""
@@ -54,16 +59,26 @@ func cmdBundle(args []string) int {
 		return 1
 	}
 
-	out, err := bundle.Bundle(entry)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor bundle: %v\n", err)
-		return 1
+	errUI := newUI(os.Stderr)
+	if output != "" {
+		newUI(os.Stdout).banner("bundle  " + filepath.Base(entry))
 	}
 
+	start := time.Now()
+	out, err := bundle.Bundle(entry)
+	if err != nil {
+		errUI.failLine(fmt.Sprintf("rotor bundle: %v", err))
+		return 1
+	}
+	// Display-only module tally: one `local function impl_<id>(` per bundled
+	// module in the assembled output (counted before minification).
+	modules := strings.Count(out, "local function impl_")
+
+	rawSize := len(out)
 	if minify {
 		minified, diags := cst.Minify(out)
 		if len(diags) != 0 {
-			fmt.Fprintf(os.Stderr, "rotor bundle: internal error minifying bundle: %s\n", diags[0].Message)
+			errUI.failLine(fmt.Sprintf("rotor bundle: internal error minifying bundle: %s", diags[0].Message))
 			return 1
 		}
 		out = minified
@@ -74,8 +89,18 @@ func cmdBundle(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, []byte(out), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor bundle: cannot write %q: %v\n", output, err)
+		errUI.failLine(fmt.Sprintf("rotor bundle: cannot write %q: %v", output, err))
 		return 1
 	}
+
+	u := newUI(os.Stdout)
+	u.okLine(fmt.Sprintf("bundled %s", plural(modules, "module")),
+		fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
+	detail := fmt.Sprintf("%s  %s", output, formatBytes(len(out)))
+	if minify {
+		detail += fmt.Sprintf(" (minified, %s)", shrinkPercent(rawSize, len(out)))
+	}
+	u.noteLine(detail)
+	fmt.Println()
 	return 0
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"rotor/internal/compile"
 	"rotor/internal/config"
 )
 
@@ -79,22 +80,32 @@ func cmdInit(args []string) int {
 	}
 
 	files := initFiles(template, name)
-	if template != "plain" && configTypeDeclarations != "" {
-		files = append(files, initFile{config.TypeDeclarationsFileName, configTypeDeclarations})
+	if template != "plain" {
+		if configTypeDeclarations != "" {
+			files = append(files, initFile{config.TypeDeclarationsFileName, configTypeDeclarations})
+		}
+		// Editor types for the $env macro; the scaffolded tsconfig lists the
+		// file under "include" so tsserver picks it up (the compiler skips its
+		// own synthetic copy when this on-disk one is part of the program).
+		files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
 	}
+
+	u := newUI(os.Stdout)
+	u.banner("init  " + name)
 	for _, f := range files {
 		path := filepath.Join(dir, filepath.FromSlash(f.path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor init: %v\n", err)
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
 			return 1
 		}
 		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor init: cannot write %q: %v\n", path, err)
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
 			return 1
 		}
+		fmt.Printf("  %s %s\n", u.s.Green("+"), f.path)
 	}
 
-	printInitNextSteps(template, dir, len(files))
+	printInitNextSteps(u, template, dir, len(files))
 	return 0
 }
 
@@ -296,7 +307,7 @@ func tsconfigJSON(declaration bool) string {
 %s		"rootDir": "src",
 		"outDir": "out"
 	},
-	"include": ["src"]
+	"include": ["src", "rotor-env.d.ts"]
 }
 `, declarationLine)
 }
@@ -329,18 +340,28 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-func printInitNextSteps(template, dir string, n int) {
-	fmt.Printf("scaffolded a %s project in %s (%d files)\n\n", template, dir, n)
-	fmt.Println("Next steps:")
+func printInitNextSteps(u *ui, template, dir string, n int) {
+	fmt.Println()
+	u.okLine(fmt.Sprintf("scaffolded a %s project", template), fmt.Sprintf("in %s · %s", dir, plural(n, "file")))
+	fmt.Println()
+	fmt.Printf("  %s\n", u.s.Bold("next steps"))
+	step := func(cmd, why string) {
+		if why == "" {
+			fmt.Printf("    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd))
+			return
+		}
+		pad := strings.Repeat(" ", max(1, 38-len(cmd)))
+		fmt.Printf("    %s %s%s%s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd), pad, u.s.Muted(why))
+	}
 	if dir != "." {
-		fmt.Printf("  cd %s\n", dir)
+		step("cd "+dir, "")
 	}
 	if template == "plain" {
-		fmt.Println("  rotor pack --as luau -o bundle.luau   package the project into one script")
-		fmt.Println("  rotor sourcemap -o sourcemap.json     generate a sourcemap for luau-lsp")
+		step("rotor pack --as luau -o bundle.luau", "package the project into one script")
+		step("rotor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
 		return
 	}
-	fmt.Println("  npm install      (or bun install / pnpm install)")
-	fmt.Println("  rotor build      compile to Luau")
-	fmt.Println("  rotor dev        watch + serve to Studio")
+	step("npm install", "(or bun install / pnpm install)")
+	step("rotor build", "compile to Luau")
+	step("rotor dev", "watch + serve to Studio")
 }
