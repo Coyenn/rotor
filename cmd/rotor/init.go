@@ -160,7 +160,7 @@ type extraPackage struct {
 	label string // menu label
 	desc  string // muted menu description
 	deps  []dep
-	jsx   bool // selecting this uncomments the tsconfig jsx options
+	jsx   string // non-empty configures the tsconfig jsx options: "react" or "vide"
 }
 
 // Version pins for wizard extras. A scaffold cannot query the npm registry,
@@ -176,8 +176,10 @@ const (
 
 var extraPackages = []extraPackage{
 	{label: "@rbxts/services", desc: "typed service access", deps: []dep{{"@rbxts/services", "^1.0.0"}}},
-	{label: "@rbxts/react + @rbxts/react-roblox", desc: "React UI (enables tsconfig jsx)", jsx: true,
+	{label: "@rbxts/react + @rbxts/react-roblox", desc: "React UI (enables tsconfig jsx)", jsx: "react",
 		deps: []dep{{"@rbxts/react", "*"}, {"@rbxts/react-roblox", "*"}}},
+	{label: "@rbxts/vide", desc: "reactive UI (enables tsconfig jsx for Vide)", jsx: "vide",
+		deps: []dep{{"@rbxts/vide", "*"}}},
 	{label: "@rbxts/charm", desc: "atomic state management", deps: []dep{{"@rbxts/charm", "*"}}},
 	{label: "@rbxts/net", desc: "typed networking (rbx-net)", deps: []dep{{"@rbxts/net", "^3.0.0"}}},
 	{label: "@rbxts/lapis", desc: "DataStore abstraction", deps: []dep{{"@rbxts/lapis", "*"}}},
@@ -221,10 +223,12 @@ return hello
 		}
 	}
 
-	jsx := false
+	// React wins if both a react and a vide package were selected — the user
+	// can flip the factories by hand in that (unusual) mixed setup.
+	jsx := ""
 	for _, i := range opts.packages {
-		if extraPackages[i].jsx {
-			jsx = true
+		if p := extraPackages[i].jsx; p != "" && (jsx == "" || p == "react") {
+			jsx = p
 		}
 	}
 
@@ -513,23 +517,31 @@ func packageJSON(opts initOptions) string {
 }
 
 // tsconfigJSON renders the scaffolded tsconfig.json: the canonical rbxts shape
-// (no baseUrl). The jsx options are commented out unless a React package was
-// selected; tsconfig.json is JSONC, so comment lines are valid for tooling.
-func tsconfigJSON(declaration, jsx bool) string {
+// (no baseUrl). The jsx options are commented out unless a JSX UI package was
+// selected ("react" or "vide" factories); tsconfig.json is JSONC, so comment
+// lines are valid for tooling.
+func tsconfigJSON(declaration bool, jsx string) string {
 	declarationLine := ""
 	if declaration {
 		declarationLine = "\t\t\"declaration\": true,\n"
 	}
-	jsxBlock := `		// jsx — uncomment for @rbxts/react
+	jsxBlock := `		// jsx — uncomment for @rbxts/react (or use Vide.jsx factories for @rbxts/vide)
 		// "jsx": "react",
 		// "jsxFactory": "React.createElement",
 		// "jsxFragmentFactory": "React.Fragment",
 `
-	if jsx {
+	switch jsx {
+	case "react":
 		jsxBlock = `		// jsx — configured for @rbxts/react
 		"jsx": "react",
 		"jsxFactory": "React.createElement",
 		"jsxFragmentFactory": "React.Fragment",
+`
+	case "vide":
+		jsxBlock = `		// jsx — configured for @rbxts/vide
+		"jsx": "react",
+		"jsxFactory": "Vide.jsx",
+		"jsxFragmentFactory": "Vide.Fragment",
 `
 	}
 	// NOTE: no "types" entry — "types": [] would disable the automatic
