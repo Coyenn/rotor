@@ -1,6 +1,10 @@
 {
-  "name": "rotor",
+  "name": "@rotor/cli",
   "version": "1.4.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "description": "All-in-one Roblox toolchain: native roblox-ts compiler, Luau bundler, minifier, dev loop, and packer. This package downloads the prebuilt rotor binary from GitHub Releases.",
   "license": "MIT",
   "repository": {

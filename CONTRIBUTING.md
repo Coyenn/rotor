@@ -37,7 +37,7 @@ Existing goldens must stay byte-unchanged when regenerating — `git diff testda
 
 rotor's version is defined in code: [`internal/version/version.go`](internal/version/version.go). Maintainer flow:
 
-1. Bump the `Version` constant (e.g. `"1.4.0"`) and commit.
+1. Bump the `Version` constant (e.g. `"1.4.0"`) **and `package.json`'s `version` in lockstep** (the npm shim derives its binary-download URL from it) and commit.
 2. Tag and push — the tag must match the constant:
 
 ```powershell

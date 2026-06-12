@@ -1,0 +1,46 @@
+name: npm-publish
+
+# Publishes the @rotor/cli npm package (the binary-downloading shim, not the
+# Go sources — see package.json "files"). Runs when a GitHub release is
+# published, or manually via workflow_dispatch. Requires the NPM_TOKEN
+# repository secret (npm granular automation token with publish rights on
+# the @rotor scope).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify package version matches the latest tag
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v${pkg_version}")
+          if [ "v${pkg_version}" != "${GITHUB_REF_NAME#refs/tags/}" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            echo "package.json version v${pkg_version} != release tag; bump package.json in lockstep with internal/version"
+            exit 1
+          fi
+
+      - name: Run shim tests
+        run: node scripts/install.test.js
+
+      - name: Publish
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
