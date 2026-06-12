@@ -1,13 +1,16 @@
 name: npm-publish
 
-# Publishes the @rotor/cli npm package (the binary-downloading shim, not the
-# Go sources — see package.json "files"). Runs when a GitHub release is
-# published, or manually via workflow_dispatch. Requires the NPM_TOKEN
-# repository secret (npm granular automation token with publish rights on
-# the @rotor scope).
+# Publishes the @rotor-rbx/rotor npm package (the binary-downloading shim,
+# not the Go sources — see package.json "files"). Triggers on v* tag pushes
+# (NOT on release-published: GoReleaser creates releases with GITHUB_TOKEN,
+# and token-created events never trigger workflows) or manually via
+# workflow_dispatch. The NPM_TOKEN secret (npm granular automation token
+# with publish rights + 2FA bypass) lives in the `release` environment,
+# which the job binds below.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -17,6 +20,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: release
 
     steps:
       - name: Check out repository
@@ -28,12 +32,12 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Verify package version matches the latest tag
+      - name: Verify package version matches the tag
+        if: github.ref_type == 'tag'
         run: |
           pkg_version=$(node -p "require('./package.json').version")
-          tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v${pkg_version}")
-          if [ "v${pkg_version}" != "${GITHUB_REF_NAME#refs/tags/}" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
-            echo "package.json version v${pkg_version} != release tag; bump package.json in lockstep with internal/version"
+          if [ "v${pkg_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "package.json version v${pkg_version} != tag ${GITHUB_REF_NAME}; bump package.json in lockstep with internal/version"
             exit 1
           fi
 
