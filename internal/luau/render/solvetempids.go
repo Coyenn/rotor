@@ -13,8 +13,24 @@ type tempScope struct {
 	parent  *tempScope
 }
 
+// newTempScope leaves both maps nil; they are allocated on first write
+// (reads of nil maps are safe), since most scopes never register an id.
 func newTempScope(parent *tempScope) *tempScope {
-	return &tempScope{ids: map[string]struct{}{}, lastTry: map[string]int{}, parent: parent}
+	return &tempScope{parent: parent}
+}
+
+func (s *tempScope) addID(id string) {
+	if s.ids == nil {
+		s.ids = make(map[string]struct{})
+	}
+	s.ids[id] = struct{}{}
+}
+
+func (s *tempScope) setLastTry(input string, i int) {
+	if s.lastTry == nil {
+		s.lastTry = make(map[string]int)
+	}
+	s.lastTry[input] = i
 }
 
 // has mirrors upstream scopeHasId: checks this scope and all ancestors.
@@ -86,7 +102,7 @@ func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 	peek := func() *tempScope { return scopeStack[len(scopeStack)-1] }
 	push := func() { scopeStack = append(scopeStack, newTempScope(peek())) }
 	pop := func() { scopeStack = scopeStack[:len(scopeStack)-1] }
-	registerID := func(name string) { peek().ids[name] = struct{}{} }
+	registerID := func(name string) { peek().addID(name) }
 
 	vis := &visitor{
 		before: func(node luau.Node) {
@@ -154,8 +170,8 @@ func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 			input = "_" + tempID.Name + separator + strconv.Itoa(i)
 			i++
 		}
-		scope.lastTry[input] = i
-		scope.ids[input] = struct{}{}
+		scope.setLastTry(input, i)
+		scope.addID(input)
 		state.seenTempNodes[tempID.ID] = input
 	}
 }

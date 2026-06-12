@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +96,115 @@ func TestRunDoctorReportsProjectState(t *testing.T) {
 	// No transformer plugins configured: no sidecar or typescript checks.
 	if _, ok := byLabel["transformer sidecar"]; ok {
 		t.Error("sidecar check should only run when transformer plugins are configured")
+	}
+}
+
+// cloudFixtureDir writes the minimal project skeleton the doctor needs to
+// reach the cloud section, plus an optional rotor.config.ts body.
+func cloudFixtureDir(t *testing.T, configBody string) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "tsconfig.json"), `{"compilerOptions": {}}`)
+	writeTestFile(t, filepath.Join(dir, "package.json"), `{"name": "fixture"}`)
+	if configBody != "" {
+		writeTestFile(t, filepath.Join(dir, "rotor.config.ts"), configBody)
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		resolved = dir
+	}
+	return resolved
+}
+
+func cloudChecksByLabel(checks []doctorCheck) map[string][]doctorCheck {
+	byLabel := map[string][]doctorCheck{}
+	for _, c := range checks {
+		byLabel[c.label] = append(byLabel[c.label], c)
+	}
+	return byLabel
+}
+
+func TestRunDoctorCloudConfigValidationError(t *testing.T) {
+	t.Setenv("ROBLOX_API_KEY", "")
+	dir := cloudFixtureDir(t, `
+		import { defineConfig } from "rotor/config";
+		export default defineConfig({
+			assets: { paths: ["assets"], creator: { type: "banana", id: 1 } },
+		});
+	`)
+
+	checks, _ := runDoctor(dir)
+	byLabel := cloudChecksByLabel(checks)
+
+	configRows := byLabel["rotor.config.ts"]
+	if len(configRows) == 0 {
+		t.Fatalf("no rotor.config.ts check in %+v", checks)
+	}
+	foundValidationFail := false
+	for _, c := range configRows {
+		if c.status == doctorFail && strings.Contains(c.detail, "assets.creator.type") {
+			foundValidationFail = true
+		}
+	}
+	if !foundValidationFail {
+		t.Errorf("expected a fail row carrying the Validate() message, got %+v", configRows)
+	}
+
+	keyRows := byLabel["ROBLOX_API_KEY"]
+	if len(keyRows) != 1 {
+		t.Fatalf("ROBLOX_API_KEY rows = %+v, want exactly one", keyRows)
+	}
+	if keyRows[0].status != doctorWarn {
+		t.Errorf("unset key with config present should warn, got %+v", keyRows[0])
+	}
+	if !strings.Contains(keyRows[0].hint, "set ROBLOX_API_KEY") {
+		t.Errorf("unset key hint = %q, want the remedy hint", keyRows[0].hint)
+	}
+}
+
+func TestRunDoctorCloudValidConfigAndKeyPresence(t *testing.T) {
+	const secret = "rotor-test-secret-value-1234"
+	t.Setenv("ROBLOX_API_KEY", secret)
+	dir := cloudFixtureDir(t, `
+		import { defineConfig } from "rotor/config";
+		export default defineConfig({});
+	`)
+
+	checks, _ := runDoctor(dir)
+	byLabel := cloudChecksByLabel(checks)
+
+	configRows := byLabel["rotor.config.ts"]
+	if len(configRows) != 1 || configRows[0].status != doctorOK {
+		t.Errorf("valid config rows = %+v, want a single ok row", configRows)
+	}
+	keyRows := byLabel["ROBLOX_API_KEY"]
+	if len(keyRows) != 1 || keyRows[0].status != doctorOK {
+		t.Fatalf("key rows = %+v, want a single ok row", keyRows)
+	}
+	// The key value must never leak into any part of any row.
+	for _, c := range checks {
+		for _, field := range []string{c.label, c.detail, c.hint} {
+			if strings.Contains(field, secret) {
+				t.Fatalf("ROBLOX_API_KEY value leaked into doctor output: %+v", c)
+			}
+		}
+	}
+}
+
+func TestRunDoctorCloudNoConfigDegradesQuietly(t *testing.T) {
+	t.Setenv("ROBLOX_API_KEY", "")
+	dir := cloudFixtureDir(t, "")
+
+	checks, _ := runDoctor(dir)
+	byLabel := cloudChecksByLabel(checks)
+
+	configRows := byLabel["rotor.config.ts"]
+	if len(configRows) != 1 || configRows[0].status != doctorInfo {
+		t.Errorf("no-config rows = %+v, want a single muted info row", configRows)
+	}
+	keyRows := byLabel["ROBLOX_API_KEY"]
+	if len(keyRows) != 1 || keyRows[0].status != doctorInfo {
+		t.Errorf("unset key without config should stay muted info, got %+v", keyRows)
 	}
 }
 

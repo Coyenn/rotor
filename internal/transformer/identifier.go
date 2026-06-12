@@ -57,6 +57,17 @@ func TransformIdentifier(s *State, node *ast.Node) luau.Expression {
 		return luau.NewNone()
 	}
 
+	// rotor extension: a bare `$env` outside a call/property/element access
+	// has no runtime value (those positions are consumed earlier, by
+	// interceptEnvChain in transformOptionalChain — see envmacro.go); emitting
+	// the identifier itself would produce invalid Luau.
+	if node.Text() == "$env" {
+		if envSymbol := envMacroSymbol(s); envSymbol != nil && symbol == envSymbol {
+			s.Diags.Add(DiagRotorEnvBadUsage(node))
+			return luau.NewNone()
+		}
+	}
+
 	// Constructor-macro misuse (upstream L137-150): a constructor-macro
 	// identifier used WITHOUT `new` has no value to emit. As a class
 	// `extends` expression that is noMacroExtends; anywhere else

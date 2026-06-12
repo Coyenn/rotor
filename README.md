@@ -42,6 +42,19 @@ rotor = "uproot/rotor@1.3.0"
 rotor = { github = "uproot/rotor", version = "1.3.0" }
 ```
 
+### Install via npm / bun
+
+For rbxts projects that already live in the JS ecosystem, install rotor straight from GitHub as a dev dependency — a postinstall step downloads the prebuilt binary for your platform:
+
+```sh
+bun add -d github:uproot/rotor
+npm i -D github:uproot/rotor
+pnpm add -D github:uproot/rotor
+yarn add -D rotor@github:uproot/rotor
+```
+
+> **bun note:** bun skips postinstall scripts by default. Either add `"trustedDependencies": ["rotor"]` to your project's `package.json` (then `bun install`), or do nothing — the `rotor` shim downloads the binary on first run. pnpm similarly asks you to approve build scripts (`pnpm approve-builds`), with the same first-run fallback.
+
 Or build from source (Go 1.25+):
 
 ```sh

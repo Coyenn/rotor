@@ -165,5 +165,11 @@ func transformOptionalChainInner(
 // chains degenerate to an inner-to-outer fold of transformChainItem.
 func transformOptionalChain(s *State, node *ast.Node) luau.Expression {
 	chain, expression := flattenOptionalChain(node)
+	// rotor extension: the $env compile-time environment macro must consume
+	// the base `$env` identifier BEFORE TransformExpression sees it (see
+	// envmacro.go for why this is the interception point).
+	if result, handled := interceptEnvChain(s, chain, expression); handled {
+		return result
+	}
 	return transformOptionalChainInner(s, chain, TransformExpression(s, expression), nil, 0)
 }

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"rotor/internal/dotenv"
 	"rotor/internal/logservice"
 	"rotor/internal/rojo"
 	"rotor/internal/transformer"
@@ -48,6 +49,15 @@ type projectContext struct {
 	dir         string // abs slash project dir (upstream projectPath)
 	projectType transformer.ProjectType
 	rojoContext *transformer.RojoContext
+
+	// env is the compile-time environment snapshot for the rotor $env macro,
+	// loaded once per compile pass from the tsconfig directory (process env >
+	// .env.<NODE_ENV> > .env; see internal/dotenv). Watch/incremental rebuilds
+	// construct a fresh projectContext per pass, so .env edits are picked up
+	// on the next build — but note the incremental manifest hashes sources
+	// only, so files that inlined a stale value are not re-selected by an env
+	// change alone (documented on dotenv.Env).
+	env *dotenv.Env
 }
 
 // newProjectProgram builds the tsgo Program for projectDir over the sanitized
@@ -243,9 +253,17 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		pkgRojoResolvers = append(pkgRojoResolvers, rojo.Synthetic(filepath.FromSlash(typeRoot)))
 	}
 
+	// $env macro environment: the .env files live in the directory containing
+	// the tsconfig (== dir unless --project pointed elsewhere).
+	envDir := filepath.FromSlash(dir)
+	if configFilePath := options.ConfigFilePath; configFilePath != "" {
+		envDir = filepath.Dir(filepath.FromSlash(configFilePath))
+	}
+
 	return &projectContext{
 		dir:         dir,
 		projectType: projectType,
+		env:         dotenv.Load(envDir),
 		rojoContext: &transformer.RojoContext{
 			Resolver:          rojoResolver,
 			PathTranslator:    pathTranslator,
@@ -580,6 +598,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 			return
 		}
 		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
+		state.Env = pctx.env
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 

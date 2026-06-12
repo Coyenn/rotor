@@ -1,0 +1,10 @@
+print($env("GAME_NAME"));
+print($env("ROTOR_TEST_ENV_PROC"));
+print($env("ROTOR_TEST_ENV_UNSET", "fallback-value"));
+print($env("ROTOR_TEST_ENV_UNSET"));
+print($env.GAME_NAME);
+print($env["GAME_NAME"]);
+print($env("GAME_NAME", "unused-fallback"));
+print($env("OVERLAY"));
+print($env("QUOTED_D"));
+print($env("QUOTED_S"));

@@ -107,6 +107,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 		return "", stringDiagnostics(missing), errors.New("compile: macro registration failure")
 	}
 	state.SetRojoContext(pctx.rojoContext, pctx.projectType)
+	state.Env = pctx.env
 	return transformAndRenderDetailed(state)
 }
 

@@ -408,6 +408,25 @@ func DiagRotorNoProjectContext(node *ast.Node) Diagnostic {
 	return errorDiag("rotorNoProjectContext", node, "rotor: imports require project context (no Rojo resolver attached)")
 }
 
+// DiagRotorEnvNonLiteralArg rejects a dynamic $env name or fallback —
+// the macro inlines values at compile time, so both must be string literals
+// (rotor extension; see envmacro.go).
+func DiagRotorEnvNonLiteralArg(node *ast.Node) Diagnostic {
+	return errorDiag("rotorEnvNonLiteralArg", node,
+		"rotor: $env arguments must be string literals — the value is inlined at compile time",
+		suggestion("Use `$env(\"NAME\")`, `$env(\"NAME\", \"fallback\")`, `$env.NAME`, or `$env[\"NAME\"]`."),
+	)
+}
+
+// DiagRotorEnvBadUsage rejects $env in any position other than a direct
+// call, property access, or element access (e.g. `const x = $env`) — the
+// macro identifier has no runtime value to emit (rotor extension).
+func DiagRotorEnvBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorEnvBadUsage", node,
+		"rotor: $env must be used as `$env(\"NAME\")`, `$env(\"NAME\", \"fallback\")`, `$env.NAME`, or `$env[\"NAME\"]`",
+	)
+}
+
 // kindName strips tsgo's stringer prefix: KindCallExpression -> "CallExpression"
 // (matches upstream getKindName output for diagnostics/debugging).
 func kindName(kind ast.Kind) string {

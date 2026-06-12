@@ -3,6 +3,7 @@ package transformer
 import (
 	"strings"
 
+	"rotor/internal/dotenv"
 	"rotor/internal/luau"
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
@@ -131,6 +132,14 @@ type State struct {
 	// LogTruthyChanges plumbs the `logTruthyChanges` project option into
 	// createTruthinessChecks warnings (default off).
 	LogTruthyChanges bool
+
+	// Env is the project-level compile-time environment snapshot consumed by
+	// the rotor $env macro (envmacro.go) — loaded once per compile pass by
+	// compile.newProjectContext (like the Rojo context) and shared by every
+	// file's State. nil in mechanics tests and checker-light states; the
+	// macro then resolves names from the process environment only
+	// (dotenv.Env.Lookup is nil-receiver safe).
+	Env *dotenv.Env
 
 	// OptimizedLoops plumbs the `optimizedLoops` project option into
 	// transformForStatement (upstream gate: transformForStatement.ts L492;

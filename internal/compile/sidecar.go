@@ -435,6 +435,12 @@ func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[
 }
 
 func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Program, []string, error) {
+	// rotor extension: serve the synthetic $env ambient declaration from an
+	// in-memory file next to the tsconfig (see envdecl.go for the parity
+	// rationale) ...
+	declPath := envDeclPath(configPath)
+	fs = injectEnvDeclFS(fs, declPath)
+
 	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
 	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
 	if len(configDiags) > 0 {
@@ -445,6 +451,10 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {
 		return nil, []string{msg}, errors.New("compile: invalid tsconfig.json configuration")
 	}
+
+	// ... and append it to the program's root files AFTER config parse so
+	// the config-derived file set (and its order) is untouched.
+	parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, declPath)
 
 	return compiler.NewProgram(compiler.ProgramOptions{
 		Host:   host,

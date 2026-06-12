@@ -37,6 +37,14 @@ archives:
     files:
       - README.md
       - LICENSE
+  # Bare executables for the npm/bun installer (scripts/install.js downloads
+  # these directly; windows gets .exe appended automatically by GoReleaser).
+  - id: rotor-bin
+    ids:
+      - rotor
+    name_template: "rotor-v{{ .Version }}-{{ .Os }}-{{ .Arch }}-bin"
+    formats:
+      - binary
 
 checksum:
   name_template: "rotor-v{{ .Version }}-checksums.txt"

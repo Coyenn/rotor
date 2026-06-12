@@ -1,0 +1,35 @@
+{
+  "name": "rotor",
+  "version": "1.4.0",
+  "description": "All-in-one Roblox toolchain: native roblox-ts compiler, Luau bundler, minifier, dev loop, and packer. This package downloads the prebuilt rotor binary from GitHub Releases.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uproot/rotor.git"
+  },
+  "homepage": "https://github.com/uproot/rotor#readme",
+  "bugs": {
+    "url": "https://github.com/uproot/rotor/issues"
+  },
+  "keywords": [
+    "roblox",
+    "roblox-ts",
+    "luau",
+    "typescript",
+    "compiler",
+    "bundler"
+  ],
+  "bin": {
+    "rotor": "bin/rotor.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/install.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

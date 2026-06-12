@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"rotor/internal/compile"
+	"rotor/internal/config"
 )
 
 // cmdDoctor diagnoses the environment and project setup that `rotor build`
@@ -188,7 +190,74 @@ func runDoctor(path string) ([]doctorCheck, string) {
 		checks = append(checks, doctorCheck{status: doctorInfo, label: "rojo CLI", detail: "not on PATH (only needed to sync/serve, not to compile)"})
 	}
 
+	checks = append(checks, cloudChecks(dir)...)
+
 	return checks, "  " + filepath.Base(dir)
+}
+
+// cloudChecks evaluates the cloud tooling section: rotor.config.ts (loaded
+// via config.Load and validated when present) and ROBLOX_API_KEY presence.
+// Only presence is reported — the key value is never printed. Without a
+// config the section degrades to muted info rows (cloud features are
+// optional), matching the rojo CLI row's style.
+func cloudChecks(dir string) []doctorCheck {
+	var checks []doctorCheck
+
+	hasConfig := true
+	cfg, err := config.Load(dir)
+	switch {
+	case errors.Is(err, config.ErrNotFound):
+		hasConfig = false
+		checks = append(checks, doctorCheck{
+			status: doctorInfo,
+			label:  "rotor.config.ts",
+			detail: "not found (only needed for rotor asset / rotor deploy)",
+		})
+	case err != nil:
+		checks = append(checks, doctorCheck{
+			status: doctorFail,
+			label:  "rotor.config.ts",
+			detail: err.Error(),
+			hint:   "rotor asset / rotor deploy cannot run until the config loads",
+		})
+	default:
+		validateErrs := cfg.Validate()
+		if len(validateErrs) == 0 {
+			checks = append(checks, doctorCheck{status: doctorOK, label: "rotor.config.ts", detail: "valid"})
+		}
+		for _, verr := range validateErrs {
+			checks = append(checks, doctorCheck{
+				status: doctorFail,
+				label:  "rotor.config.ts",
+				detail: verr.Error(),
+				hint:   "rotor asset / rotor deploy cannot run until the config is valid",
+			})
+		}
+		for _, warning := range cfg.Warnings {
+			checks = append(checks, doctorCheck{status: doctorWarn, label: "rotor.config.ts", detail: warning})
+		}
+	}
+
+	switch {
+	case os.Getenv("ROBLOX_API_KEY") != "":
+		checks = append(checks, doctorCheck{status: doctorOK, label: "ROBLOX_API_KEY", detail: "set"})
+	case hasConfig:
+		// A config is present, so cloud commands are in use; an unset key
+		// will stop them.
+		checks = append(checks, doctorCheck{
+			status: doctorWarn,
+			label:  "ROBLOX_API_KEY",
+			detail: "not set",
+			hint:   "set ROBLOX_API_KEY to use rotor asset / rotor deploy",
+		})
+	default:
+		checks = append(checks, doctorCheck{
+			status: doctorInfo,
+			label:  "ROBLOX_API_KEY",
+			detail: "not set (only needed for rotor asset / rotor deploy)",
+		})
+	}
+	return checks
 }
 
 // packageCheck reports an installed package's version, or missStatus + hint
