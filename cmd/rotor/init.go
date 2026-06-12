@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -21,15 +23,26 @@ var configTypeDeclarations = config.TypeDeclarations
 // full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
 // starter src/); package is an rbxts model/package project; plain is a
 // Luau-only project for bundle/minify/pack users.
+//
+// When stdin and stdout are both terminals and neither --template nor --yes
+// was passed, an interactive wizard collects the options; otherwise (CI,
+// pipes, or explicit flags) the non-interactive default scaffold runs.
 func cmdInit(args []string) int {
 	dir := ""
-	template := "game"
+	template := ""
+	yes := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "-h" || a == "--help":
 			usage(os.Stdout)
+			fmt.Println("Init flags:")
+			fmt.Println("  -t, --template game|package|plain   scaffold non-interactively from a template")
+			fmt.Println("  -y, --yes                           accept all defaults, no prompts")
+			fmt.Println("  (run in a terminal with neither flag, rotor init starts an interactive wizard)")
 			return 0
+		case a == "-y" || a == "--yes":
+			yes = true
 		case a == "-t" || a == "--template":
 			if i+1 >= len(args) {
 				fmt.Fprintf(os.Stderr, "rotor init: %s requires a template name (game|package|plain)\n", a)
@@ -57,6 +70,10 @@ func cmdInit(args []string) int {
 	if dir == "" {
 		dir = "."
 	}
+	templateSet := template != ""
+	if template == "" {
+		template = "game"
+	}
 	if template != "game" && template != "package" && template != "plain" {
 		fmt.Fprintf(os.Stderr, "rotor init: unknown template %q (want game, package, or plain)\n", template)
 		return 1
@@ -79,34 +96,51 @@ func cmdInit(args []string) int {
 		}
 	}
 
-	files := initFiles(template, name)
-	if template != "plain" {
-		if configTypeDeclarations != "" {
-			files = append(files, initFile{config.TypeDeclarationsFileName, configTypeDeclarations})
-		}
-		// Editor types for the $env macro; the scaffolded tsconfig lists the
-		// file under "include" so tsserver picks it up (the compiler skips its
-		// own synthetic copy when this on-disk one is part of the program).
-		files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
+	// Wizard gate: a real terminal on both ends and no overriding flags.
+	if !templateSet && !yes && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
+		return runInitInteractive(dir, name, os.Stdin, os.Stdout)
 	}
 
+	opts := initOptions{dir: dir, name: name, template: template}
 	u := newUI(os.Stdout)
 	u.banner("init  " + name)
-	for _, f := range files {
-		path := filepath.Join(dir, filepath.FromSlash(f.path))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
-			return 1
-		}
-		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
-			return 1
-		}
-		fmt.Printf("  %s %s\n", u.s.Green("+"), f.path)
-	}
+	return writeInitFiles(os.Stdout, opts, scaffold(opts))
+}
 
-	printInitNextSteps(u, template, dir, len(files))
-	return 0
+// isTerminal reports whether f is an interactive terminal (character device).
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// initOptions is everything the scaffold needs to render a project. The
+// non-interactive path fills only dir/name/template; the wizard fills the
+// rest. scaffold() is the single source of truth for file contents either way.
+type initOptions struct {
+	dir      string
+	name     string // project name → default.project.json name + npm name
+	template string // game | package | plain
+	linter   string // "" (none) | biome | oxlint — rbxts templates only
+	packages []int  // indices into extraPackages — rbxts templates only
+	assets   *assetsOptions
+	deploy   *deployOptions
+}
+
+// assetsOptions is the wizard's asset-sync answers; nil means "keep the
+// commented skeleton" in rotor.config.ts.
+type assetsOptions struct {
+	dir         string // asset directory, forward slashes, no trailing slash
+	creatorType string // "user" or "group"
+	creatorID   string // digits
+}
+
+// deployOptions is the wizard's deploy answers; nil means "keep the commented
+// skeleton" in rotor.config.ts.
+type deployOptions struct {
+	env        string // environment name, e.g. "production"
+	universeID string // digits
+	placeID    string // digits
+	placeFile  string // path to the built place file
 }
 
 // initFile is one scaffolded file: a forward-slash path relative to the
@@ -116,27 +150,45 @@ type initFile struct {
 	content string
 }
 
-// initFiles returns the scaffold for a template. name is the project
-// directory's base name.
-func initFiles(template, name string) []initFile {
-	switch template {
-	case "package":
-		return []initFile{
-			{"package.json", packageJSON(name, false)},
-			{"tsconfig.json", tsconfigJSON(true)},
-			{"default.project.json", fmt.Sprintf(`{
-	"name": %s,
-	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
-	"tree": {
-		"$path": "out"
-	}
+// dep is one npm dependency pin.
+type dep struct {
+	name, version string
 }
-`, jsonString(name))},
-			{"src/init.ts", tsHelloModule},
-			{".gitignore", "/node_modules\n/out\n"},
-			{"rotor.config.ts", rotorConfigTS},
-		}
-	case "plain":
+
+// extraPackage is a wizard-selectable extra dependency (step d).
+type extraPackage struct {
+	label string // menu label
+	desc  string // muted menu description
+	deps  []dep
+	jsx   bool // selecting this uncomments the tsconfig jsx options
+}
+
+// Version pins for wizard extras. A scaffold cannot query the npm registry,
+// so pins are loose ^majors only where the major has been stable for a long
+// time (@rbxts/services 1.x, @rbxts/net v3, Biome 2.x, oxlint 1.x) and "*"
+// where releases still move majors quickly (react/react-roblox track the
+// upstream React port, charm and lapis are pre-1.0-ish). This is a scaffold:
+// `npm install` / `bun install` resolves the real latest into the lockfile.
+const (
+	biomeVersion  = "^2.0.0"
+	oxlintVersion = "^1.0.0"
+)
+
+var extraPackages = []extraPackage{
+	{label: "@rbxts/services", desc: "typed service access", deps: []dep{{"@rbxts/services", "^1.0.0"}}},
+	{label: "@rbxts/react + @rbxts/react-roblox", desc: "React UI (enables tsconfig jsx)", jsx: true,
+		deps: []dep{{"@rbxts/react", "*"}, {"@rbxts/react-roblox", "*"}}},
+	{label: "@rbxts/charm", desc: "atomic state management", deps: []dep{{"@rbxts/charm", "*"}}},
+	{label: "@rbxts/net", desc: "typed networking (rbx-net)", deps: []dep{{"@rbxts/net", "^3.0.0"}}},
+	{label: "@rbxts/lapis", desc: "DataStore abstraction", deps: []dep{{"@rbxts/lapis", "*"}}},
+}
+
+// scaffold returns the complete file set for the chosen options, including
+// the editor type declarations, linter config, and asset-dir placeholder, so
+// the wizard summary can list every file before anything is written.
+func scaffold(opts initOptions) []initFile {
+	name := opts.name
+	if opts.template == "plain" {
 		return []initFile{
 			{"default.project.json", fmt.Sprintf(`{
 	"name": %s,
@@ -164,11 +216,35 @@ return hello
 # rojo = "rojo-rbx/rojo@7.6.1"
 `},
 		}
-	default: // game
-		return []initFile{
-			{"package.json", packageJSON(name, true)},
-			{"tsconfig.json", tsconfigJSON(false)},
-			{"default.project.json", fmt.Sprintf(`{
+	}
+
+	jsx := false
+	for _, i := range opts.packages {
+		if extraPackages[i].jsx {
+			jsx = true
+		}
+	}
+
+	files := []initFile{
+		{"package.json", packageJSON(opts)},
+		{"tsconfig.json", tsconfigJSON(opts.template == "package", jsx)},
+	}
+	if opts.template == "package" {
+		files = append(files,
+			initFile{"default.project.json", fmt.Sprintf(`{
+	"name": %s,
+	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
+	"tree": {
+		"$path": "out"
+	}
+}
+`, jsonString(name))},
+			initFile{"src/init.ts", tsHelloModule},
+			initFile{".gitignore", "/node_modules\n/out\n"},
+		)
+	} else { // game
+		files = append(files,
+			initFile{"default.project.json", fmt.Sprintf(`{
 	"name": %s,
 	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
 	"tree": {
@@ -212,20 +288,59 @@ return hello
 	}
 }
 `, jsonString(name))},
-			{"src/shared/module.ts", tsHelloModule},
-			{"src/server/main.server.ts", `import { makeHello } from "../shared/module";
+			initFile{"src/shared/module.ts", tsHelloModule},
+			initFile{"src/server/main.server.ts", `import { makeHello } from "../shared/module";
 
 print(makeHello("main.server.ts"));
 `},
-			{"src/client/main.client.ts", `import { makeHello } from "../shared/module";
+			initFile{"src/client/main.client.ts", `import { makeHello } from "../shared/module";
 
 print(makeHello("main.client.ts"));
 `},
-			{".gitignore", "/node_modules\n/out\n/include/*\n!/include/.gitkeep\n"},
-			{"include/.gitkeep", ""},
-			{"rotor.config.ts", rotorConfigTS},
-		}
+			initFile{".gitignore", "/node_modules\n/out\n/include/*\n!/include/.gitkeep\n"},
+			initFile{"include/.gitkeep", ""},
+		)
 	}
+
+	files = append(files, initFile{"rotor.config.ts", rotorConfigTS(opts.assets, opts.deploy)})
+	switch opts.linter {
+	case "biome":
+		files = append(files, initFile{"biome.json", biomeJSON})
+	case "oxlint":
+		files = append(files, initFile{".oxlintrc.json", oxlintrcJSON})
+	}
+	if opts.assets != nil {
+		files = append(files, initFile{opts.assets.dir + "/.gitkeep", ""})
+	}
+	if configTypeDeclarations != "" {
+		files = append(files, initFile{config.TypeDeclarationsFileName, configTypeDeclarations})
+	}
+	// Editor types for the $env macro; the scaffolded tsconfig lists the file
+	// under "include" so tsserver picks it up (the compiler skips its own
+	// synthetic copy when this on-disk one is part of the program).
+	files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
+	return files
+}
+
+// writeInitFiles writes the scaffold to disk under opts.dir, printing one
+// `+ path` row per file and the next-steps block. out is the wizard/banner
+// stream (a buffer in tests); operational errors still go to stderr.
+func writeInitFiles(out io.Writer, opts initOptions, files []initFile) int {
+	u := newUI(out)
+	for _, f := range files {
+		path := filepath.Join(opts.dir, filepath.FromSlash(f.path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+			return 1
+		}
+		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
+			return 1
+		}
+		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
+	}
+	printInitNextSteps(u, opts, len(files))
+	return 0
 }
 
 const tsHelloModule = `export function makeHello(name: string) {
@@ -233,17 +348,36 @@ const tsHelloModule = `export function makeHello(name: string) {
 }
 `
 
-const rotorConfigTS = `// rotor project configuration — read by ` + "`rotor asset sync`" + ` and
-// ` + "`rotor deploy`" + `. Uncomment the sections you need.
-import { defineConfig } from "rotor/config";
-
-export default defineConfig({
-	// assets: {
+// rotorConfigTS renders rotor.config.ts. Sections the wizard configured are
+// written for real; skipped (nil) sections keep the commented skeleton.
+func rotorConfigTS(assets *assetsOptions, deploy *deployOptions) string {
+	var b strings.Builder
+	b.WriteString("// rotor project configuration — read by `rotor asset sync` and\n")
+	b.WriteString("// `rotor deploy`. Uncomment the sections you need.\n")
+	b.WriteString("import { defineConfig } from \"rotor/config\";\n")
+	b.WriteString("\nexport default defineConfig({\n")
+	if assets != nil {
+		fmt.Fprintf(&b, "\tassets: {\n")
+		fmt.Fprintf(&b, "\t\tpaths: [%q, %q],\n", assets.dir+"/**/*.png", assets.dir+"/**/*.ogg")
+		fmt.Fprintf(&b, "\t\toutput: { luau: \"src/shared/assets.luau\", types: \"src/shared/assets.d.ts\" },\n")
+		fmt.Fprintf(&b, "\t\tcreator: { type: %q, id: %s },\n", assets.creatorType, assets.creatorID)
+		b.WriteString("\t},\n")
+	} else {
+		b.WriteString(`	// assets: {
 	// 	paths: ["assets/**/*.png", "assets/**/*.ogg"],
 	// 	output: { luau: "src/shared/assets.luau", types: "src/shared/assets.d.ts" },
 	// 	creator: { type: "user", id: 0 },
 	// },
-	// deploy: {
+`)
+	}
+	if deploy != nil {
+		b.WriteString("\tdeploy: {\n\t\tenvironments: {\n")
+		fmt.Fprintf(&b, "\t\t\t%s: {\n", tsKey(deploy.env))
+		fmt.Fprintf(&b, "\t\t\t\tuniverseId: %s,\n", deploy.universeID)
+		fmt.Fprintf(&b, "\t\t\t\tplaces: { start: { file: %q, placeId: %s } },\n", deploy.placeFile, deploy.placeID)
+		b.WriteString("\t\t\t},\n\t\t},\n\t},\n")
+	} else {
+		b.WriteString(`	// deploy: {
 	// 	environments: {
 	// 		dev: {
 	// 			universeId: 0,
@@ -251,39 +385,146 @@ export default defineConfig({
 	// 		},
 	// 	},
 	// },
-});
-`
-
-// packageJSON renders the scaffolded package.json. The name is normalized to
-// a valid npm package name derived from the directory.
-func packageJSON(name string, private bool) string {
-	privateLine := ""
-	if private {
-		privateLine = "\t\"private\": true,\n"
+`)
 	}
-	return fmt.Sprintf(`{
-	"name": %s,
-	"version": "0.1.0",
-%s	"scripts": {
-		"build": "rotor build",
-		"watch": "rotor dev"
+	b.WriteString("});\n")
+	return b.String()
+}
+
+// tsKey renders an object key for generated TypeScript: bare when it is a
+// valid identifier, quoted otherwise.
+func tsKey(name string) string {
+	ident := name != ""
+	for i, r := range name {
+		ok := r == '_' || r == '$' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(i > 0 && r >= '0' && r <= '9')
+		if !ok {
+			ident = false
+			break
+		}
+	}
+	if ident {
+		return name
+	}
+	return jsonString(name)
+}
+
+// biomeJSON is the rbxts-tuned Biome config (Biome 2.x schema): tab indent,
+// double quotes, import organizing on, recommended lint rules minus
+// noNonNullAssertion (rbxts code uses `!` heavily by design).
+const biomeJSON = `{
+	"$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
+	"files": {
+		"includes": ["src/**"]
 	},
-	"devDependencies": {
-		"@rbxts/compiler-types": "^3.0.0",
-		"@rbxts/types": "^1.0.800",
-		"typescript": "^5.5.0"
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"style": {
+				"noNonNullAssertion": "off"
+			}
+		}
 	}
 }
-`, jsonString(npmName(name)), privateLine)
+`
+
+// oxlintrcJSON enables oxlint's recommended categories over src.
+const oxlintrcJSON = `{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"categories": {
+		"correctness": "error",
+		"suspicious": "warn"
+	},
+	"ignorePatterns": ["node_modules/**", "out/**", "include/**"]
+}
+`
+
+// packageJSON renders the scaffolded package.json from the options: linter
+// scripts/devDeps and wizard-selected dependencies included. Rendering goes
+// through encoding/json so the output is valid JSON by construction.
+func packageJSON(opts initOptions) string {
+	pkg := struct {
+		Name            string            `json:"name"`
+		Version         string            `json:"version"`
+		Private         bool              `json:"private,omitempty"`
+		Scripts         map[string]string `json:"scripts"`
+		Dependencies    map[string]string `json:"dependencies,omitempty"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}{
+		Name:    npmName(opts.name),
+		Version: "0.1.0",
+		Private: opts.template == "game",
+		Scripts: map[string]string{
+			"build": "rotor build",
+			"watch": "rotor dev",
+		},
+		DevDependencies: map[string]string{
+			"@rbxts/compiler-types": "^3.0.0",
+			"@rbxts/types":          "^1.0.800",
+			"typescript":            "^5.5.0",
+		},
+	}
+	switch opts.linter {
+	case "biome":
+		pkg.DevDependencies["@biomejs/biome"] = biomeVersion
+		pkg.Scripts["lint"] = "biome check src"
+		pkg.Scripts["format"] = "biome format --write src"
+	case "oxlint":
+		pkg.DevDependencies["oxlint"] = oxlintVersion
+		pkg.Scripts["lint"] = "oxlint src"
+	}
+	if len(opts.packages) > 0 {
+		pkg.Dependencies = map[string]string{}
+		for _, i := range opts.packages {
+			for _, d := range extraPackages[i].deps {
+				pkg.Dependencies[d.name] = d.version
+			}
+		}
+	}
+	b, err := json.MarshalIndent(pkg, "", "\t")
+	if err != nil {
+		return "{}\n" // unreachable: the struct always marshals
+	}
+	return string(b) + "\n"
 }
 
 // tsconfigJSON renders the scaffolded tsconfig.json: the canonical rbxts shape
-// (no baseUrl), with the jsx options present but commented out. tsconfig.json
-// is JSONC, so the comment lines are valid for TypeScript tooling.
-func tsconfigJSON(declaration bool) string {
+// (no baseUrl). The jsx options are commented out unless a React package was
+// selected; tsconfig.json is JSONC, so comment lines are valid for tooling.
+func tsconfigJSON(declaration, jsx bool) string {
 	declarationLine := ""
 	if declaration {
 		declarationLine = "\t\t\"declaration\": true,\n"
+	}
+	jsxBlock := `		// jsx — uncomment for @rbxts/react
+		// "jsx": "react",
+		// "jsxFactory": "React.createElement",
+		// "jsxFragmentFactory": "React.Fragment",
+`
+	if jsx {
+		jsxBlock = `		// jsx — configured for @rbxts/react
+		"jsx": "react",
+		"jsxFactory": "React.createElement",
+		"jsxFragmentFactory": "React.Fragment",
+`
 	}
 	return fmt.Sprintf(`{
 	"compilerOptions": {
@@ -298,18 +539,14 @@ func tsconfigJSON(declaration bool) string {
 		"types": [],
 		"typeRoots": ["node_modules/@rbxts"],
 
-		// jsx — uncomment for @rbxts/react
-		// "jsx": "react",
-		// "jsxFactory": "React.createElement",
-		// "jsxFragmentFactory": "React.Fragment",
-
+%s
 		// configurable
 %s		"rootDir": "src",
 		"outDir": "out"
 	},
 	"include": ["src", "rotor-env.d.ts"]
 }
-`, declarationLine)
+`, jsxBlock, declarationLine)
 }
 
 // npmName lowercases a directory name and replaces characters that are not
@@ -340,28 +577,48 @@ func jsonString(s string) string {
 	return string(b)
 }
 
-func printInitNextSteps(u *ui, template, dir string, n int) {
-	fmt.Println()
-	u.okLine(fmt.Sprintf("scaffolded a %s project", template), fmt.Sprintf("in %s · %s", dir, plural(n, "file")))
-	fmt.Println()
-	fmt.Printf("  %s\n", u.s.Bold("next steps"))
+// detectPackageManager picks the install command to suggest: bun when a bun
+// lockfile already exists in the project dir or bun is on PATH, npm otherwise.
+func detectPackageManager(dir string) string {
+	if fileExists(filepath.Join(dir, "bun.lockb")) || fileExists(filepath.Join(dir, "bun.lock")) {
+		return "bun"
+	}
+	if _, err := exec.LookPath("bun"); err == nil {
+		return "bun"
+	}
+	return "npm"
+}
+
+func printInitNextSteps(u *ui, opts initOptions, n int) {
+	fmt.Fprintln(u.w)
+	u.okLine(fmt.Sprintf("scaffolded a %s project", opts.template), fmt.Sprintf("in %s · %s", opts.dir, plural(n, "file")))
+	fmt.Fprintln(u.w)
+	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
 	step := func(cmd, why string) {
 		if why == "" {
-			fmt.Printf("    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd))
+			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd))
 			return
 		}
 		pad := strings.Repeat(" ", max(1, 38-len(cmd)))
-		fmt.Printf("    %s %s%s%s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd), pad, u.s.Muted(why))
+		fmt.Fprintf(u.w, "    %s %s%s%s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info(cmd), pad, u.s.Muted(why))
 	}
-	if dir != "." {
-		step("cd "+dir, "")
+	if opts.dir != "." {
+		step("cd "+opts.dir, "")
 	}
-	if template == "plain" {
+	if opts.template == "plain" {
 		step("rotor pack --as luau -o bundle.luau", "package the project into one script")
 		step("rotor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
 		return
 	}
-	step("npm install", "(or bun install / pnpm install)")
+	pm := detectPackageManager(opts.dir)
+	if pm == "bun" {
+		step("bun install", "(or npm install)")
+	} else {
+		step("npm install", "(or bun install / pnpm install)")
+	}
 	step("rotor build", "compile to Luau")
 	step("rotor dev", "watch + serve to Studio")
+	if opts.linter != "" {
+		step(pm+" run lint", "lint the source")
+	}
 }
