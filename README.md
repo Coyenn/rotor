@@ -10,15 +10,78 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
-rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with **byte-identical Luau output** — alongside a native Luau bundler, minifier, dev loop, and packer (`bundle`, `minify`, `dev`, `pack`).
-
-```
-$ rotor check ./my-game -w
-rotor check — native TypeScript checking
-checked 222 files in 161 ms — 0 errors
-```
+rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with **byte-identical Luau output** — plus a native Luau toolchain and Open Cloud asset + deployment pipelines, all in one binary.
 
 📖 [Documentation](docs.md) · 🤝 [Contributing](CONTRIBUTING.md) · 🗺️ [Roadmap](roadmap.md)
+
+## Features
+
+**Compile & check** — the rbxtsc replacement:
+
+```sh
+rotor check ./my-game -w     # native full-strictness typecheck: 222 files in 161 ms
+rotor build ./my-game -w     # byte-identical Luau, watch mode, incremental rebuilds
+rotor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
+```
+
+Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags. Plus built-in extensions rbxtsc doesn't have: **`$env`** (compile-time environment variables from `.env` — `$env.GAME_NAME`, `$env("KEY", "fallback")`, no plugin needed) and **`$getModuleTree` on folders** (no `index.ts` required).
+
+**Luau toolchain** — works on any Rojo project, no rbxts required:
+
+```sh
+rotor dev                    # watch + incremental compile + rojo serve to Studio
+rotor bundle entry.luau -o bundle.luau --minify   # inline a require graph, still runnable
+rotor minify file.luau       # strip comments/whitespace, keep --! directives
+rotor pack --as luau         # whole project -> one self-reconstructing script (or rbxm/rbxmx)
+rotor sourcemap -o sourcemap.json                 # Rojo-compatible, for luau-lsp
+```
+
+**Cloud** — assets and deployment from one typed config (see below):
+
+```sh
+rotor asset sync             # upload new/changed assets, lockfile, typed codegen
+rotor deploy plan -e prod    # diff config vs live state (terraform-style, no network writes)
+rotor deploy apply -e prod   # publish places, settings, badges — only what drifted
+```
+
+**Scaffolding** — `rotor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
+
+## Configuration — `rotor.config.ts`
+
+One typed TypeScript config drives the cloud tools. rotor evaluates it natively (no Node needed), generates `rotor-config.d.ts` for editor typing, and refuses npm imports — it's config, not a program:
+
+```ts
+import { defineConfig } from "rotor/config";
+
+export default defineConfig({
+	assets: {
+		paths: ["assets/**/*.png", "assets/**/*.ogg"],
+		output: { luau: "src/shared/assets.luau", types: "src/shared/assets.d.ts" },
+		creator: { type: "group", id: 12345 },
+	},
+	deploy: {
+		environments: {
+			dev: {
+				universeId: 111,
+				places: { start: { file: "build/game.rbxl", placeId: 222 } },
+			},
+			prod: {
+				universeId: 333,
+				places: { start: { file: "build/game.rbxl", placeId: 444 } },
+				experience: { name: "My Game", playability: "public" },
+				badges: { winner: { name: "Winner!", description: "Beat the game", icon: "assets/badge.png" } },
+			},
+		},
+	},
+});
+```
+
+- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable), and generates `assets.luau` + `assets.d.ts`, so code references `assets.sounds.hit` instead of hardcoded `rbxassetid://` strings.
+- **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing, experience settings, badges (icons upload automatically first). Deletes require `--allow-deletes`.
+- Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
+- Compile-time env vars come from `.env` / `.env.<NODE_ENV>` next to your tsconfig and are inlined by the `$env` macro; rotor writes `rotor-env.d.ts` so your editor sees the types.
+
+Full config shape and every command flag: [docs.md](docs.md).
 
 ## Install
 
@@ -63,15 +126,6 @@ Or build from source (Go 1.25+):
 git clone https://github.com/uproot/rotor && cd rotor
 go build ./cmd/rotor
 ```
-
-Then point it at any rbxts project:
-
-```sh
-rotor check ./my-game      # native, full-strictness typecheck
-rotor build ./my-game -w   # compile to Luau, watch mode
-```
-
-See the [documentation](docs.md) for all commands (`doctor`, `bundle`, `minify`, `dev`, `pack`) and options.
 
 ## Benchmarks
 
