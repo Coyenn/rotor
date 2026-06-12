@@ -214,6 +214,12 @@ Success criteria (from the design spec):
 - [x] **`rotor doctor`** — new command diagnosing project setup with ✓/!/✗ rows + hints: tsconfig discovery, `node_modules`, `@rbxts/compiler-types`/`@rbxts/types`/`typescript` versions, Node.js (hard requirement only when transformer plugins are configured), per-plugin resolution, embedded-sidecar extraction, Rojo project file + CLI. Exit 1 only on hard failures
 - [x] **Security hardening** — output-path containment guard (`filepath.IsLocal` on every compiled output's project-relative path before writing), sidecar cache extraction tightened to `0o700`/`0o600`, and a `vuln` CI job running pinned `govulncheck@v1.3.0 ./...` (validated locally: "No vulnerabilities found")
 
+**v1.2.1 — transformer/render/resolution fixes (June 12, 2026):**
+
+- [x] **Void expressions** — port `transformVoidExpression`: the operand is transformed in statement form (prereq'd for its side effects) and the expression evaluates to `nil`; byte-identical to rbxtsc v3.0.0 in both statement position (`void f()` → `f()` plus the discarded temp) and value position (`const x = void f()` → prereq `f()`, `local x = nil`)
+- [x] **Empty-return render** — `return $tuple()` lowers to a `ReturnStatement` with an empty expression list; render it byte-exactly like upstream luau-ast (`return ` with trailing space) instead of treating it as an invariant violation and panicking with an internal compiler error. Other `renderExprOrList` callers (assignments, declarations) keep the invariant
+- [x] **Symlink-cache resolution fix (tsgo)** — stop fabricating symlink cache entries for packages that resolved without a symlink (any plain npm/bun install). The bogus entries rebased every import of the affected package onto a nonexistent project-root path, surfacing as intermittent, map-iteration-order-dependent `noRojoData` failures; now matches the strada guard on `resolution.originalPath` truthiness
+
 **Remaining:**
 
 - ~~Keep one warm Node sidecar session across `build -w` rebuilds instead of respawning per polling cycle~~ — landed June 10, 2026 (transformer-plugin hardening; see Phase 4 sidecar entry)
