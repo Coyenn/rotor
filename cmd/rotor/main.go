@@ -48,6 +48,8 @@ func run(args []string) int {
 		return cmdBundle(args[1:])
 	case "dev":
 		return cmdDev(args[1:])
+	case "pack":
+		return cmdPack(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -78,6 +80,9 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "                               inline a Luau require graph into one runnable file")
 	fmt.Fprintln(w, "  rotor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio")
 	fmt.Fprintln(w, "                               via `rojo serve` (the dev inner loop)")
+	fmt.Fprintln(w, "  rotor pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path]")
+	fmt.Fprintln(w, "                               package a Rojo project into one self-reconstructing")
+	fmt.Fprintln(w, "                               Luau script, or a Roblox model file (via rojo build)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
