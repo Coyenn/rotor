@@ -242,7 +242,7 @@ own plan.*
 
 - [x] **A.1 — Lexer** (`internal/luau/lex`; plan: `docs/superpowers/plans/2026-06-12-rotor-luau-lexer.md`) — hand-written single-pass tokenizer that keeps whitespace/comment trivia with byte offsets + line/col. Core invariant: concatenating every token's text reproduces the source exactly. Full Luau lexical surface (long strings/comments with bracket levels, backtick interpolation with nested holes, `//`/`::`/`->`/compound-assign longest-match, numeric separators + `0x`/`0b` + hex floats without swallowing `..`). Permissive lexemes, non-panicking recovery. **Verified: 405 real Luau files roundtrip byte-exact (RuntimeLib, Promise, 44 conformance specs, 224 `@rbxts` package files); fuzzed 5.2M execs, 0 failures.**
 - [x] **A.2 — CST + parser** (`internal/luau/cst`; plan: `docs/superpowers/plans/2026-06-12-rotor-luau-cst-parser.md`) — Roslyn-style trivia attachment (`TokenRef` leading/trailing, proven on 405 files via `Flatten(AttachTrivia(src)) == src`), surface-faithful node taxonomy, hand-written recursive-descent + Pratt parser with error recovery, faithful tree `Unparse` (the retain-lines serializer). Full Luau: expressions (suffix chains, operators, tables, interpolation, if-expr), statements (local/assign/compound, do/while/repeat, numeric+generic for, if/elseif/else, function decls, type aliases, break/continue/return), function bodies (generics, typed/vararg params, return types), and the type grammar (named+packs `T...`, table/function/union/intersection/optional/typeof/singleton). prefixexp-vs-simpleexp split (no table-swallows-`(` ambiguity). **GATE: 405/405 corpus files parse with zero diagnostics and Unparse byte-exact; fuzzed ~4M execs, 0 failures.**
-- [ ] **A.3 — Generators** (`internal/luau/gen`) — `readable` (pretty) and `dense` (minified) serializers on top of the CST (the `retain_lines`/faithful serializer is `cst.Unparse`, done in A.2)
+- [~] **A.3 — Generators** — `dense` (minified) serializer DONE (`cst.Dense`, in `internal/luau/cst/dense.go`): block-aware, drops trivia, minimal whitespace (exact boundary re-lex), `;` inserted for the Lua call-ambiguity; the faithful `retain_lines` serializer is `cst.Unparse` (A.2). **GATE: 405/405 corpus files minify to valid Luau with byte-identical significant tokens, 61.9% of original size.** `readable` (pretty) generator still pending. (Generators live in `cst`, not a separate `gen` package, since they need the unexported tree visitor.)
 
 **Sub-project B — `rotor dev`** (watch cwd + incremental build + supervise `rojo serve`; independent of A)
 
@@ -250,7 +250,8 @@ own plan.*
 
 **Sub-project C — Minifier** (`rotor minify`; depends on A)
 
-- [ ] Scope-aware `rename_variables`, `remove_comments`, dense output, `convert_index_to_field`
+- [x] **`rotor minify <file> [-o out]` MVP** — `cst.Minify` + the CLI command: drops comments + whitespace via `cst.Dense`, preserves leading `--!` directives, fails on parse/lex diagnostics. Verified end-to-end (RuntimeLib 6018→4373 bytes, still valid). 405/405 corpus semantics-preserving.
+- [ ] Scope-aware `rename_variables` (locals/params), `convert_index_to_field`, `group_local_assignment` (further size wins; Lune behavioral-equivalence gate)
 
 **Sub-project D — Bundler** (`rotor bundle`; depends on A + `internal/rojo`)
 
