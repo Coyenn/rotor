@@ -46,6 +46,8 @@ func run(args []string) int {
 		return cmdMinify(args[1:])
 	case "bundle":
 		return cmdBundle(args[1:])
+	case "dev":
+		return cmdDev(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
@@ -74,6 +76,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "                               keeps --! directives; writes to stdout without -o)")
 	fmt.Fprintln(w, "  rotor bundle <entry> [-o out] [--minify]")
 	fmt.Fprintln(w, "                               inline a Luau require graph into one runnable file")
+	fmt.Fprintln(w, "  rotor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio")
+	fmt.Fprintln(w, "                               via `rojo serve` (the dev inner loop)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Build options (rbxtsc-compatible; booleans accept --flag, --flag=false, --no-flag):")
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
