@@ -1,122 +1,130 @@
-// Package config loads and evaluates a project's rotor.config.ts natively,
-// with no Node dependency: esbuild (Go API) bundles/transpiles the TypeScript
-// to CommonJS, and goja (a pure-Go JavaScript engine) evaluates the result.
+// Package config loads a project's rotor.toml configuration natively.
 //
-// The "rotor/config" module imported by config files is virtual: an esbuild
-// plugin resolves it in-memory to `export const defineConfig = (c) => c;`.
-// Relative imports of other project .ts/.js files are bundled; bare npm
-// imports are rejected with a clear error.
+// rotor.toml is the primary (and only auto-loaded) config format: Load reads
+// it via github.com/BurntSushi/toml into the same Config structs that 1.x
+// exposed, so every consumer (asset, deploy, doctor) is unchanged aside from
+// the load call. Its first line carries a taplo `#:schema ./rotor.schema.json`
+// directive, and a rotor-generated rotor.schema.json (see schema.go) gives
+// editors validation + completion.
+//
+// The legacy rotor.config.ts loader (esbuild + goja, the pure-Go TypeScript
+// pipeline that 1.x used) survives only as LoadLegacyTS, called exclusively by
+// `rotor migrate` to convert an existing rotor.config.ts to rotor.toml.
+//
+// Struct fields carry both json and toml tags: toml drives loading, while the
+// json tags remain the canonical key names used by deploy's content hashing
+// and by `rotor migrate` when it serializes a migrated config.
 package config
 
 import "fmt"
 
-// Config is the typed shape of the object default-exported from
-// rotor.config.ts. All sections are optional.
+// Config is the typed shape of rotor.toml (and, via the legacy path, the
+// object default-exported from rotor.config.ts). All sections are optional.
 type Config struct {
-	Assets *AssetsConfig `json:"assets,omitempty"`
-	Deploy *DeployConfig `json:"deploy,omitempty"`
+	Assets *AssetsConfig `json:"assets,omitempty" toml:"assets,omitempty"`
+	Deploy *DeployConfig `json:"deploy,omitempty" toml:"deploy,omitempty"`
 
 	// Warnings collects non-fatal issues discovered while loading the config
 	// (for example unknown top-level keys, which are tolerated for forward
 	// compatibility). It is populated by Load and is not part of the config
 	// shape itself.
-	Warnings []string `json:"-"`
+	Warnings []string `json:"-" toml:"-"`
 }
 
 // AssetsConfig configures `rotor asset sync` and the `$asset` macro.
 type AssetsConfig struct {
 	// Mode selects how assets reach Luau: "module" (generate assets.luau +
 	// assets.d.ts; default) or "macro" (the $asset transformer + rotor-asset.d.ts).
-	Mode    string       `json:"mode,omitempty"`
-	Paths   []string     `json:"paths,omitempty"`
-	Output  AssetsOutput `json:"output,omitempty"`
-	Creator Creator      `json:"creator,omitempty"`
+	Mode    string       `json:"mode,omitempty" toml:"mode,omitempty"`
+	Paths   []string     `json:"paths,omitempty" toml:"paths,omitempty"`
+	Output  AssetsOutput `json:"output,omitempty" toml:"output,omitempty"`
+	Creator Creator      `json:"creator,omitempty" toml:"creator,omitempty"`
 }
 
 // AssetsOutput is where generated asset modules are written.
 type AssetsOutput struct {
-	Luau  string `json:"luau,omitempty"`
-	Types string `json:"types,omitempty"`
+	Luau  string `json:"luau,omitempty" toml:"luau,omitempty"`
+	Types string `json:"types,omitempty" toml:"types,omitempty"`
 }
 
 // Creator identifies the Roblox creator that owns uploaded assets.
 type Creator struct {
-	Type string `json:"type,omitempty"` // "user" | "group"
-	ID   int64  `json:"id,omitempty"`
+	Type string `json:"type,omitempty" toml:"type,omitempty"` // "user" | "group"
+	ID   int64  `json:"id,omitempty" toml:"id,omitempty"`
 }
 
 // DeployConfig configures `rotor deploy`.
 type DeployConfig struct {
-	Environments map[string]Environment `json:"environments,omitempty"`
+	Environments map[string]Environment `json:"environments,omitempty" toml:"environments,omitempty"`
 }
 
 // Environment is one named deploy target (e.g. "dev", "prod").
 type Environment struct {
-	UniverseID  int64                  `json:"universeId,omitempty"`
-	Places      map[string]PlaceDeploy `json:"places,omitempty"`
-	Experience  *ExperienceConfig      `json:"experience,omitempty"`
-	Payments    string                 `json:"payments,omitempty"`
-	Badges      map[string]Badge       `json:"badges,omitempty"`
-	GamePasses  map[string]GamePass    `json:"gamepasses,omitempty"`
-	Icon        string                 `json:"icon,omitempty"`        // experience icon image path
-	Thumbnails  []string               `json:"thumbnails,omitempty"`  // ordered thumbnail image paths (max 10)
-	Products    map[string]Product     `json:"products,omitempty"`    // developer products
-	SocialLinks map[string]SocialLink  `json:"socials,omitempty"` // universe social links
+	UniverseID  int64                  `json:"universeId,omitempty" toml:"universeId,omitempty"`
+	Places      map[string]PlaceDeploy `json:"places,omitempty" toml:"places,omitempty"`
+	Experience  *ExperienceConfig      `json:"experience,omitempty" toml:"experience,omitempty"`
+	Payments    string                 `json:"payments,omitempty" toml:"payments,omitempty"`
+	Badges      map[string]Badge       `json:"badges,omitempty" toml:"badges,omitempty"`
+	GamePasses  map[string]GamePass    `json:"gamepasses,omitempty" toml:"gamepasses,omitempty"`
+	Icon        string                 `json:"icon,omitempty" toml:"icon,omitempty"`             // experience icon image path
+	Thumbnails  []string               `json:"thumbnails,omitempty" toml:"thumbnails,omitempty"` // ordered thumbnail image paths (max 10)
+	Products    map[string]Product     `json:"products,omitempty" toml:"products,omitempty"`     // developer products
+	SocialLinks map[string]SocialLink  `json:"socials,omitempty" toml:"socials,omitempty"`       // universe social links
 }
 
 // PlaceDeploy publishes a built place file to a place id and optionally
 // manages the place's metadata.
 type PlaceDeploy struct {
-	File        string `json:"file,omitempty"`
-	PlaceID     int64  `json:"placeId,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	MaxPlayers  int32  `json:"maxPlayers,omitempty"`
-	VersionType string `json:"versionType,omitempty"` // "saved" | "published" (default)
+	File        string `json:"file,omitempty" toml:"file,omitempty"`
+	PlaceID     int64  `json:"placeId,omitempty" toml:"placeId,omitempty"`
+	Name        string `json:"name,omitempty" toml:"name,omitempty"`
+	Description string `json:"description,omitempty" toml:"description,omitempty"`
+	MaxPlayers  int32  `json:"maxPlayers,omitempty" toml:"maxPlayers,omitempty"`
+	VersionType string `json:"versionType,omitempty" toml:"versionType,omitempty"` // "saved" | "published" (default)
 }
 
 // ExperienceConfig updates universe-level settings.
 type ExperienceConfig struct {
-	Name           string          `json:"name,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	Playability    string          `json:"playability,omitempty"` // "public" | "private" | "friends"
-	PrivateServers *PrivateServers `json:"privateServers,omitempty"`
+	Name           string          `json:"name,omitempty" toml:"name,omitempty"`
+	Description    string          `json:"description,omitempty" toml:"description,omitempty"`
+	Playability    string          `json:"playability,omitempty" toml:"playability,omitempty"` // "public" | "private" | "friends"
+	PrivateServers *PrivateServers `json:"privateServers,omitempty" toml:"privateServers,omitempty"`
 }
 
 // PrivateServers enables paid private servers; a nil/absent Price means free
 // (0 Robux).
 type PrivateServers struct {
-	Price *int64 `json:"price,omitempty"`
+	Price *int64 `json:"price,omitempty" toml:"price,omitempty"`
 }
 
 // Badge declares a badge to create or update.
 type Badge struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Icon        string `json:"icon,omitempty"`
+	Name        string `json:"name,omitempty" toml:"name,omitempty"`
+	Description string `json:"description,omitempty" toml:"description,omitempty"`
+	Icon        string `json:"icon,omitempty" toml:"icon,omitempty"`
 }
 
 // GamePass declares a game pass to create or update. A nil Price leaves the
 // pass not for sale.
 type GamePass struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Price       *int64 `json:"price,omitempty"`
-	Icon        string `json:"icon,omitempty"`
+	Name        string `json:"name,omitempty" toml:"name,omitempty"`
+	Description string `json:"description,omitempty" toml:"description,omitempty"`
+	Price       *int64 `json:"price,omitempty" toml:"price,omitempty"`
+	Icon        string `json:"icon,omitempty" toml:"icon,omitempty"`
 }
 
 // Product declares a developer product to create or update.
 type Product struct {
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Price       int64  `json:"price,omitempty"`
+	Name        string `json:"name,omitempty" toml:"name,omitempty"`
+	Description string `json:"description,omitempty" toml:"description,omitempty"`
+	Price       int64  `json:"price,omitempty" toml:"price,omitempty"`
 }
 
 // SocialLink declares a universe social link.
 type SocialLink struct {
-	Title string `json:"title,omitempty"`
-	URL   string `json:"url,omitempty"`
-	Type  string `json:"type,omitempty"` // facebook|twitter|youtube|twitch|discord|github|guilded
+	Title string `json:"title,omitempty" toml:"title,omitempty"`
+	URL   string `json:"url,omitempty" toml:"url,omitempty"`
+	Type  string `json:"type,omitempty" toml:"type,omitempty"` // facebook|twitter|youtube|twitch|discord|github|guilded
 }
 
 // socialLinkTypes is the accepted SocialLink.Type enum.
@@ -135,6 +143,13 @@ func SocialLinkTypeValid(t string) bool { return socialLinkTypes[t] }
 func (c *Config) Validate() []error {
 	var errs []error
 	if c.Assets != nil {
+		switch c.Assets.Mode {
+		case "", "module", "macro":
+		default:
+			errs = append(errs, fmt.Errorf(
+				"assets.mode must be %q or %q, got %q",
+				"module", "macro", c.Assets.Mode))
+		}
 		switch c.Assets.Creator.Type {
 		case "user", "group":
 		default:

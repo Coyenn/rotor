@@ -3,6 +3,7 @@ module rotor
 go 1.26.4
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/dop251/goja v0.0.0-20260607120635-348e6bea910d
 	github.com/evanw/esbuild v0.28.1

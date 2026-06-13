@@ -41,7 +41,7 @@ func TestCmdInitGame(t *testing.T) {
 
 	for _, f := range []string{
 		"package.json", "tsconfig.json", "default.project.json",
-		".gitignore", "rotor.config.ts", "include/.gitkeep",
+		".gitignore", "rotor.toml", "include/.gitkeep",
 		"src/shared/module.ts", "src/server/main.server.ts", "src/client/main.client.ts",
 	} {
 		if !fileExists(filepath.Join(dir, f)) {
@@ -99,10 +99,15 @@ func TestCmdInitGame(t *testing.T) {
 		t.Errorf("compilerOptions outDir/rootDir = %v/%v, want out/src", opts["outDir"], opts["rootDir"])
 	}
 
-	// rotor-config.d.ts is written whenever the declarations are wired in.
-	hasDecls := fileExists(filepath.Join(dir, "rotor-config.d.ts"))
-	if want := configTypeDeclarations != ""; hasDecls != want {
-		t.Errorf("rotor-config.d.ts present = %v, want %v", hasDecls, want)
+	// rotor.schema.json is written whenever the schema is wired in.
+	hasSchema := fileExists(filepath.Join(dir, "rotor.schema.json"))
+	if want := configSchema != ""; hasSchema != want {
+		t.Errorf("rotor.schema.json present = %v, want %v", hasSchema, want)
+	}
+	// rotor.toml's first line carries the taplo #:schema directive.
+	toml := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
+	if !strings.HasPrefix(toml, "#:schema ./rotor.schema.json") {
+		t.Errorf("rotor.toml should start with the #:schema directive:\n%s", toml)
 	}
 
 	// rotor-env.d.ts gives editors the $env macro types; the tsconfig include
@@ -165,7 +170,7 @@ func TestCmdInitPlainTemplate(t *testing.T) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "rotor.config.ts", "rotor-config.d.ts", "rotor-env.d.ts"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "rotor.toml", "rotor.schema.json", "rotor-env.d.ts"} {
 		if fileExists(filepath.Join(dir, f)) {
 			t.Errorf("plain template should not write %s", f)
 		}

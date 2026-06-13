@@ -17,7 +17,7 @@ import (
 )
 
 // cmdAsset is `rotor asset <sync|list>`: an asphalt-style asset pipeline.
-// `sync` scans the globs configured under `assets` in rotor.config.ts,
+// `sync` scans the globs configured under `[assets]` in rotor.toml,
 // uploads new/changed files via Open Cloud, records ids in rotor-lock.json,
 // and regenerates the typed accessor modules (assets.luau + assets.d.ts).
 // `list` prints the lockfile. `--dry-run` shows the sync plan and stops
@@ -78,7 +78,7 @@ func cmdAsset(args []string) int {
 func assetUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  rotor asset sync [path] [--dry-run]")
-	fmt.Fprintln(w, "      scan the asset globs from rotor.config.ts, upload new/changed files")
+	fmt.Fprintln(w, "      scan the asset globs from rotor.toml, upload new/changed files")
 	fmt.Fprintln(w, "      via Open Cloud (decals + audio), record ids in rotor-lock.json, and")
 	fmt.Fprintln(w, "      regenerate the typed accessor modules (assets.luau / assets.d.ts);")
 	fmt.Fprintln(w, "      --dry-run prints the plan without uploading (no API key needed)")
@@ -103,7 +103,7 @@ func assetSync(dir string, dryRun bool) int {
 
 	cfg, err := config.Load(dir)
 	if errors.Is(err, config.ErrNotFound) {
-		errUI.failLine(fmt.Sprintf("rotor asset: no rotor.config.ts found in %q (asset sync needs an `assets` section)", dir))
+		errUI.failLine(fmt.Sprintf("rotor asset: no rotor.toml found in %q (asset sync needs an [assets] section)", dir))
 		return 1
 	}
 	if err != nil {
@@ -113,9 +113,9 @@ func assetSync(dir string, dryRun bool) int {
 	for _, w := range cfg.Warnings {
 		errUI.warn("rotor asset: " + w)
 	}
-	refreshConfigTypes(u, dir)
+	refreshConfigSchema(u, dir)
 	if cfg.Assets == nil || len(cfg.Assets.Paths) == 0 {
-		errUI.failLine("rotor asset: rotor.config.ts has no `assets` section (or assets.paths is empty)")
+		errUI.failLine("rotor asset: rotor.toml has no [assets] section (or assets.paths is empty)")
 		return 1
 	}
 
@@ -175,11 +175,11 @@ func assetSync(dir string, dryRun bool) int {
 	case "group":
 		creator.GroupID = cfg.Assets.Creator.ID
 	default:
-		errUI.failLine(fmt.Sprintf("rotor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.config.ts", cfg.Assets.Creator.Type))
+		errUI.failLine(fmt.Sprintf("rotor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.toml", cfg.Assets.Creator.Type))
 		return 1
 	}
 	if cfg.Assets.Creator.ID == 0 {
-		errUI.failLine("rotor asset: assets.creator.id is required in rotor.config.ts (the user or group that owns uploaded assets)")
+		errUI.failLine("rotor asset: assets.creator.id is required in rotor.toml (the user or group that owns uploaded assets)")
 		return 1
 	}
 	client, err := cloud.FromEnv()
@@ -229,17 +229,17 @@ func assetSync(dir string, dryRun bool) int {
 	return 0
 }
 
-// refreshConfigTypes keeps rotor-config.d.ts current whenever a command has
-// just loaded rotor.config.ts successfully. Best-effort: a failed write only
-// warns, and an up-to-date file is untouched (and unreported).
-func refreshConfigTypes(u *ui, dir string) {
-	wrote, err := config.RefreshTypeDeclarations(dir)
+// refreshConfigSchema keeps rotor.schema.json current whenever a command has
+// just loaded rotor.toml successfully. Best-effort: a failed write only warns,
+// and an up-to-date file is untouched (and unreported).
+func refreshConfigSchema(u *ui, dir string) {
+	wrote, err := config.RefreshSchema(dir)
 	if err != nil {
-		newUI(os.Stderr).warn("could not refresh " + config.TypeDeclarationsFileName + ": " + err.Error())
+		newUI(os.Stderr).warn("could not refresh " + config.SchemaFileName + ": " + err.Error())
 		return
 	}
 	if wrote {
-		u.noteLine(config.TypeDeclarationsFileName + "  (types refreshed)")
+		u.noteLine(config.SchemaFileName + "  (schema refreshed)")
 	}
 }
 

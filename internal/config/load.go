@@ -10,25 +10,96 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/dop251/goja"
 	"github.com/evanw/esbuild/pkg/api"
 )
 
-// ErrNotFound is returned by Load when the project has no rotor.config.ts
-// (or rotor.config.js). Callers treat the config as optional.
-var ErrNotFound = errors.New("rotor.config.ts not found")
+// ErrNotFound is returned by Load when the project has no rotor.toml.
+// Callers treat the config as optional.
+var ErrNotFound = errors.New("rotor.toml not found")
 
-// configFileNames lists accepted config file names, in priority order.
-var configFileNames = []string{"rotor.config.ts", "rotor.config.js"}
+// ConfigFileName is the primary config file rotor loads.
+const ConfigFileName = "rotor.toml"
 
-// evalTimeout bounds config evaluation so a buggy config (infinite loop)
-// cannot hang the CLI.
+// legacyConfigFileNames lists accepted legacy (TypeScript/JavaScript) config
+// file names, in priority order. They are read only by `rotor migrate`.
+var legacyConfigFileNames = []string{"rotor.config.ts", "rotor.config.js"}
+
+// evalTimeout bounds legacy config evaluation so a buggy config (infinite
+// loop) cannot hang the CLI.
 const evalTimeout = 10 * time.Second
 
-// virtualModuleSource is what the virtual "rotor/config" module resolves to.
+// virtualModuleSource is what the virtual "rotor/config" module resolves to
+// (legacy TypeScript path only).
 const virtualModuleSource = `export const defineConfig = (c) => c;`
 
-// Load finds and evaluates the project's rotor.config.ts (or rotor.config.js).
+// Load reads the project's rotor.toml into a *Config.
+//
+// Decoding is via github.com/BurntSushi/toml into the typed structs (toml
+// tags). Unknown keys are tolerated for forward compatibility: BurntSushi's
+// MetaData.Undecoded() reports them, and Load records each as a warning on the
+// returned Config rather than failing.
+//
+// Returns (nil, ErrNotFound) when rotor.toml does not exist. Validation
+// (enums, price >= 0, ...) is left to Config.Validate, exactly as before.
+func Load(projectDir string) (*Config, error) {
+	absDir, err := filepath.Abs(projectDir)
+	if err != nil {
+		return nil, fmt.Errorf("config: resolving project dir: %w", err)
+	}
+
+	configPath := filepath.Join(absDir, ConfigFileName)
+	if info, err := os.Stat(configPath); err != nil || info.IsDir() {
+		return nil, ErrNotFound
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("config: reading %s: %w", ConfigFileName, err)
+	}
+
+	cfg := &Config{}
+	meta, err := toml.Decode(string(data), cfg)
+	if err != nil {
+		return nil, fmt.Errorf("config: %s: %w", ConfigFileName, err)
+	}
+
+	// Unknown keys are forward-compatible: collect them as sorted warnings,
+	// skipping the taplo schema directive that lives as a leading comment (it
+	// is not a key, so it never appears here, but keep this robust).
+	var warnings []string
+	undecoded := meta.Undecoded()
+	keys := make([]string, 0, len(undecoded))
+	for _, k := range undecoded {
+		keys = append(keys, k.String())
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		warnings = append(warnings, fmt.Sprintf("%s: unknown key %q (ignored)", ConfigFileName, k))
+	}
+	cfg.Warnings = warnings
+	return cfg, nil
+}
+
+// MarshalTOML encodes cfg as a TOML document body (no #:schema directive — the
+// caller prepends that). It is used by `rotor migrate` to serialize a config
+// loaded from the legacy TypeScript path. The Warnings field carries the
+// `toml:"-"` tag and is omitted.
+func MarshalTOML(cfg *Config) (string, error) {
+	var buf strings.Builder
+	enc := toml.NewEncoder(&buf)
+	enc.Indent = ""
+	if err := enc.Encode(cfg); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// LoadLegacyTS finds and evaluates the project's legacy rotor.config.ts (or
+// rotor.config.js). It is the ONLY remaining user of the goja/esbuild
+// pipeline and is called exclusively by `rotor migrate` to convert an old
+// config to rotor.toml.
 //
 // Pipeline: esbuild bundles the config (Bundle=true, Platform=neutral,
 // Format=CommonJS, Target=ES2017 so the output is goja-safe, inline
@@ -41,17 +112,17 @@ const virtualModuleSource = `export const defineConfig = (c) => c;`
 // `module.exports.default` (or `module.exports` itself for configs written
 // as plain CommonJS).
 //
-// Returns (nil, ErrNotFound) when no config file exists. Non-fatal issues
-// (unknown top-level keys) are reported via the returned Config's Warnings
-// field.
-func Load(projectDir string) (*Config, error) {
+// Returns (nil, ErrNotFound) when no legacy config file exists. Non-fatal
+// issues (unknown top-level keys) are reported via the returned Config's
+// Warnings field.
+func LoadLegacyTS(projectDir string) (*Config, error) {
 	absDir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return nil, fmt.Errorf("config: resolving project dir: %w", err)
 	}
 
 	configPath := ""
-	for _, name := range configFileNames {
+	for _, name := range legacyConfigFileNames {
 		candidate := filepath.Join(absDir, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			configPath = candidate

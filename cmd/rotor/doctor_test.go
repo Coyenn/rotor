@@ -100,14 +100,14 @@ func TestRunDoctorReportsProjectState(t *testing.T) {
 }
 
 // cloudFixtureDir writes the minimal project skeleton the doctor needs to
-// reach the cloud section, plus an optional rotor.config.ts body.
+// reach the cloud section, plus an optional rotor.toml body.
 func cloudFixtureDir(t *testing.T, configBody string) string {
 	t.Helper()
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "tsconfig.json"), `{"compilerOptions": {}}`)
 	writeTestFile(t, filepath.Join(dir, "package.json"), `{"name": "fixture"}`)
 	if configBody != "" {
-		writeTestFile(t, filepath.Join(dir, "rotor.config.ts"), configBody)
+		writeTestFile(t, filepath.Join(dir, "rotor.toml"), configBody)
 	}
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -127,18 +127,19 @@ func cloudChecksByLabel(checks []doctorCheck) map[string][]doctorCheck {
 func TestRunDoctorCloudConfigValidationError(t *testing.T) {
 	t.Setenv("ROBLOX_API_KEY", "")
 	dir := cloudFixtureDir(t, `
-		import { defineConfig } from "rotor/config";
-		export default defineConfig({
-			assets: { paths: ["assets"], creator: { type: "banana", id: 1 } },
-		});
-	`)
+[assets]
+paths = ["assets"]
+[assets.creator]
+type = "banana"
+id = 1
+`)
 
 	checks, _ := runDoctor(dir)
 	byLabel := cloudChecksByLabel(checks)
 
-	configRows := byLabel["rotor.config.ts"]
+	configRows := byLabel["rotor.toml"]
 	if len(configRows) == 0 {
-		t.Fatalf("no rotor.config.ts check in %+v", checks)
+		t.Fatalf("no rotor.toml check in %+v", checks)
 	}
 	foundValidationFail := false
 	for _, c := range configRows {
@@ -165,15 +166,12 @@ func TestRunDoctorCloudConfigValidationError(t *testing.T) {
 func TestRunDoctorCloudValidConfigAndKeyPresence(t *testing.T) {
 	const secret = "rotor-test-secret-value-1234"
 	t.Setenv("ROBLOX_API_KEY", secret)
-	dir := cloudFixtureDir(t, `
-		import { defineConfig } from "rotor/config";
-		export default defineConfig({});
-	`)
+	dir := cloudFixtureDir(t, "# empty config\n")
 
 	checks, _ := runDoctor(dir)
 	byLabel := cloudChecksByLabel(checks)
 
-	configRows := byLabel["rotor.config.ts"]
+	configRows := byLabel["rotor.toml"]
 	if len(configRows) != 1 || configRows[0].status != doctorOK {
 		t.Errorf("valid config rows = %+v, want a single ok row", configRows)
 	}
@@ -198,7 +196,7 @@ func TestRunDoctorCloudNoConfigDegradesQuietly(t *testing.T) {
 	checks, _ := runDoctor(dir)
 	byLabel := cloudChecksByLabel(checks)
 
-	configRows := byLabel["rotor.config.ts"]
+	configRows := byLabel["rotor.toml"]
 	if len(configRows) != 1 || configRows[0].status != doctorInfo {
 		t.Errorf("no-config rows = %+v, want a single muted info row", configRows)
 	}

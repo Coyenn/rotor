@@ -100,7 +100,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			errUI.failLine(fmt.Sprintf("rotor deploy: no rotor.config.ts found in %s", projectDir))
+			errUI.failLine(fmt.Sprintf("rotor deploy: no rotor.toml found in %s", projectDir))
 			return 1
 		}
 		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
@@ -109,11 +109,11 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings {
 		errUI.warn("rotor deploy: " + w)
 	}
-	// The config just loaded — keep its editor types fresh (best-effort).
-	if wrote, terr := config.RefreshTypeDeclarations(projectDir); terr != nil {
-		errUI.warn("could not refresh " + config.TypeDeclarationsFileName + ": " + terr.Error())
+	// The config just loaded — keep its editor schema fresh (best-effort).
+	if wrote, terr := config.RefreshSchema(projectDir); terr != nil {
+		errUI.warn("could not refresh " + config.SchemaFileName + ": " + terr.Error())
 	} else if wrote {
-		u.noteLine(config.TypeDeclarationsFileName + "  (types refreshed)")
+		u.noteLine(config.SchemaFileName + "  (schema refreshed)")
 	}
 	if errs := cfg.Validate(); len(errs) > 0 {
 		for _, e := range errs {
@@ -274,8 +274,8 @@ func deployUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  plan             show what apply would do (no network, no API key needed)")
 	fmt.Fprintln(w, "  apply            execute the plan against Open Cloud (needs ROBLOX_API_KEY)")
-	fmt.Fprintln(w, "  path             project directory containing rotor.config.ts (default \".\")")
-	fmt.Fprintln(w, "  -e, --env <env>  deploy environment from rotor.config.ts (required)")
+	fmt.Fprintln(w, "  path             project directory containing rotor.toml (default \".\")")
+	fmt.Fprintln(w, "  -e, --env <env>  deploy environment from rotor.toml (required)")
 	fmt.Fprintln(w, "  --yes            skip the type-the-environment-name confirmation prompt")
 	fmt.Fprintln(w, "  --allow-deletes  permit removing resources that left the config")
 	fmt.Fprintln(w)

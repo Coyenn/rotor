@@ -24,18 +24,72 @@ type module struct {
 	replace map[cst.Node]string // require-call node -> loader call text
 }
 
-// Bundle resolves the require graph rooted at entryPath and returns a single Luau
-// source string that, when run, behaves like the original entry module (run-once
-// caching per module; a genuinely cyclic require errors at runtime like a Roblox
-// ModuleScript would).
+// Options tunes a bundle run.
+type Options struct {
+	// Exclude is a list of doublestar globs; a require whose resolved file path
+	// matches any of them is left verbatim (not inlined), for modules provided at
+	// runtime. Globs are matched against the resolved absolute path and, for
+	// robustness across platforms, also against the path relative to the bundle
+	// root (the entry file's directory).
+	Exclude []string
+}
+
+// Bundle resolves the require graph rooted at entryPath with default options.
 func Bundle(entryPath string) (string, error) {
+	return BundleWith(entryPath, Options{})
+}
+
+// BundleWith resolves the require graph rooted at entryPath and returns a single
+// Luau source string that, when run, behaves like the original entry module
+// (run-once caching per module; a genuinely cyclic require errors at runtime like
+// a Roblox ModuleScript would).
+//
+// Beyond plain code modules it also handles: .luaurc "@alias" requires (resolved
+// through the nearest .luaurc), data-file requires (.json -> Luau table, .txt/.md
+// -> Luau string, each a cached module), and --exclude globs (matching requires
+// left verbatim).
+func BundleWith(entryPath string, opts Options) (string, error) {
 	entryAbs, err := filepath.Abs(entryPath)
 	if err != nil {
 		return "", err
 	}
+	// The bundle root is the entry file's directory: the ceiling for .luaurc
+	// walk-up and the base for relative exclude-glob matching.
+	root := filepath.Dir(entryAbs)
+	aliases := newAliasResolver(root)
 
 	var modules []*module
 	byPath := map[string]*module{}
+
+	// excluded reports whether a resolved path matches any --exclude glob.
+	excluded := func(absPath string) bool {
+		if len(opts.Exclude) == 0 {
+			return false
+		}
+		rel, err := filepath.Rel(root, absPath)
+		for _, g := range opts.Exclude {
+			if matchGlob(g, absPath) {
+				return true
+			}
+			if err == nil && matchGlob(g, rel) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// newModule registers a parsed file as a module. src must already parse.
+	newModule := func(absPath, src string) (*module, error) {
+		file, diags := cst.Parse(src)
+		if len(diags) != 0 {
+			d := diags[0]
+			return nil, fmt.Errorf("%s:%d:%d: %s", absPath, d.Pos.Line, d.Pos.Col, d.Message)
+		}
+		m := &module{path: absPath, id: len(modules), file: file, replace: map[cst.Node]string{}}
+		byPath[absPath] = m // register before recursing so cycles terminate
+		modules = append(modules, m)
+		return m, nil
+	}
 
 	var process func(absPath string) (*module, error)
 	process = func(absPath string) (*module, error) {
@@ -46,17 +100,22 @@ func Bundle(entryPath string) (string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading %s: %w", absPath, err)
 		}
-		file, diags := cst.Parse(string(src))
-		if len(diags) != 0 {
-			d := diags[0]
-			return nil, fmt.Errorf("%s:%d:%d: %s", absPath, d.Pos.Line, d.Pos.Col, d.Message)
+		// Data files become synthetic `return <literal>` modules: no requires to
+		// walk, but otherwise an ordinary cached module.
+		if isDataFile(absPath) {
+			modSrc, err := dataModuleSource(absPath, src)
+			if err != nil {
+				return nil, err
+			}
+			return newModule(absPath, modSrc)
 		}
-		m := &module{path: absPath, id: len(modules), file: file, replace: map[cst.Node]string{}}
-		byPath[absPath] = m // register before recursing so cycles terminate
-		modules = append(modules, m)
+		m, err := newModule(absPath, string(src))
+		if err != nil {
+			return nil, err
+		}
 
 		var walkErr error
-		cst.EachNode(file, func(n cst.Node) {
+		cst.EachNode(m.file, func(n cst.Node) {
 			if walkErr != nil {
 				return
 			}
@@ -68,9 +127,12 @@ func Bundle(entryPath string) (string, error) {
 			if !ok {
 				return
 			}
-			resolved, ok := resolveRequire(absPath, reqPath)
+			resolved, ok := resolve(aliases, absPath, reqPath)
 			if !ok {
 				return // unresolved -> leave as a runtime require
+			}
+			if excluded(resolved) {
+				return // excluded -> leave as a runtime require
 			}
 			dep, err := process(resolved)
 			if err != nil {
@@ -112,13 +174,28 @@ func requireTarget(call *cst.Call) (string, bool) {
 	return "", false
 }
 
-// resolveRequire resolves a require path (relative to the requiring file) to an
-// existing Luau file, trying the Rojo/Luau extension and init conventions.
-func resolveRequire(fromFile, reqPath string) (string, bool) {
+// resolve maps a require path to an existing file. "@alias/..." requires are
+// expanded through the nearest .luaurc first; everything else (and the expanded
+// alias base) goes through resolveBase's extension/init conventions. Unresolved
+// requires (instance paths, missing files, unknown aliases) report ok == false
+// and are left verbatim by the caller.
+func resolve(aliases *aliasResolver, fromFile, reqPath string) (string, bool) {
 	if reqPath == "" {
 		return "", false
 	}
-	base := filepath.Join(filepath.Dir(fromFile), reqPath)
+	if base, ok := aliases.resolveAlias(fromFile, reqPath); ok {
+		return resolveBase(base)
+	}
+	if strings.HasPrefix(reqPath, "@") {
+		return "", false // alias-shaped but undefined: leave verbatim
+	}
+	return resolveBase(filepath.Join(filepath.Dir(fromFile), reqPath))
+}
+
+// resolveBase resolves an absolute base path to an existing file, trying the
+// Rojo/Luau extension and init conventions plus the verbatim path (so a require
+// that already names a file, e.g. "./data.json", resolves directly).
+func resolveBase(base string) (string, bool) {
 	for _, c := range []string{
 		base + ".luau",
 		base + ".lua",

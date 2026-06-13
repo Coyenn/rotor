@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -162,5 +166,129 @@ func TestUsageErrorsExitOne(t *testing.T) {
 	}
 	if got := cmdCheck([]string{"--bogus"}); got != 1 {
 		t.Errorf("unknown check flag exit = %d, want 1", got)
+	}
+}
+
+func TestParseBuildArgsJSON(t *testing.T) {
+	got, err := parseBuildArgs([]string{"--json", "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.jsonOut {
+		t.Error("--json not parsed")
+	}
+}
+
+// noLibGlobalStubs declares the fundamental global types the checker needs under
+// noLib; mirrored from internal/compile's test helper so cmd-level tests build
+// self-contained projects with no node_modules.
+const noLibGlobalStubs = "declare function print(...params: Array<unknown>): void;\n" +
+	"interface Array<T> {}\ninterface Boolean {}\ninterface CallableFunction {}\n" +
+	"interface Function {}\ninterface IArguments {}\ninterface NewableFunction {}\n" +
+	"interface Number {}\ninterface Object {}\ninterface RegExp {}\ninterface String {}\n"
+
+// writeBuildableProject writes a minimal, self-contained Package project (a
+// scoped name needs no Rojo config) that builds cleanly. mainSrc overrides
+// src/main.ts when non-empty (e.g. to inject a diagnostic).
+func writeBuildableProject(t *testing.T, mainSrc string) string {
+	t.Helper()
+	dir := t.TempDir()
+	tsconfig := `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out"
+	},
+	"include": ["src"]
+}`
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"), tsconfig)
+	mustWrite(t, filepath.Join(dir, "package.json"), `{"name":"@scope/build-json-fixture"}`)
+	mustWrite(t, filepath.Join(dir, "src", "globals.d.ts"), noLibGlobalStubs)
+	if mainSrc == "" {
+		mainSrc = "export {};\n"
+	}
+	mustWrite(t, filepath.Join(dir, "src", "main.ts"), mainSrc)
+	return dir
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
+// wrote, plus fn's return value.
+func captureStdout(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	prev := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	code := fn()
+	_ = w.Close()
+	os.Stdout = prev
+	data, _ := io.ReadAll(r)
+	return string(data), code
+}
+
+func TestCmdBuildJSONClean(t *testing.T) {
+	dir := writeBuildableProject(t, "")
+
+	output, code := captureStdout(t, func() int {
+		return cmdBuild([]string{"--json", dir})
+	})
+	if code != 0 {
+		t.Fatalf("cmdBuild --json (clean) exit = %d, want 0; output:\n%s", code, output)
+	}
+
+	var res jsonResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &res); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+	if !res.OK {
+		t.Errorf("ok = false on a clean build; diags: %+v", res.Diagnostics)
+	}
+	if res.Version == "" {
+		t.Error("version is empty")
+	}
+	if res.Files <= 0 {
+		t.Errorf("files = %d, want > 0", res.Files)
+	}
+	if res.Diagnostics == nil {
+		t.Error("diagnostics must be [] not null")
+	}
+}
+
+func TestCmdBuildJSONWithDiagnostic(t *testing.T) {
+	// A type error: assign a number to a string-typed const.
+	dir := writeBuildableProject(t, "export const s: string = 5;\n")
+
+	output, code := captureStdout(t, func() int {
+		return cmdBuild([]string{"--json", dir})
+	})
+	if code != 1 {
+		t.Fatalf("cmdBuild --json (error) exit = %d, want 1; output:\n%s", code, output)
+	}
+
+	var res jsonResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &res); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+	if res.OK {
+		t.Error("ok = true on a failing build")
+	}
+	if len(res.Diagnostics) == 0 {
+		t.Error("expected at least one diagnostic")
+	}
+	if res.Diagnostics[0].Severity != "error" {
+		t.Errorf("severity = %q, want error", res.Diagnostics[0].Severity)
+	}
+	if res.Diagnostics[0].Message == "" {
+		t.Error("diagnostic message is empty")
 	}
 }

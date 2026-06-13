@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -18,8 +17,8 @@ func TestResolveRojoProject(t *testing.T) {
 		dir := t.TempDir()
 		def := filepath.Join(dir, "default.project.json")
 		other := filepath.Join(dir, "aaa.project.json")
-		mustWrite(t, def)
-		mustWrite(t, other)
+		mustWrite(t, def, "{}")
+		mustWrite(t, other, "{}")
 		if got := resolveRojoProject(dir, ""); got != def {
 			t.Fatalf("got %q, want %q", got, def)
 		}
@@ -28,7 +27,7 @@ func TestResolveRojoProject(t *testing.T) {
 	t.Run("falls back to any project.json", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "game.project.json")
-		mustWrite(t, p)
+		mustWrite(t, p, "{}")
 		if got := resolveRojoProject(dir, ""); got != p {
 			t.Fatalf("got %q, want %q", got, p)
 		}
@@ -41,9 +40,3 @@ func TestResolveRojoProject(t *testing.T) {
 	})
 }
 
-func mustWrite(t *testing.T, path string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}

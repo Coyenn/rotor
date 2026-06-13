@@ -13,11 +13,11 @@ import (
 	"rotor/internal/config"
 )
 
-// configTypeDeclarations is the ambient config-module declaration
-// content written to rotor-config.d.ts so editors can type-check
-// rotor.config.ts. Kept as a var (rather than using the constant inline) so
-// the scaffold skips the file gracefully if the declarations are ever empty.
-var configTypeDeclarations = config.TypeDeclarations
+// configSchema is the JSON Schema written to rotor.schema.json so editors
+// (taplo / Even Better TOML) validate and complete rotor.toml. Kept as a var
+// (rather than using the constant inline) so the scaffold skips the file
+// gracefully if the schema is ever empty.
+var configSchema = config.Schema
 
 // cmdInit scaffolds a new rotor project. The game template (default) is a
 // full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
@@ -127,7 +127,7 @@ type initOptions struct {
 }
 
 // assetsOptions is the wizard's asset-sync answers; nil means "keep the
-// commented skeleton" in rotor.config.ts.
+// commented skeleton" in rotor.toml.
 type assetsOptions struct {
 	dir         string // asset directory, forward slashes, no trailing slash
 	creatorType string // "user" or "group"
@@ -135,7 +135,7 @@ type assetsOptions struct {
 }
 
 // deployOptions is the wizard's deploy answers; nil means "keep the commented
-// skeleton" in rotor.config.ts.
+// skeleton" in rotor.toml.
 type deployOptions struct {
 	env        string // environment name, e.g. "production"
 	universeID string // digits
@@ -309,7 +309,7 @@ print(makeHello("main.client.ts"));
 		)
 	}
 
-	files = append(files, initFile{"rotor.config.ts", rotorConfigTS(opts.assets, opts.deploy)})
+	files = append(files, initFile{config.ConfigFileName, rotorTOML(opts.assets, opts.deploy)})
 	switch opts.linter {
 	case "biome":
 		files = append(files, initFile{"biome.json", biomeJSON})
@@ -319,8 +319,8 @@ print(makeHello("main.client.ts"));
 	if opts.assets != nil {
 		files = append(files, initFile{opts.assets.dir + "/.gitkeep", ""})
 	}
-	if configTypeDeclarations != "" {
-		files = append(files, initFile{config.TypeDeclarationsFileName, configTypeDeclarations})
+	if configSchema != "" {
+		files = append(files, initFile{config.SchemaFileName, configSchema})
 	}
 	// Editor types for the $env macro; the scaffolded tsconfig lists the file
 	// under "include" so tsserver picks it up (the compiler skips its own
@@ -355,63 +355,74 @@ const tsHelloModule = `export function makeHello(name: string) {
 }
 `
 
-// rotorConfigTS renders rotor.config.ts. Sections the wizard configured are
-// written for real; skipped (nil) sections keep the commented skeleton.
-func rotorConfigTS(assets *assetsOptions, deploy *deployOptions) string {
+// rotorTOML renders rotor.toml. Its first line is the taplo `#:schema`
+// directive so editors validate + complete against rotor.schema.json. Sections
+// the wizard configured are written for real; skipped (nil) sections keep a
+// commented skeleton.
+func rotorTOML(assets *assetsOptions, deploy *deployOptions) string {
 	var b strings.Builder
-	b.WriteString("// rotor project configuration — read by `rotor asset sync` and\n")
-	b.WriteString("// `rotor deploy`. Uncomment the sections you need.\n")
-	b.WriteString("import { defineConfig } from \"@rotor-rbx/rotor\";\n")
-	b.WriteString("\nexport default defineConfig({\n")
+	b.WriteString(config.SchemaDirective + "\n\n")
+	b.WriteString("# rotor project configuration — read by `rotor asset sync` and\n")
+	b.WriteString("# `rotor deploy`. Uncomment the sections you need.\n")
+
 	if assets != nil {
-		fmt.Fprintf(&b, "\tassets: {\n")
-		fmt.Fprintf(&b, "\t\tpaths: [%q, %q],\n", assets.dir+"/**/*.png", assets.dir+"/**/*.ogg")
-		fmt.Fprintf(&b, "\t\toutput: { luau: \"src/shared/assets.luau\", types: \"src/shared/assets.d.ts\" },\n")
-		fmt.Fprintf(&b, "\t\tcreator: { type: %q, id: %s },\n", assets.creatorType, assets.creatorID)
-		b.WriteString("\t},\n")
+		b.WriteString("\n[assets]\n")
+		b.WriteString("mode = \"module\"\n")
+		fmt.Fprintf(&b, "paths = [%q, %q]\n", assets.dir+"/**/*.png", assets.dir+"/**/*.ogg")
+		b.WriteString("\n[assets.output]\n")
+		b.WriteString("luau = \"src/shared/assets.luau\"\n")
+		b.WriteString("types = \"src/shared/assets.d.ts\"\n")
+		b.WriteString("\n[assets.creator]\n")
+		fmt.Fprintf(&b, "type = %q\n", assets.creatorType)
+		fmt.Fprintf(&b, "id = %s\n", assets.creatorID)
 	} else {
-		b.WriteString(`	// assets: {
-	// 	paths: ["assets/**/*.png", "assets/**/*.ogg"],
-	// 	output: { luau: "src/shared/assets.luau", types: "src/shared/assets.d.ts" },
-	// 	creator: { type: "user", id: 0 },
-	// },
+		b.WriteString(`
+# [assets]
+# mode = "module"                 # "module" (assets.luau) | "macro" ($asset transformer)
+# paths = ["assets/**/*.png", "assets/**/*.ogg"]
+#
+# [assets.output]                 # only used in "module" mode
+# luau = "src/shared/assets.luau"
+# types = "src/shared/assets.d.ts"
+#
+# [assets.creator]
+# type = "user"                   # "user" | "group"
+# id = 0
 `)
 	}
+
 	if deploy != nil {
-		b.WriteString("\tdeploy: {\n\t\tenvironments: {\n")
-		fmt.Fprintf(&b, "\t\t\t%s: {\n", tsKey(deploy.env))
-		fmt.Fprintf(&b, "\t\t\t\tuniverseId: %s,\n", deploy.universeID)
-		fmt.Fprintf(&b, "\t\t\t\tplaces: { start: { file: %q, placeId: %s } },\n", deploy.placeFile, deploy.placeID)
-		b.WriteString("\t\t\t},\n\t\t},\n\t},\n")
+		fmt.Fprintf(&b, "\n[deploy.environments.%s]\n", tomlKey(deploy.env))
+		fmt.Fprintf(&b, "universeId = %s\n", deploy.universeID)
+		fmt.Fprintf(&b, "\n[deploy.environments.%s.places.start]\n", tomlKey(deploy.env))
+		fmt.Fprintf(&b, "file = %q\n", deploy.placeFile)
+		fmt.Fprintf(&b, "placeId = %s\n", deploy.placeID)
 	} else {
-		b.WriteString(`	// deploy: {
-	// 	environments: {
-	// 		dev: {
-	// 			universeId: 0,
-	// 			places: { start: { file: "build/game.rbxl", placeId: 0 } },
-	// 		},
-	// 	},
-	// },
+		b.WriteString(`
+# [deploy.environments.dev]
+# universeId = 0
+# [deploy.environments.dev.places.start]
+# file = "build/game.rbxl"
+# placeId = 0
 `)
 	}
-	b.WriteString("});\n")
 	return b.String()
 }
 
-// tsKey renders an object key for generated TypeScript: bare when it is a
-// valid identifier, quoted otherwise.
-func tsKey(name string) string {
-	ident := name != ""
-	for i, r := range name {
-		ok := r == '_' || r == '$' ||
+// tomlKey renders a TOML table key segment: bare when it is a valid bare key
+// (letters, digits, underscores, hyphens), quoted otherwise.
+func tomlKey(name string) string {
+	bare := name != ""
+	for _, r := range name {
+		ok := r == '_' || r == '-' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(i > 0 && r >= '0' && r <= '9')
+			(r >= '0' && r <= '9')
 		if !ok {
-			ident = false
+			bare = false
 			break
 		}
 	}
-	if ident {
+	if bare {
 		return name
 	}
 	return jsonString(name)

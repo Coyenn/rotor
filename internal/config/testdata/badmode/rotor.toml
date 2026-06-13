@@ -1,0 +1,8 @@
+#:schema ./rotor.schema.json
+
+[assets]
+mode = "bundle"
+
+[assets.creator]
+type = "user"
+id = 1

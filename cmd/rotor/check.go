@@ -15,6 +15,7 @@ import (
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/diagnostics"
 	"rotor/tsgo/diagnosticwriter"
+	"rotor/tsgo/scanner"
 	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/tspath"
 	"rotor/tsgo/vfs/cachedvfs"
@@ -23,11 +24,15 @@ import (
 
 func cmdCheck(args []string) int {
 	watch := false
+	jsonOut := false
 	path := ""
 	for _, a := range args {
 		switch a {
 		case "-w", "--watch":
 			watch = true
+		case "--json":
+			// rotor DX extension: emit one machine-readable result object.
+			jsonOut = true
 		case "-h", "--help":
 			usage(os.Stdout)
 			return 0
@@ -74,6 +79,12 @@ func cmdCheck(args []string) int {
 		}
 	}
 
+	// --json: suppress styled chrome and emit exactly one result object on
+	// stdout (watch has no terminal "end", so it stays styled).
+	if jsonOut && !watch {
+		return cmdCheckJSON(dir)
+	}
+
 	newUI(os.Stdout).banner(filepath.Base(dir))
 
 	if watch {
@@ -86,16 +97,52 @@ func cmdCheck(args []string) int {
 	return 0
 }
 
+// cmdCheckJSON runs a one-shot check and prints a single jsonResult object
+// (shared with `rotor build --json`) built from the structured diagnostics.
+// Exit code is unchanged: 1 when any error diagnostic is present, else 0.
+func cmdCheckJSON(dir string) int {
+	res := runCheckCollect(dir)
+	out := jsonResult{
+		Version:     version,
+		OK:          res.errorCount == 0,
+		Files:       res.fileCount,
+		DurationMs:  res.elapsed.Milliseconds(),
+		Diagnostics: res.jsonDiags,
+	}
+	writeJSONResult(os.Stdout, out)
+	if res.errorCount > 0 {
+		return 1
+	}
+	return 0
+}
+
 type checkResult struct {
 	fileCount  int
 	errorCount int
 	elapsed    time.Duration
 	watchFiles []string
+
+	// jsonDiags is the structured diagnostics list for `rotor check --json`,
+	// populated only by runCheckCollect (nil on the styled path).
+	jsonDiags []jsonDiagnostic
 }
 
-// runCheck builds a fresh program for the project in dir, prints all
-// diagnostics plus a summary line, and reports the file list to watch.
-func runCheck(dir string, out io.Writer) checkResult {
+// checkCore is the shared diagnostics-building result: the sorted AST
+// diagnostics plus the formatting options and metadata both the styled and
+// JSON renderers need. It builds the program once; callers choose how to emit.
+type checkCore struct {
+	diags      []*ast.Diagnostic
+	formatOpts *diagnosticwriter.FormattingOptions
+	fileCount  int
+	elapsed    time.Duration
+	watchFiles []string
+}
+
+// runCheckCore builds a fresh program for the project in dir and returns its
+// (sorted, deduplicated) diagnostics without rendering anything — the common
+// core of the styled runCheck and the JSON runCheckCollect, so both observe
+// identical diagnostics. The rotor-env.d.ts refresh still happens here (silent).
+func runCheckCore(dir string) checkCore {
 	start := time.Now()
 	slashDir := filepath.ToSlash(dir)
 
@@ -122,14 +169,12 @@ func runCheck(dir string, out io.Writer) checkResult {
 	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
 	if parsed == nil {
 		// Unreadable/unparsable config: report what we have and stop.
-		writeDiagnostics(out, configDiags, formatOpts)
-		res := checkResult{
-			errorCount: countErrors(configDiags),
+		return checkCore{
+			diags:      configDiags,
+			formatOpts: formatOpts,
 			elapsed:    time.Since(start),
 			watchFiles: []string{configPath},
 		}
-		printSummary(out, res)
-		return res
 	}
 	formatOpts.Locale = parsed.Locale()
 
@@ -163,16 +208,68 @@ func runCheck(dir string, out io.Writer) checkResult {
 	// project references $env (silent — check's stdout is byte-stable).
 	refreshEnvTypesForCheck(dir, parsed.FileNames(), program)
 
-	writeDiagnostics(out, diags, formatOpts)
-
-	res := checkResult{
+	return checkCore{
+		diags:      diags,
+		formatOpts: formatOpts,
 		fileCount:  len(program.GetSourceFiles()),
-		errorCount: countErrors(diags),
 		elapsed:    time.Since(start),
 		watchFiles: append([]string{configPath}, parsed.FileNames()...),
 	}
+}
+
+// runCheck builds a fresh program for the project in dir, prints all
+// diagnostics plus a summary line, and reports the file list to watch.
+func runCheck(dir string, out io.Writer) checkResult {
+	core := runCheckCore(dir)
+	writeDiagnostics(out, core.diags, core.formatOpts)
+	res := checkResult{
+		fileCount:  core.fileCount,
+		errorCount: countErrors(core.diags),
+		elapsed:    core.elapsed,
+		watchFiles: core.watchFiles,
+	}
 	printSummary(out, res)
 	return res
+}
+
+// runCheckCollect is runCheck's JSON sibling: it builds the same program and
+// diagnostics but renders nothing, returning a checkResult whose jsonDiags
+// carries the structured (file, line, col, severity, message) entries.
+func runCheckCollect(dir string) checkResult {
+	core := runCheckCore(dir)
+	return checkResult{
+		fileCount:  core.fileCount,
+		errorCount: countErrors(core.diags),
+		elapsed:    core.elapsed,
+		watchFiles: core.watchFiles,
+		jsonDiags:  jsonDiagnostics(core.diags, core.formatOpts),
+	}
+}
+
+// jsonDiagnostics converts AST diagnostics into the --json wire shape, mirroring
+// diagnosticwriter's location math (1-based line/col, project-relative file).
+func jsonDiagnostics(diags []*ast.Diagnostic, formatOpts *diagnosticwriter.FormattingOptions) []jsonDiagnostic {
+	out := make([]jsonDiagnostic, 0, len(diags))
+	for _, d := range diags {
+		jd := jsonDiagnostic{Severity: severityName(d), Message: d.String()}
+		if file := d.File(); file != nil {
+			line, character := scanner.GetECMALineAndUTF16CharacterOfPosition(file, d.Pos())
+			jd.Line = line + 1
+			jd.Col = int(character) + 1
+			jd.File = tspath.ConvertToRelativePath(file.FileName(), formatOpts.ComparePathsOptions)
+		}
+		out = append(out, jd)
+	}
+	return out
+}
+
+// severityName maps a diagnostic category to the --json severity string
+// ("error" | "warning"; suggestions/messages collapse to "warning").
+func severityName(d *ast.Diagnostic) string {
+	if d.Category() == diagnostics.CategoryError {
+		return "error"
+	}
+	return "warning"
 }
 
 // refreshEnvTypesForCheck mirrors the build-side rotor-env.d.ts refresh for

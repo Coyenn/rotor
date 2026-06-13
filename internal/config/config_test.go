@@ -1,8 +1,8 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +22,9 @@ func TestLoadValidFullConfig(t *testing.T) {
 
 	if cfg.Assets == nil {
 		t.Fatal("assets section missing")
+	}
+	if cfg.Assets.Mode != "macro" {
+		t.Errorf("assets.mode = %q, want macro", cfg.Assets.Mode)
 	}
 	wantPaths := []string{"assets/**/*.png", "assets/**/*.ogg"}
 	if len(cfg.Assets.Paths) != len(wantPaths) {
@@ -119,27 +122,6 @@ func TestLoadValidFullConfig(t *testing.T) {
 	}
 }
 
-func TestLoadRelativeImport(t *testing.T) {
-	cfg := load(t, "relimport")
-	if cfg.Assets == nil || cfg.Assets.Creator.Type != "user" || cfg.Assets.Creator.ID != 99 {
-		t.Fatalf("creator from relative import = %+v", cfg.Assets)
-	}
-	if cfg.Deploy == nil || cfg.Deploy.Environments["dev"].UniverseID != 777 {
-		t.Fatalf("universeId from imported function = %+v", cfg.Deploy)
-	}
-}
-
-func TestLoadDirectModuleExports(t *testing.T) {
-	cfg := load(t, "jsdirect") // rotor.config.js, module.exports = {...}
-	if cfg.Deploy == nil {
-		t.Fatal("deploy section missing")
-	}
-	dev := cfg.Deploy.Environments["dev"]
-	if dev.UniverseID != 42 || dev.Places["start"].PlaceID != 43 {
-		t.Fatalf("jsdirect dev env = %+v", dev)
-	}
-}
-
 func TestLoadMissingFile(t *testing.T) {
 	cfg, err := Load(t.TempDir())
 	if cfg != nil {
@@ -147,45 +129,6 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
-	}
-}
-
-func TestLoadNpmImport(t *testing.T) {
-	_, err := Load(filepath.Join("testdata", "npmimport"))
-	if err == nil {
-		t.Fatal("expected error for npm import")
-	}
-	if !strings.Contains(err.Error(), "npm imports") {
-		t.Fatalf("err = %v, want mention of npm imports", err)
-	}
-	if !strings.Contains(err.Error(), `"zod"`) {
-		t.Fatalf("err = %v, want offending module name", err)
-	}
-}
-
-func TestLoadSyntaxError(t *testing.T) {
-	_, err := Load(filepath.Join("testdata", "syntaxerror"))
-	if err == nil {
-		t.Fatal("expected error for syntax error")
-	}
-	if !strings.Contains(err.Error(), "rotor.config.ts") {
-		t.Fatalf("err = %v, want mention of rotor.config.ts", err)
-	}
-}
-
-func TestLoadRuntimeError(t *testing.T) {
-	_, err := Load(filepath.Join("testdata", "runtimeerror"))
-	if err == nil {
-		t.Fatal("expected error for throwing config")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "boom from config") {
-		t.Fatalf("err = %v, want the thrown message", err)
-	}
-	// Positions are sourcemapped back to the original file via the inline
-	// sourcemap; at minimum the original file name must appear.
-	if !strings.Contains(msg, "rotor.config.ts") {
-		t.Fatalf("err = %v, want mention of rotor.config.ts", err)
 	}
 }
 
@@ -202,7 +145,61 @@ func TestLoadUnknownKeyWarns(t *testing.T) {
 	}
 }
 
+func TestLoadBadModeValidates(t *testing.T) {
+	cfg := load(t, "badmode")
+	errs := cfg.Validate()
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "assets.mode") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Validate() = %v, want an assets.mode error", errs)
+	}
+}
+
+func TestLoadSyntaxError(t *testing.T) {
+	// A malformed rotor.toml is a hard load error (not ErrNotFound).
+	dir := t.TempDir()
+	writeConfigFile(t, dir, "rotor.toml", "this is = not [valid toml")
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected an error for malformed toml")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("malformed toml should not be ErrNotFound: %v", err)
+	}
+	if !strings.Contains(err.Error(), "rotor.toml") {
+		t.Fatalf("err = %v, want mention of rotor.toml", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
+	t.Run("bad assets mode", func(t *testing.T) {
+		cfg := &Config{Assets: &AssetsConfig{Mode: "bundle", Creator: Creator{Type: "user", ID: 1}}}
+		errs := cfg.Validate()
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), "assets.mode") {
+			t.Fatalf("Validate() = %v, want one assets.mode error", errs)
+		}
+	})
+
+	t.Run("empty mode is module default", func(t *testing.T) {
+		cfg := &Config{Assets: &AssetsConfig{Creator: Creator{Type: "user", ID: 1}}}
+		if errs := cfg.Validate(); len(errs) != 0 {
+			t.Fatalf("Validate() = %v, want clean", errs)
+		}
+	})
+
+	t.Run("module and macro modes ok", func(t *testing.T) {
+		for _, m := range []string{"module", "macro"} {
+			cfg := &Config{Assets: &AssetsConfig{Mode: m, Creator: Creator{Type: "user", ID: 1}}}
+			if errs := cfg.Validate(); len(errs) != 0 {
+				t.Fatalf("Validate(mode=%q) = %v, want clean", m, errs)
+			}
+		}
+	})
+
 	t.Run("bad creator type", func(t *testing.T) {
 		cfg := &Config{Assets: &AssetsConfig{Creator: Creator{Type: "person", ID: 1}}}
 		errs := cfg.Validate()
@@ -303,39 +300,30 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestTypeDeclarations(t *testing.T) {
-	if !strings.Contains(TypeDeclarations, `declare module "@rotor-rbx/rotor"`) {
-		t.Fatal("missing declare module")
+func TestSchemaIsValidJSON(t *testing.T) {
+	var root map[string]any
+	if err := json.Unmarshal([]byte(Schema), &root); err != nil {
+		t.Fatalf("Schema is not valid JSON: %v", err)
 	}
-	for _, name := range []string{
-		"AssetsOutput", "Creator", "AssetsConfig", "PlaceDeploy",
-		"ExperienceConfig", "PrivateServers", "Badge", "GamePass", "Product",
-		"SocialLink", "Environment", "DeployConfig", "Config",
-	} {
-		if !strings.Contains(TypeDeclarations, "export interface "+name+" {") {
-			t.Errorf("missing interface %s", name)
+	props, ok := root["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("schema has no top-level properties object")
+	}
+	for _, want := range []string{"assets", "deploy"} {
+		if _, ok := props[want]; !ok {
+			t.Errorf("schema properties missing %q", want)
 		}
 	}
-	if !strings.Contains(TypeDeclarations, "export function defineConfig(config: Config): Config;") {
-		t.Error("missing defineConfig declaration")
+	// $id / title are set.
+	if root["$id"] == nil || root["title"] == nil {
+		t.Errorf("schema missing $id/title: $id=%v title=%v", root["$id"], root["title"])
 	}
-	// A stray "*/" inside a doc comment (e.g. from a glob example) would
-	// truncate the declarations; every /** must pair with exactly one */.
-	if open, closed := strings.Count(TypeDeclarations, "/*"), strings.Count(TypeDeclarations, "*/"); open != closed {
-		t.Errorf("unbalanced block comments: %d open, %d close", open, closed)
-	}
-}
-
-func TestWriteTypeDeclarations(t *testing.T) {
-	dir := t.TempDir()
-	if err := WriteTypeDeclarations(dir); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, TypeDeclarationsFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != TypeDeclarations {
-		t.Fatal("written file does not match TypeDeclarations")
+	// At least one enum exists (assets.mode), proving enums are encoded.
+	assets, _ := props["assets"].(map[string]any)
+	aprops, _ := assets["properties"].(map[string]any)
+	mode, _ := aprops["mode"].(map[string]any)
+	enum, _ := mode["enum"].([]any)
+	if len(enum) != 2 {
+		t.Errorf("assets.mode enum = %v, want two values (module, macro)", mode["enum"])
 	}
 }

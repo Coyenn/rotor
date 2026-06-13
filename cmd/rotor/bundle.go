@@ -13,7 +13,10 @@ import (
 
 // cmdBundle bundles a Luau require graph rooted at an entry file into one runnable
 // file. Output goes to --output, or stdout when no output path is given. With
-// --minify the bundle is also minified.
+// --minify the bundle is also minified. --exclude <glob> (repeatable) leaves
+// requires whose resolved path matches a glob verbatim (for runtime-provided
+// modules); .json/.txt/.md requires are embedded as data modules; "@alias"
+// requires resolve through the nearest .luaurc.
 //
 // Output discipline: without -o the bundle itself is the stdout stream, so no
 // chrome is printed there; with -o the rotor banner + summary appear on stdout.
@@ -21,6 +24,7 @@ func cmdBundle(args []string) int {
 	entry := ""
 	output := ""
 	minify := false
+	var exclude []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -40,6 +44,15 @@ func cmdBundle(args []string) int {
 			output = strings.TrimPrefix(a, "--output=")
 		case strings.HasPrefix(a, "-o="):
 			output = strings.TrimPrefix(a, "-o=")
+		case a == "--exclude":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "rotor bundle: %s requires a glob\n", a)
+				return 1
+			}
+			i++
+			exclude = append(exclude, args[i])
+		case strings.HasPrefix(a, "--exclude="):
+			exclude = append(exclude, strings.TrimPrefix(a, "--exclude="))
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "rotor bundle: unknown flag %q\n\n", a)
 			usage(os.Stderr)
@@ -65,7 +78,7 @@ func cmdBundle(args []string) int {
 	}
 
 	start := time.Now()
-	out, err := bundle.Bundle(entry)
+	out, err := bundle.BundleWith(entry, bundle.Options{Exclude: exclude})
 	if err != nil {
 		errUI.failLine(fmt.Sprintf("rotor bundle: %v", err))
 		return 1

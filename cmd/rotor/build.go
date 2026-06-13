@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
@@ -31,6 +33,7 @@ type buildArgs struct {
 	opts       partialProjectOptions
 	help       bool
 	version    bool
+	jsonOut    bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile string // rotor DX extension: write a pprof CPU profile here
 }
 
@@ -135,6 +138,11 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			continue
 		case "cpuprofile":
 			res.cpuprofile = takeValue()
+			continue
+		case "json":
+			// rotor DX extension (not in rbxtsc): a plain boolean flag that
+			// swaps the styled UI for one machine-readable result object.
+			res.jsonOut = true
 			continue
 		}
 
@@ -244,6 +252,13 @@ func cmdBuild(args []string) int {
 	// (createProjectData.ts L13).
 	dir := filepath.Dir(tsConfigPath)
 
+	// --json: suppress all styled chrome and emit exactly one result object on
+	// stdout. Watch mode has no terminal "end", so it is not JSON-encoded; a
+	// one-shot build is what CI/editor integrations call with --json.
+	if parsed.jsonOut && !opts.watch {
+		return cmdBuildJSON(dir, tsConfigPath, opts)
+	}
+
 	out := newUI(os.Stdout)
 	out.banner(filepath.Base(dir))
 
@@ -292,4 +307,67 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 		WriteOnlyChanged:       opts.writeOnlyChanged,
 	})
 	return result, diags, time.Since(start), err
+}
+
+// jsonDiagnostic is one entry in the --json diagnostics array. file/line/col
+// are best-effort: build's compile path surfaces diagnostics as already-
+// formatted messages (no structured location), so for build they carry only
+// message+severity; `rotor check --json` fills in file/line/col from the
+// structured AST diagnostics it already holds.
+type jsonDiagnostic struct {
+	File     string `json:"file"`
+	Line     int    `json:"line"`
+	Col      int    `json:"col"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// jsonResult is the single object printed by `rotor build --json` /
+// `rotor check --json`. The shape is stable for CI/editor integration.
+type jsonResult struct {
+	Version     string           `json:"version"`
+	OK          bool             `json:"ok"`
+	Files       int              `json:"files"`
+	DurationMs  int64            `json:"durationMs"`
+	Diagnostics []jsonDiagnostic `json:"diagnostics"`
+}
+
+// writeJSONResult prints exactly one jsonResult object (with a trailing
+// newline) to w. A nil Diagnostics slice is normalized to [] so consumers
+// always see an array.
+func writeJSONResult(w io.Writer, res jsonResult) {
+	if res.Diagnostics == nil {
+		res.Diagnostics = []jsonDiagnostic{}
+	}
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(res)
+}
+
+// cmdBuildJSON runs a one-shot build and prints a single jsonResult object
+// instead of the styled UI. Exit code is unchanged from the styled path: 1 on
+// any build error, 0 otherwise.
+func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions) int {
+	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
+	res := jsonResult{
+		Version:    version,
+		OK:         err == nil,
+		DurationMs: elapsed.Milliseconds(),
+	}
+	if err != nil {
+		// Build diagnostics are message-only strings (the compile API does not
+		// return structured locations here); surface them as errors with empty
+		// file/line/col. An empty diags list still gets the failure message.
+		for _, d := range diags {
+			res.Diagnostics = append(res.Diagnostics, jsonDiagnostic{Severity: "error", Message: d})
+		}
+		if len(diags) == 0 {
+			res.Diagnostics = append(res.Diagnostics, jsonDiagnostic{Severity: "error", Message: err.Error()})
+		}
+		writeJSONResult(os.Stdout, res)
+		return 1
+	}
+	res.Files = len(result.Outputs)
+	writeJSONResult(os.Stdout, res)
+	return 0
 }

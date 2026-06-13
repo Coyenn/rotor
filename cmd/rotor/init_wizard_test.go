@@ -54,7 +54,7 @@ func TestWizardFullFlow(t *testing.T) {
 
 	for _, f := range []string{
 		"package.json", "tsconfig.json", "default.project.json", "biome.json",
-		"rotor.config.ts", "assets/.gitkeep", "include/.gitkeep",
+		"rotor.toml", "rotor.schema.json", "assets/.gitkeep", "include/.gitkeep",
 		"src/shared/module.ts", "src/server/main.server.ts", "src/client/main.client.ts",
 		"rotor-env.d.ts",
 	} {
@@ -101,21 +101,27 @@ func TestWizardFullFlow(t *testing.T) {
 		t.Fatalf("tsconfig.json (comments stripped) is not valid JSON: %v", err)
 	}
 
-	// rotor.config.ts: real (uncommented) assets + deploy sections.
-	cfg := mustReadFile(t, filepath.Join(dir, "rotor.config.ts"))
+	// rotor.toml: real (uncommented) assets + deploy sections.
+	cfg := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
 	for _, want := range []string{
-		`creator: { type: "user", id: 123456 },`,
-		`paths: ["assets/**/*.png", "assets/**/*.ogg"],`,
-		"production: {",
-		"universeId: 111,",
-		`places: { start: { file: "build/game.rbxl", placeId: 222 } },`,
+		"#:schema ./rotor.schema.json",
+		"[assets]",
+		`paths = ["assets/**/*.png", "assets/**/*.ogg"]`,
+		"[assets.creator]",
+		`type = "user"`,
+		"id = 123456",
+		"[deploy.environments.production]",
+		"universeId = 111",
+		"[deploy.environments.production.places.start]",
+		`file = "build/game.rbxl"`,
+		"placeId = 222",
 	} {
 		if !strings.Contains(cfg, want) {
-			t.Errorf("rotor.config.ts missing %q:\n%s", want, cfg)
+			t.Errorf("rotor.toml missing %q:\n%s", want, cfg)
 		}
 	}
-	if strings.Contains(cfg, "// assets:") || strings.Contains(cfg, "// deploy:") {
-		t.Error("rotor.config.ts should not keep commented skeletons for configured sections")
+	if strings.Contains(cfg, "# [assets]") || strings.Contains(cfg, "# [deploy.") {
+		t.Error("rotor.toml should not keep commented skeletons for configured sections")
 	}
 
 	// Every emitted JSON file parses.
@@ -148,8 +154,8 @@ func TestWizardDefaults(t *testing.T) {
 	if !fileExists(filepath.Join(dir, "biome.json")) {
 		t.Error("wizard default linter is biome; biome.json missing")
 	}
-	cfg := mustReadFile(t, filepath.Join(dir, "rotor.config.ts"))
-	if !strings.Contains(cfg, "// assets:") || !strings.Contains(cfg, "// deploy:") {
+	cfg := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
+	if !strings.Contains(cfg, "# [assets]") || !strings.Contains(cfg, "# [deploy.environments.dev]") {
 		t.Error("skipped cloud sections should keep the commented skeleton")
 	}
 	if fileExists(filepath.Join(dir, "assets")) {
@@ -281,9 +287,9 @@ func TestCmdInitYesFlag(t *testing.T) {
 	if fileExists(filepath.Join(dir, "biome.json")) {
 		t.Error("--yes (non-interactive defaults) must not add a linter")
 	}
-	cfg := mustReadFile(t, filepath.Join(dir, "rotor.config.ts"))
-	if !strings.Contains(cfg, "// assets:") || !strings.Contains(cfg, "// deploy:") {
-		t.Error("--yes should keep the commented rotor.config.ts skeleton")
+	cfg := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
+	if !strings.Contains(cfg, "# [assets]") || !strings.Contains(cfg, "# [deploy.environments.dev]") {
+		t.Error("--yes should keep the commented rotor.toml skeleton")
 	}
 }
 
@@ -305,7 +311,7 @@ func TestWizardPlainSkipsRbxtsSteps(t *testing.T) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "rotor.config.ts", "biome.json"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "rotor.toml", "biome.json"} {
 		if fileExists(filepath.Join(dir, f)) {
 			t.Errorf("plain template should not write %s", f)
 		}

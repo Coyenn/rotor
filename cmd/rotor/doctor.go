@@ -195,11 +195,11 @@ func runDoctor(path string) ([]doctorCheck, string) {
 	return checks, "  " + filepath.Base(dir)
 }
 
-// cloudChecks evaluates the cloud tooling section: rotor.config.ts (loaded
-// via config.Load and validated when present) and ROBLOX_API_KEY presence.
-// Only presence is reported — the key value is never printed. Without a
-// config the section degrades to muted info rows (cloud features are
-// optional), matching the rojo CLI row's style.
+// cloudChecks evaluates the cloud tooling section: rotor.toml (loaded via
+// config.Load and validated when present), its companion rotor.schema.json,
+// and ROBLOX_API_KEY presence. Only presence is reported — the key value is
+// never printed. Without a config the section degrades to muted info rows
+// (cloud features are optional), matching the rojo CLI row's style.
 func cloudChecks(dir string) []doctorCheck {
 	var checks []doctorCheck
 
@@ -210,31 +210,42 @@ func cloudChecks(dir string) []doctorCheck {
 		hasConfig = false
 		checks = append(checks, doctorCheck{
 			status: doctorInfo,
-			label:  "rotor.config.ts",
+			label:  config.ConfigFileName,
 			detail: "not found (only needed for rotor asset / rotor deploy)",
 		})
 	case err != nil:
 		checks = append(checks, doctorCheck{
 			status: doctorFail,
-			label:  "rotor.config.ts",
+			label:  config.ConfigFileName,
 			detail: err.Error(),
 			hint:   "rotor asset / rotor deploy cannot run until the config loads",
 		})
 	default:
 		validateErrs := cfg.Validate()
 		if len(validateErrs) == 0 {
-			checks = append(checks, doctorCheck{status: doctorOK, label: "rotor.config.ts", detail: "valid"})
+			checks = append(checks, doctorCheck{status: doctorOK, label: config.ConfigFileName, detail: "valid"})
 		}
 		for _, verr := range validateErrs {
 			checks = append(checks, doctorCheck{
 				status: doctorFail,
-				label:  "rotor.config.ts",
+				label:  config.ConfigFileName,
 				detail: verr.Error(),
 				hint:   "rotor asset / rotor deploy cannot run until the config is valid",
 			})
 		}
 		for _, warning := range cfg.Warnings {
-			checks = append(checks, doctorCheck{status: doctorWarn, label: "rotor.config.ts", detail: warning})
+			checks = append(checks, doctorCheck{status: doctorWarn, label: config.ConfigFileName, detail: warning})
+		}
+		// The schema companion gives editors validation + completion.
+		if fileExists(filepath.Join(dir, config.SchemaFileName)) {
+			checks = append(checks, doctorCheck{status: doctorOK, label: config.SchemaFileName, detail: "present"})
+		} else {
+			checks = append(checks, doctorCheck{
+				status: doctorWarn,
+				label:  config.SchemaFileName,
+				detail: "missing",
+				hint:   "run `rotor asset` or `rotor deploy` to regenerate it (or `rotor init`)",
+			})
 		}
 	}
 

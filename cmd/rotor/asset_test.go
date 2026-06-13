@@ -36,16 +36,13 @@ func TestCmdAssetArgValidation(t *testing.T) {
 func TestCmdAssetSyncNoConfig(t *testing.T) {
 	dir := t.TempDir()
 	if code := cmdAsset([]string{"sync", dir, "--dry-run"}); code != 1 {
-		t.Fatalf("sync without rotor.config.ts: exit %d", code)
+		t.Fatalf("sync without rotor.toml: exit %d", code)
 	}
 }
 
 func TestCmdAssetSyncNoAssetsSection(t *testing.T) {
 	dir := t.TempDir()
-	writeAssetFixture(t, dir, "rotor.config.ts", `
-import { defineConfig } from "rotor/config";
-export default defineConfig({});
-`)
+	writeAssetFixture(t, dir, "rotor.toml", "# empty config\n")
 	if code := cmdAsset([]string{"sync", dir, "--dry-run"}); code != 1 {
 		t.Fatalf("sync without assets section: exit %d", code)
 	}
@@ -53,15 +50,15 @@ export default defineConfig({});
 
 func TestCmdAssetSyncDryRun(t *testing.T) {
 	dir := t.TempDir()
-	writeAssetFixture(t, dir, "rotor.config.ts", `
-import { defineConfig } from "rotor/config";
-export default defineConfig({
-	assets: {
-		paths: ["assets/**/*.png", "assets/**/*.ogg"],
-		output: { luau: "src/shared/assets.luau", types: "src/shared/assets.d.ts" },
-		creator: { type: "user", id: 1 },
-	},
-});
+	writeAssetFixture(t, dir, "rotor.toml", `
+[assets]
+paths = ["assets/**/*.png", "assets/**/*.ogg"]
+[assets.output]
+luau = "src/shared/assets.luau"
+types = "src/shared/assets.d.ts"
+[assets.creator]
+type = "user"
+id = 1
 `)
 	writeAssetFixture(t, dir, "assets/logo.png", "not really a png")
 	writeAssetFixture(t, dir, "assets/sounds/hit.ogg", "not really an ogg")
@@ -79,9 +76,9 @@ export default defineConfig({
 	}
 
 	// ... but a successful config load always refreshes the config's editor
-	// types (rotor-config.d.ts) — that is metadata, not an asset output.
-	if !fileExists(filepath.Join(dir, "rotor-config.d.ts")) {
-		t.Error("asset sync did not auto-refresh rotor-config.d.ts after loading the config")
+	// schema (rotor.schema.json) — that is metadata, not an asset output.
+	if !fileExists(filepath.Join(dir, "rotor.schema.json")) {
+		t.Error("asset sync did not auto-refresh rotor.schema.json after loading the config")
 	}
 }
 

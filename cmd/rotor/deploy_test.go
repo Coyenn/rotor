@@ -8,30 +8,28 @@ import (
 	"testing"
 )
 
-// writeDeployFixture creates a minimal project: rotor.config.ts with one dev
+// writeDeployFixture creates a minimal project: rotor.toml with one dev
 // environment (a place and a badge with an icon) plus the referenced files.
 func writeDeployFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	configTS := `import { defineConfig } from "rotor/config";
+	configTOML := `[assets.creator]
+type = "group"
+id = 99
 
-export default defineConfig({
-	assets: { creator: { type: "group", id: 99 } },
-	deploy: {
-		environments: {
-			dev: {
-				universeId: 111,
-				places: { start: { file: "game.rbxl", placeId: 222 } },
-				badges: { winner: { name: "Winner!", icon: "icon.png" } },
-			},
-		},
-	},
-});
+[deploy.environments.dev]
+universeId = 111
+[deploy.environments.dev.places.start]
+file = "game.rbxl"
+placeId = 222
+[deploy.environments.dev.badges.winner]
+name = "Winner!"
+icon = "icon.png"
 `
 	for name, data := range map[string]string{
-		"rotor.config.ts": configTS,
-		"game.rbxl":       "rbxl-bytes",
-		"icon.png":        "png-bytes",
+		"rotor.toml": configTOML,
+		"game.rbxl":  "rbxl-bytes",
+		"icon.png":   "png-bytes",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
@@ -78,9 +76,9 @@ func TestCmdDeployPlanFreshState(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, out)
 		}
 	}
-	// A successful config load auto-refreshes the config's editor types.
-	if !fileExists(filepath.Join(dir, "rotor-config.d.ts")) {
-		t.Error("deploy plan did not auto-refresh rotor-config.d.ts after loading the config")
+	// A successful config load auto-refreshes the config's editor schema.
+	if !fileExists(filepath.Join(dir, "rotor.schema.json")) {
+		t.Error("deploy plan did not auto-refresh rotor.schema.json after loading the config")
 	}
 }
 
