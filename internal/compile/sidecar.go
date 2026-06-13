@@ -445,6 +445,11 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	assetDecl := assetDeclPath(configPath)
 	fs = injectAssetDeclFS(fs, assetDecl)
 
+	// ... and the shared synthetic declaration for the $nameof / $keys / $file /
+	// $git / $buildTime macros (macrodecl.go).
+	macroDecl := macroDeclPath(configPath)
+	fs = injectMacroDeclFS(fs, macroDecl)
+
 	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
 	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
 	if len(configDiags) > 0 {
@@ -468,6 +473,12 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	// is already a root file — see projectDeclaresAssetOnDisk).
 	if !projectDeclaresAssetOnDisk(fs, parsed.ParsedConfig.FileNames) {
 		parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, assetDecl)
+	}
+	// Likewise for the shared $nameof / $keys / $file / $git / $buildTime
+	// declaration (skipped when an identical on-disk rotor-macros.d.ts is
+	// already a root file — see projectDeclaresMacrosOnDisk).
+	if !projectDeclaresMacrosOnDisk(fs, parsed.ParsedConfig.FileNames) {
+		parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, macroDecl)
 	}
 
 	return compiler.NewProgram(compiler.ProgramOptions{

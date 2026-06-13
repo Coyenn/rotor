@@ -209,6 +209,7 @@ func runCheckCore(dir string) checkCore {
 	// stdout is byte-stable).
 	refreshEnvTypesForCheck(dir, parsed.FileNames(), program)
 	refreshAssetTypesForCheck(dir, parsed.FileNames(), program)
+	refreshMacroTypesForCheck(dir, parsed.FileNames(), program)
 
 	return checkCore{
 		diags:      diags,
@@ -309,6 +310,27 @@ func refreshAssetTypesForCheck(dir string, fileNames []string, program *compiler
 		}
 		if _, err := compile.WriteAssetDeclarations(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.AssetDeclFileName, err)
+		}
+		return
+	}
+}
+
+// refreshMacroTypesForCheck mirrors refreshEnvTypesForCheck for the shared
+// $nameof / $keys / $file / $git / $buildTime declaration: when any
+// non-declaration project file references one of those macros, the on-disk
+// rotor-macros.d.ts editor companion is (re)written if missing or stale.
+// Failures only warn on stderr.
+func refreshMacroTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
+	for _, name := range fileNames {
+		if strings.HasSuffix(name, ".d.ts") {
+			continue
+		}
+		sf := program.GetSourceFile(name)
+		if sf == nil || !compile.SourceUsesMacros(sf.Text()) {
+			continue
+		}
+		if _, err := compile.WriteMacroDeclarations(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.MacroDeclFileName, err)
 		}
 		return
 	}

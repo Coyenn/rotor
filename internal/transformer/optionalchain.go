@@ -176,5 +176,23 @@ func transformOptionalChain(s *State, node *ast.Node) luau.Expression {
 	if result, handled := interceptAssetChain(s, chain, expression); handled {
 		return result
 	}
+	// rotor extension: the $nameof / $keys / $file / $git / $buildTime
+	// compile-time macros, same interception rationale (see nameofmacro.go,
+	// keysmacro.go, filemacro.go, gitmacro.go).
+	if result, handled := interceptNameofChain(s, chain, expression); handled {
+		return result
+	}
+	if result, handled := interceptKeysChain(s, chain, expression); handled {
+		return result
+	}
+	if result, handled := interceptFileChain(s, chain, expression); handled {
+		return result
+	}
+	if result, handled := interceptGitChain(s, chain, expression); handled {
+		return result
+	}
+	if result, handled := interceptBuildTimeChain(s, chain, expression); handled {
+		return result
+	}
 	return transformOptionalChainInner(s, chain, TransformExpression(s, expression), nil, 0)
 }

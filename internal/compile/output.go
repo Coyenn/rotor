@@ -46,6 +46,15 @@ type BuildResult struct {
 	// WroteAssetTypes reports whether rotor-asset.d.ts was (re)written this
 	// pass (false when current, or when UsesAssetMacro is false).
 	WroteAssetTypes bool
+
+	// UsesMacros reports whether any project source file references one of the
+	// rotor $nameof / $keys / $file / $git / $buildTime macros (cheap text
+	// scan). When true the build also refreshes the on-disk rotor-macros.d.ts
+	// editor companion (see macrodecl.go).
+	UsesMacros bool
+	// WroteMacroTypes reports whether rotor-macros.d.ts was (re)written this
+	// pass (false when current, or when UsesMacros is false).
+	WroteMacroTypes bool
 	// WroteLockfile reports whether rotor-lock.json was persisted this pass
 	// (true only when $asset uploaded a new asset on a cache miss).
 	WroteLockfile bool
@@ -81,6 +90,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	// macro never fires there and no editor companion is needed.
 	usesEnvMacro := false
 	usesAssetMacro := false
+	usesMacros := false
 	for _, sourceFile := range sourceFiles {
 		text := sourceFile.Text()
 		if strings.Contains(text, "$env") && !strings.Contains(text, "rbxts-transform-env") {
@@ -88,6 +98,9 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		if strings.Contains(text, "$asset") {
 			usesAssetMacro = true
+		}
+		if SourceUsesMacros(text) {
+			usesMacros = true
 		}
 	}
 
@@ -192,6 +205,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		wroteLockfile = true
 	}
 
+	// rotor extension: same editor-companion refresh for the shared
+	// $nameof / $keys / $file / $git / $buildTime declaration (macrodecl.go).
+	wroteMacroTypes := false
+	if usesMacros {
+		wroteMacroTypes, err = WriteMacroDeclarations(filepath.FromSlash(dir))
+		if err != nil {
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", MacroDeclFileName, err)
+		}
+	}
+
 	return &BuildResult{
 		Outputs:         outputs,
 		EmittedFiles:    emittedFiles,
@@ -200,6 +223,8 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		WroteEnvTypes:   wroteEnvTypes,
 		UsesAssetMacro:  usesAssetMacro,
 		WroteAssetTypes: wroteAssetTypes,
+		UsesMacros:      usesMacros,
+		WroteMacroTypes: wroteMacroTypes,
 		WroteLockfile:   wroteLockfile,
 	}, nil, nil
 }

@@ -12,8 +12,9 @@ import (
 
 // cmdClean removes a project's build outputs — the tsconfig outDir and the
 // runtime-library include folder — and, with --types, the generated editor
-// type companions in the project root (rotor-env.d.ts, rotor-asset.d.ts, and
-// rotor-config.d.ts when present). It never touches source: only the resolved
+// type companions in the project root (rotor-env.d.ts, rotor-asset.d.ts,
+// rotor-macros.d.ts, and rotor-config.d.ts when present). It never touches
+// source: only the resolved
 // output/include directories and the named generated files are removed.
 //
 // Targets are resolved exactly the way `rotor build` resolves them: the
@@ -80,7 +81,7 @@ func cmdClean(args []string) int {
 		// rather than via internal/config so clean stays decoupled from the
 		// config package's filename churn; rotor-config.d.ts is legacy and
 		// removed only when present.
-		for _, name := range []string{compile.EnvDeclFileName, compile.AssetDeclFileName, "rotor-config.d.ts"} {
+		for _, name := range []string{compile.EnvDeclFileName, compile.AssetDeclFileName, compile.MacroDeclFileName, "rotor-config.d.ts"} {
 			targets = append(targets, filepath.Join(dir, name))
 		}
 	}

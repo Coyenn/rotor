@@ -72,6 +72,16 @@ type projectContext struct {
 	// fails (it never does — a missing config/lockfile yields an offline
 	// resolver that errors clearly on a $asset miss).
 	assets *assetresolve.Resolver
+
+	// files is the build-time data-file reader for the rotor $file macro, rooted
+	// at the project dir; shared by every file's State.
+	files *fileResolver
+
+	// stamps is the build/VCS provider for the rotor $git / $buildTime macros,
+	// built once per pass with a fixed build timestamp; shared by every file's
+	// State (concurrency-safe; reads memoized). The interface type lets tests
+	// inject a deterministic fake via stampProviderOverride.
+	stamps transformer.StampProvider
 }
 
 // newProjectProgram builds the tsgo Program for projectDir over the sanitized
@@ -279,6 +289,8 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		projectType: projectType,
 		env:         dotenv.Load(envDir),
 		assets:      newAssetResolver(envDir),
+		files:       newFileResolver(envDir),
+		stamps:      resolveStampProvider(envDir),
 		rojoContext: &transformer.RojoContext{
 			Resolver:          rojoResolver,
 			PathTranslator:    pathTranslator,
@@ -659,6 +671,8 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 		state.Env = pctx.env
 		state.Assets = pctx.assets
+		state.Files = pctx.files
+		state.Stamps = pctx.stamps
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 

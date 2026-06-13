@@ -481,6 +481,124 @@ func DiagRotorAssetNoResolver(node *ast.Node) Diagnostic {
 	)
 }
 
+// $nameof (rotor extension; see nameofmacro.go)
+
+// DiagRotorNameofInvalid rejects a $nameof argument that has no statically-
+// knowable trailing name (an index expression, a call, a literal, `this`, ...).
+func DiagRotorNameofInvalid(node *ast.Node) Diagnostic {
+	return errorDiag("rotorNameofInvalid", node,
+		"rotor: $nameof requires an expression ending in an identifier or property access",
+		suggestion("Use `$nameof(foo)` or `$nameof(a.b.c)` — the trailing name is inlined as a string."),
+	)
+}
+
+// DiagRotorNameofBadUsage rejects $nameof in any position other than a direct
+// call (e.g. `const x = $nameof`) — the macro identifier has no runtime value.
+func DiagRotorNameofBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorNameofBadUsage", node,
+		"rotor: $nameof must be called as `$nameof(expr)`",
+	)
+}
+
+// $keys (rotor extension; see keysmacro.go)
+
+// DiagRotorKeysNoType rejects a $keys call with no type argument — the macro
+// enumerates a type's string keys at compile time, so the type is required.
+func DiagRotorKeysNoType(node *ast.Node) Diagnostic {
+	return errorDiag("rotorKeysNoType", node,
+		"rotor: $keys requires a single type argument whose string keys are inlined",
+		suggestion("Use `$keys<{ x: number; y: string }>()`."),
+	)
+}
+
+// DiagRotorKeysBadUsage rejects $keys in any position other than a direct call
+// (e.g. `const x = $keys`) — the macro identifier has no runtime value.
+func DiagRotorKeysBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorKeysBadUsage", node,
+		"rotor: $keys must be called as `$keys<T>()`",
+	)
+}
+
+// $file (rotor extension; see filemacro.go)
+
+// DiagRotorFileNonLiteralArg rejects a dynamic $file path — the macro reads and
+// inlines the file contents at compile time, so the path must be a string
+// literal.
+func DiagRotorFileNonLiteralArg(node *ast.Node) Diagnostic {
+	return errorDiag("rotorFileNonLiteralArg", node,
+		"rotor: $file path must be a string literal — the contents are read and inlined at compile time",
+		suggestion("Use `$file(\"config.json\")`."),
+	)
+}
+
+// DiagRotorFileBadUsage rejects $file in any position other than a direct call
+// (e.g. `const x = $file`) — the macro identifier has no runtime value.
+func DiagRotorFileBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorFileBadUsage", node,
+		"rotor: $file must be called as `$file(\"path/to/file.json\")`",
+	)
+}
+
+// DiagRotorFileNotFound rejects a $file reference to a file that does not exist
+// on disk.
+func DiagRotorFileNotFound(node *ast.Node, path string) Diagnostic {
+	return errorDiag("rotorFileNotFound", node,
+		fmt.Sprintf("rotor: file %q does not exist", path),
+	)
+}
+
+// DiagRotorFileInvalidJSON rejects a $file reference whose `.json` contents do
+// not parse as valid JSON.
+func DiagRotorFileInvalidJSON(node *ast.Node, path string, message string) Diagnostic {
+	return errorDiag("rotorFileInvalidJSON", node,
+		fmt.Sprintf("rotor: file %q is not valid JSON: %s", path, message),
+	)
+}
+
+// DiagRotorFileNoResolver guards $file use in a State without an attached file
+// resolver (transformer-level unit tests, or a single-file path that never set
+// State.Files).
+func DiagRotorFileNoResolver(node *ast.Node) Diagnostic {
+	return errorDiag("rotorFileNoResolver", node,
+		"rotor: $file requires project context (no file resolver attached)",
+	)
+}
+
+// $git / $buildTime (rotor extension; see gitmacro.go)
+
+// DiagRotorGitNonLiteralArg rejects a dynamic $git field — the macro inlines a
+// build-time value, so the field must be a string literal.
+func DiagRotorGitNonLiteralArg(node *ast.Node) Diagnostic {
+	return errorDiag("rotorGitNonLiteralArg", node,
+		"rotor: $git field must be a string literal — the value is inlined at compile time",
+		suggestion("Use `$git(\"sha\")`, `$git(\"branch\")`, `$git(\"tag\")`, or `$git(\"dirty\")`."),
+	)
+}
+
+// DiagRotorGitBadField rejects a $git field name outside the supported set
+// (defensive — the ambient overloads already restrict it).
+func DiagRotorGitBadField(node *ast.Node, field string) Diagnostic {
+	return errorDiag("rotorGitBadField", node,
+		fmt.Sprintf("rotor: unknown $git field %q", field),
+		suggestion("Valid fields: \"sha\", \"branch\", \"tag\", \"dirty\"."),
+	)
+}
+
+// DiagRotorGitBadUsage rejects $git in any position other than a direct call.
+func DiagRotorGitBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorGitBadUsage", node,
+		"rotor: $git must be called as `$git(\"sha\"|\"branch\"|\"tag\"|\"dirty\")`",
+	)
+}
+
+// DiagRotorBuildTimeBadUsage rejects $buildTime in any position other than a
+// direct zero-argument call.
+func DiagRotorBuildTimeBadUsage(node *ast.Node) Diagnostic {
+	return errorDiag("rotorBuildTimeBadUsage", node,
+		"rotor: $buildTime must be called as `$buildTime()`",
+	)
+}
+
 // kindName strips tsgo's stringer prefix: KindCallExpression -> "CallExpression"
 // (matches upstream getKindName output for diagnostics/debugging).
 func kindName(kind ast.Kind) string {

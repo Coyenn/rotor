@@ -1,0 +1,12 @@
+{
+	"name": "Adventure Quest",
+	"version": 3,
+	"volume": 0.8,
+	"enabled": true,
+	"levels": ["forest", "cave", "castle"],
+	"meta": {
+		"author": "uproot",
+		"build": 42
+	},
+	"removed": null
+}

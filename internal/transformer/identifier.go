@@ -79,6 +79,38 @@ func TransformIdentifier(s *State, node *ast.Node) luau.Expression {
 		}
 	}
 
+	// rotor extension: bare $nameof / $keys / $file / $git / $buildTime outside
+	// a call have no runtime value (the call position is consumed earlier by the
+	// respective interceptors in transformOptionalChain). Emitting the macro
+	// identifier itself would produce invalid Luau.
+	switch node.Text() {
+	case "$nameof":
+		if sym := nameofMacroSymbol(s); sym != nil && symbol == sym {
+			s.Diags.Add(DiagRotorNameofBadUsage(node))
+			return luau.NewNone()
+		}
+	case "$keys":
+		if sym := keysMacroSymbol(s); sym != nil && symbol == sym {
+			s.Diags.Add(DiagRotorKeysBadUsage(node))
+			return luau.NewNone()
+		}
+	case "$file":
+		if sym := fileMacroSymbol(s); sym != nil && symbol == sym {
+			s.Diags.Add(DiagRotorFileBadUsage(node))
+			return luau.NewNone()
+		}
+	case "$git":
+		if sym := gitMacroSymbol(s); sym != nil && symbol == sym {
+			s.Diags.Add(DiagRotorGitBadUsage(node))
+			return luau.NewNone()
+		}
+	case "$buildTime":
+		if sym := buildTimeMacroSymbol(s); sym != nil && symbol == sym {
+			s.Diags.Add(DiagRotorBuildTimeBadUsage(node))
+			return luau.NewNone()
+		}
+	}
+
 	// Constructor-macro misuse (upstream L137-150): a constructor-macro
 	// identifier used WITHOUT `new` has no value to emit. As a class
 	// `extends` expression that is noMacroExtends; anywhere else

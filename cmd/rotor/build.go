@@ -288,6 +288,9 @@ func cmdBuild(args []string) int {
 	if result.WroteAssetTypes {
 		out.noteLine(compile.AssetDeclFileName + "  (generated — editor types for $asset)")
 	}
+	if result.WroteMacroTypes {
+		out.noteLine(compile.MacroDeclFileName + "  (generated — editor types for $nameof/$keys/$file/$git/$buildTime)")
+	}
 	if result.WroteLockfile {
 		out.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")
 	}
