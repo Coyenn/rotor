@@ -88,6 +88,28 @@ func TestLoadValidFullConfig(t *testing.T) {
 	if b.Name != "Winner!" || b.Description != "You won" || b.Icon != "assets/badge.png" {
 		t.Errorf("prod.badges.winner = %+v", b)
 	}
+	if p := prod.Places["start"]; p.Name != "Start Place" || p.MaxPlayers != 30 || p.VersionType != "saved" {
+		t.Errorf("prod.places.start metadata = %+v", p)
+	}
+	if ps := prod.Experience.PrivateServers; ps == nil || ps.Price == nil || *ps.Price != 100 {
+		t.Errorf("prod.experience.privateServers = %+v", ps)
+	}
+	g := prod.GamePasses["vip"]
+	if g.Name != "VIP" || g.Price == nil || *g.Price != 250 || g.Icon != "assets/vip.png" {
+		t.Errorf("prod.gamePasses.vip = %+v", g)
+	}
+	if prod.Icon != "assets/icon.png" {
+		t.Errorf("prod.icon = %q", prod.Icon)
+	}
+	if len(prod.Thumbnails) != 2 || prod.Thumbnails[0] != "assets/thumb1.png" {
+		t.Errorf("prod.thumbnails = %v", prod.Thumbnails)
+	}
+	if dp := prod.Products["coins"]; dp.Name != "100 Coins" || dp.Price != 25 {
+		t.Errorf("prod.products.coins = %+v", dp)
+	}
+	if sl := prod.SocialLinks["discord"]; sl.Title != "Join us" || sl.URL != "https://discord.gg/x" || sl.Type != "discord" {
+		t.Errorf("prod.socialLinks.discord = %+v", sl)
+	}
 
 	if len(cfg.Warnings) != 0 {
 		t.Errorf("unexpected warnings: %v", cfg.Warnings)
@@ -214,6 +236,71 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("Validate() = %v, want clean", errs)
 		}
 	})
+
+	env := func(e Environment) *Config {
+		return &Config{Deploy: &DeployConfig{Environments: map[string]Environment{"prod": e}}}
+	}
+	neg := int64(-5)
+	free := int64(0)
+	table := []struct {
+		name    string
+		cfg     *Config
+		wantErr string // substring of the single expected error; "" = clean
+	}{
+		{"bad versionType",
+			env(Environment{Places: map[string]PlaceDeploy{"s": {File: "f", PlaceID: 1, VersionType: "live"}}}),
+			"versionType"},
+		{"saved versionType ok",
+			env(Environment{Places: map[string]PlaceDeploy{"s": {File: "f", PlaceID: 1, VersionType: "saved"}}}),
+			""},
+		{"negative maxPlayers",
+			env(Environment{Places: map[string]PlaceDeploy{"s": {File: "f", PlaceID: 1, MaxPlayers: -1}}}),
+			"maxPlayers"},
+		{"negative game pass price",
+			env(Environment{GamePasses: map[string]GamePass{"vip": {Name: "V", Price: &neg}}}),
+			"gamePasses.vip.price"},
+		{"nil game pass price ok (off sale)",
+			env(Environment{GamePasses: map[string]GamePass{"vip": {Name: "V"}}}),
+			""},
+		{"negative product price",
+			env(Environment{Products: map[string]Product{"coins": {Name: "C", Price: -1}}}),
+			"products.coins.price"},
+		{"negative private server price",
+			env(Environment{Experience: &ExperienceConfig{PrivateServers: &PrivateServers{Price: &neg}}}),
+			"privateServers.price"},
+		{"zero private server price ok",
+			env(Environment{Experience: &ExperienceConfig{PrivateServers: &PrivateServers{Price: &free}}}),
+			""},
+		{"bad social link type",
+			env(Environment{SocialLinks: map[string]SocialLink{"x": {Type: "myspace", URL: "https://x"}}}),
+			"socialLinks.x.type"},
+		{"social link missing url",
+			env(Environment{SocialLinks: map[string]SocialLink{"x": {Type: "discord"}}}),
+			"url is required"},
+		{"valid social link",
+			env(Environment{SocialLinks: map[string]SocialLink{"x": {Title: "t", Type: "github", URL: "https://github.com/x"}}}),
+			""},
+		{"eleven thumbnails",
+			env(Environment{Thumbnails: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}}),
+			"at most 10"},
+		{"ten thumbnails ok",
+			env(Environment{Thumbnails: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}}),
+			""},
+	}
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := tc.cfg.Validate()
+			if tc.wantErr == "" {
+				if len(errs) != 0 {
+					t.Fatalf("Validate() = %v, want clean", errs)
+				}
+				return
+			}
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), tc.wantErr) {
+				t.Fatalf("Validate() = %v, want one error containing %q", errs, tc.wantErr)
+			}
+		})
+	}
 }
 
 func TestTypeDeclarations(t *testing.T) {
@@ -222,7 +309,8 @@ func TestTypeDeclarations(t *testing.T) {
 	}
 	for _, name := range []string{
 		"AssetsOutput", "Creator", "AssetsConfig", "PlaceDeploy",
-		"ExperienceConfig", "Badge", "Environment", "DeployConfig", "Config",
+		"ExperienceConfig", "PrivateServers", "Badge", "GamePass", "Product",
+		"SocialLink", "Environment", "DeployConfig", "Config",
 	} {
 		if !strings.Contains(TypeDeclarations, "export interface "+name+" {") {
 			t.Errorf("missing interface %s", name)

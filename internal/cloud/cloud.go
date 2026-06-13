@@ -3,7 +3,8 @@
 // token-bucket rate limiting, retries with exponential backoff + jitter on
 // 429/5xx (honoring Retry-After), long-running-operation polling, and typed
 // wrappers for the endpoints assets/deploy need (assets, universes, places,
-// place publishing, badges, game passes).
+// place publishing, badges, game passes, developer products, social links,
+// experience icon/thumbnails).
 //
 // Everything is context-aware and the base URL is an option, so tests run
 // against httptest servers; no network is touched in unit tests.

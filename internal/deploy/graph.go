@@ -11,24 +11,27 @@ import (
 )
 
 // DefaultVersionType is how place files are published when the config does
-// not say otherwise. "Saved" support is a config follow-up.
+// not say otherwise (PlaceDeploy.versionType: "saved" | "published").
 const DefaultVersionType = cloud.VersionTypePublished
 
 // BuildResources turns one config environment into the desired resource
-// graph. It reads local files (to content-hash place files and badge icons)
-// but never touches the network. Returns the resources and the environment's
-// universe id.
+// graph. It reads local files (to content-hash place files, icons, and
+// thumbnails) but never touches the network. Returns the resources and the
+// environment's universe id.
 //
-// v1 mapping:
-//   - each places entry      -> place_file/<name> (file + content hash + versionType)
-//   - experience / payments  -> experience/universe (universe PATCH inputs)
-//   - each badges entry      -> badge/<name>, depending on asset/<icon path>
+// Mapping:
+//   - each places entry        -> place_file/<name> (file + content hash + versionType),
+//     plus place_config/<name> when name/description/maxPlayers are set
+//   - experience / payments    -> experience/universe (universe PATCH inputs)
+//   - each badges entry        -> badge/<name>, depending on asset/<icon path>
 //     when an icon is set (the asset resource uploads the icon)
-//
-// place_config resources are emitted only when the config carries place
-// name/description fields; config.PlaceDeploy has none yet, so none are
-// generated today (the kind and provider exist for direct use and for the
-// config fields to come).
+//   - each gamePasses entry    -> game_pass/<name>, same icon-asset pattern;
+//     icon files shared between badges and passes dedupe to one asset
+//   - icon                     -> experience_icon/icon (content-hashed)
+//   - thumbnails               -> experience_thumbnails/thumbnails (one
+//     resource over the ordered, content-hashed list)
+//   - each products entry      -> developer_product/<name>
+//   - each socialLinks entry   -> social_link/<name>
 func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Resource, int64, error) {
 	if cfg == nil || cfg.Deploy == nil || len(cfg.Deploy.Environments) == 0 {
 		return nil, 0, fmt.Errorf("deploy: rotor.config.ts has no deploy.environments section")
@@ -57,6 +60,10 @@ func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Re
 		if err != nil {
 			return nil, 0, fmt.Errorf("deploy: place %q: hashing %s: %w", name, p.File, err)
 		}
+		versionType, err := versionTypeFor(p.VersionType)
+		if err != nil {
+			return nil, 0, fmt.Errorf("deploy: place %q: %w", name, err)
+		}
 		resources = append(resources, Resource{
 			Kind: KindPlaceFile,
 			Name: name,
@@ -64,9 +71,22 @@ func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Re
 				PlaceID:     p.PlaceID,
 				File:        p.File,
 				FileHash:    hash,
-				VersionType: DefaultVersionType,
+				VersionType: versionType,
 			},
 		})
+		// Place metadata, only when the config manages any of it.
+		if p.Name != "" || p.Description != "" || p.MaxPlayers > 0 {
+			resources = append(resources, Resource{
+				Kind: KindPlaceConfig,
+				Name: name,
+				Inputs: PlaceConfigInputs{
+					PlaceID:     p.PlaceID,
+					Name:        p.Name,
+					Description: p.Description,
+					ServerSize:  p.MaxPlayers,
+				},
+			})
+		}
 	}
 
 	// Universe settings.
@@ -76,11 +96,19 @@ func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Re
 			in.Name = env.Experience.Name
 			in.Description = env.Experience.Description
 			in.Playability = env.Experience.Playability
+			if ps := env.Experience.PrivateServers; ps != nil {
+				price := int64(0)
+				if ps.Price != nil {
+					price = *ps.Price
+				}
+				in.PrivateServerPrice = &price
+			}
 		}
 		resources = append(resources, Resource{Kind: KindExperience, Name: "universe", Inputs: in})
 	}
 
-	// Badges (+ deduplicated icon asset resources).
+	// Badge + game-pass icons become asset resources, deduplicated across
+	// both kinds: a file shared by a badge and a pass uploads once.
 	var creatorType string
 	var creatorID int64
 	if cfg.Assets != nil {
@@ -88,36 +116,48 @@ func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Re
 		creatorID = cfg.Assets.Creator.ID
 	}
 	seenIcons := map[string]bool{}
+	// iconAsset registers (once) the asset resource for an icon file and
+	// returns the asset's graph name; owner names the referencing resource
+	// for error messages.
+	iconAsset := func(owner, icon string) (string, error) {
+		iconName := filepath.ToSlash(icon)
+		if seenIcons[iconName] {
+			return iconName, nil
+		}
+		seenIcons[iconName] = true
+		iconPath := resolvePath(projectDir, icon)
+		hash, err := HashFile(iconPath)
+		if err != nil {
+			return "", fmt.Errorf("deploy: %s: hashing icon %s: %w", owner, icon, err)
+		}
+		assetType, err := assetTypeForFile(icon)
+		if err != nil {
+			return "", fmt.Errorf("deploy: %s: %w", owner, err)
+		}
+		base := filepath.Base(iconPath)
+		resources = append(resources, Resource{
+			Kind: KindAsset,
+			Name: iconName,
+			Inputs: AssetInputs{
+				File:        icon,
+				FileHash:    hash,
+				AssetType:   assetType,
+				DisplayName: strings.TrimSuffix(base, filepath.Ext(base)),
+				CreatorType: creatorType,
+				CreatorID:   creatorID,
+			},
+		})
+		return iconName, nil
+	}
+
 	for _, name := range sortedKeys(env.Badges) {
 		b := env.Badges[name]
 		var deps []ResourceRef
 		iconName := ""
 		if b.Icon != "" {
-			iconName = filepath.ToSlash(b.Icon)
-			if !seenIcons[iconName] {
-				seenIcons[iconName] = true
-				iconPath := resolvePath(projectDir, b.Icon)
-				hash, err := HashFile(iconPath)
-				if err != nil {
-					return nil, 0, fmt.Errorf("deploy: badge %q: hashing icon %s: %w", name, b.Icon, err)
-				}
-				assetType, err := assetTypeForFile(b.Icon)
-				if err != nil {
-					return nil, 0, fmt.Errorf("deploy: badge %q: %w", name, err)
-				}
-				base := filepath.Base(iconPath)
-				resources = append(resources, Resource{
-					Kind: KindAsset,
-					Name: iconName,
-					Inputs: AssetInputs{
-						File:        b.Icon,
-						FileHash:    hash,
-						AssetType:   assetType,
-						DisplayName: strings.TrimSuffix(base, filepath.Ext(base)),
-						CreatorType: creatorType,
-						CreatorID:   creatorID,
-					},
-				})
+			var err error
+			if iconName, err = iconAsset(fmt.Sprintf("badge %q", name), b.Icon); err != nil {
+				return nil, 0, err
 			}
 			deps = append(deps, ResourceRef{Kind: KindAsset, Name: iconName})
 		}
@@ -129,7 +169,92 @@ func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Re
 		})
 	}
 
+	// Game passes (same icon-asset pattern as badges).
+	for _, name := range sortedKeys(env.GamePasses) {
+		g := env.GamePasses[name]
+		var deps []ResourceRef
+		iconName := ""
+		if g.Icon != "" {
+			var err error
+			if iconName, err = iconAsset(fmt.Sprintf("game pass %q", name), g.Icon); err != nil {
+				return nil, 0, err
+			}
+			deps = append(deps, ResourceRef{Kind: KindAsset, Name: iconName})
+		}
+		resources = append(resources, Resource{
+			Kind:      KindGamePass,
+			Name:      name,
+			DependsOn: deps,
+			Inputs:    GamePassInputs{Name: g.Name, Description: g.Description, Price: g.Price, Icon: iconName},
+		})
+	}
+
+	// Experience icon (direct upload; not an asset resource).
+	if env.Icon != "" {
+		hash, err := HashFile(resolvePath(projectDir, env.Icon))
+		if err != nil {
+			return nil, 0, fmt.Errorf("deploy: icon: hashing %s: %w", env.Icon, err)
+		}
+		resources = append(resources, Resource{
+			Kind:   KindExperienceIcon,
+			Name:   "icon",
+			Inputs: ExperienceIconInputs{File: env.Icon, FileHash: hash},
+		})
+	}
+
+	// Thumbnails: one resource over the ordered set.
+	if len(env.Thumbnails) > 0 {
+		in := ExperienceThumbnailsInputs{
+			Files:      make([]string, 0, len(env.Thumbnails)),
+			FileHashes: make([]string, 0, len(env.Thumbnails)),
+		}
+		for _, file := range env.Thumbnails {
+			hash, err := HashFile(resolvePath(projectDir, file))
+			if err != nil {
+				return nil, 0, fmt.Errorf("deploy: thumbnails: hashing %s: %w", file, err)
+			}
+			in.Files = append(in.Files, file)
+			in.FileHashes = append(in.FileHashes, hash)
+		}
+		resources = append(resources, Resource{Kind: KindExperienceThumbnails, Name: "thumbnails", Inputs: in})
+	}
+
+	// Developer products.
+	for _, name := range sortedKeys(env.Products) {
+		p := env.Products[name]
+		resources = append(resources, Resource{
+			Kind:   KindDeveloperProduct,
+			Name:   name,
+			Inputs: DeveloperProductInputs{Name: p.Name, Description: p.Description, Price: p.Price},
+		})
+	}
+
+	// Social links.
+	for _, name := range sortedKeys(env.SocialLinks) {
+		l := env.SocialLinks[name]
+		resources = append(resources, Resource{
+			Kind:   KindSocialLink,
+			Name:   name,
+			Inputs: SocialLinkInputs{Title: l.Title, URL: l.URL, Type: l.Type},
+		})
+	}
+
 	return resources, env.UniverseID, nil
+}
+
+// versionTypeFor maps the config's lowercase versionType onto the publish
+// API's enum, defaulting to Published.
+func versionTypeFor(v string) (string, error) {
+	switch v {
+	case "":
+		return DefaultVersionType, nil
+	case "saved":
+		return cloud.VersionTypeSaved, nil
+	case "published":
+		return cloud.VersionTypePublished, nil
+	default:
+		return "", fmt.Errorf("invalid versionType %q (want \"saved\" or \"published\")", v)
+	}
 }
 
 // assetTypeForFile maps an upload's extension to the Open Cloud asset type.

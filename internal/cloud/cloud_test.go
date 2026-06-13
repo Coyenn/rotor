@@ -476,6 +476,117 @@ func TestBadgeAndGamePassEndpoints(t *testing.T) {
 	}
 }
 
+func TestPublishingEndpoints(t *testing.T) {
+	var iconBody []byte
+	var iconCT string
+	var orderBody []byte
+	var deleted []string
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /universes/v1/7/icon":
+			iconCT = r.Header.Get("Content-Type")
+			iconBody, _ = io.ReadAll(r.Body)
+			fmt.Fprint(w, `{"targetId":1111}`)
+		case "POST /universes/v1/7/thumbnails":
+			fmt.Fprint(w, `{"targetId":2222}`)
+		case "POST /universes/v1/7/thumbnails/order":
+			orderBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(200)
+		case "DELETE /universes/v1/7/thumbnails/2222":
+			deleted = append(deleted, r.URL.Path)
+			w.WriteHeader(200)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	ctx := context.Background()
+
+	id, err := c.UploadUniverseIcon(ctx, 7, "icon.png", strings.NewReader("png-bytes"))
+	if err != nil || id != 1111 {
+		t.Errorf("UploadUniverseIcon = %d, %v", id, err)
+	}
+	mediaType, params, err := mime.ParseMediaType(iconCT)
+	if err != nil || mediaType != "multipart/form-data" {
+		t.Fatalf("icon Content-Type = %q (%v), want multipart/form-data", iconCT, err)
+	}
+	form, err := multipart.NewReader(bytes.NewReader(iconBody), params["boundary"]).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatalf("icon multipart: %v", err)
+	}
+	files := form.File["file"]
+	if len(files) != 1 || files[0].Filename != "icon.png" {
+		t.Errorf("icon file part = %+v, want one part named file/icon.png", files)
+	}
+
+	id, err = c.UploadUniverseThumbnail(ctx, 7, "thumb.png", strings.NewReader("png-bytes"))
+	if err != nil || id != 2222 {
+		t.Errorf("UploadUniverseThumbnail = %d, %v", id, err)
+	}
+	if err := c.SetUniverseThumbnailOrder(ctx, 7, []int64{2222, 1111}); err != nil {
+		t.Errorf("SetUniverseThumbnailOrder: %v", err)
+	}
+	if got := strings.TrimSpace(string(orderBody)); got != `{"thumbnailIds":[2222,1111]}` {
+		t.Errorf("order body = %s", got)
+	}
+	if err := c.DeleteUniverseThumbnail(ctx, 7, 2222); err != nil || len(deleted) != 1 {
+		t.Errorf("DeleteUniverseThumbnail: %v (deleted %v)", err, deleted)
+	}
+}
+
+func TestDeveloperProductAndSocialLinkEndpoints(t *testing.T) {
+	var productCreateBody, linkCreateBody []byte
+	var linkDeleted bool
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /developer-products/v1/universes/9/developerproducts":
+			productCreateBody, _ = io.ReadAll(r.Body)
+			fmt.Fprint(w, `{"id":71,"name":"Coins","priceInRobux":25}`)
+		case "PATCH /developer-products/v1/universes/9/developerproducts/71":
+			fmt.Fprint(w, `{"id":71,"name":"Coins","priceInRobux":50}`)
+		case "POST /legacy-develop/v1/universes/9/social-links":
+			linkCreateBody, _ = io.ReadAll(r.Body)
+			fmt.Fprint(w, `{"id":81,"title":"Join","url":"https://discord.gg/x","type":"Discord"}`)
+		case "PATCH /legacy-develop/v1/universes/9/social-links/81":
+			fmt.Fprint(w, `{"id":81,"title":"Join!","url":"https://discord.gg/x","type":"Discord"}`)
+		case "DELETE /legacy-develop/v1/universes/9/social-links/81":
+			linkDeleted = true
+			w.WriteHeader(200)
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	ctx := context.Background()
+
+	p, err := c.CreateDeveloperProduct(ctx, 9, CreateDeveloperProductRequest{Name: "Coins", PriceInRobux: 25})
+	if err != nil || p.ID != 71 {
+		t.Errorf("CreateDeveloperProduct = %+v, %v", p, err)
+	}
+	if got := strings.TrimSpace(string(productCreateBody)); got != `{"name":"Coins","priceInRobux":25}` {
+		t.Errorf("product create body = %s", got)
+	}
+	p, err = c.UpdateDeveloperProduct(ctx, 9, 71, UpdateDeveloperProductRequest{Name: "Coins", PriceInRobux: 50})
+	if err != nil || p.PriceInRobux != 50 {
+		t.Errorf("UpdateDeveloperProduct = %+v, %v", p, err)
+	}
+
+	s, err := c.CreateSocialLink(ctx, 9, SocialLinkRequest{Title: "Join", URL: "https://discord.gg/x", Type: "Discord"})
+	if err != nil || s.ID != 81 {
+		t.Errorf("CreateSocialLink = %+v, %v", s, err)
+	}
+	if got := strings.TrimSpace(string(linkCreateBody)); got != `{"title":"Join","url":"https://discord.gg/x","type":"Discord"}` {
+		t.Errorf("link create body = %s", got)
+	}
+	s, err = c.UpdateSocialLink(ctx, 9, 81, SocialLinkRequest{Title: "Join!", URL: "https://discord.gg/x", Type: "Discord"})
+	if err != nil || s.Title != "Join!" {
+		t.Errorf("UpdateSocialLink = %+v, %v", s, err)
+	}
+	if err := c.DeleteSocialLink(ctx, 9, 81); err != nil || !linkDeleted {
+		t.Errorf("DeleteSocialLink: %v (deleted %v)", err, linkDeleted)
+	}
+}
+
 func TestRetryAfterHTTPDate(t *testing.T) {
 	h := http.Header{}
 	h.Set("Retry-After", time.Now().Add(2*time.Second).UTC().Format(http.TimeFormat))

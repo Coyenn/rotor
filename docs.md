@@ -72,7 +72,11 @@ rotor asset <sync|list> [path] [--dry-run]
                               assets.luau / assets.d.ts codegen (asphalt-style)
 rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               declarative Open Cloud deployment with state +
-                              plan/apply diffing (mantle-style)
+                              plan/apply diffing (mantle-style); manages place
+                              files + place settings, experience settings,
+                              badges, game passes, icon assets, experience
+                              icon + thumbnails, developer products, and
+                              social links
 ```
 
 `asset` and `deploy` are configured by a typed **`rotor.config.ts`** at the project root (evaluated natively — no Node needed; `rotor init` writes the skeleton plus `rotor-config.d.ts` for editor typing) and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.

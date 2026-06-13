@@ -118,6 +118,9 @@ type ExperienceInputs struct {
 	Description string `json:"description,omitempty"`
 	Playability string `json:"playability,omitempty"` // "public" | "private" | "friends"
 	Payments    string `json:"payments,omitempty"`
+	// PrivateServerPrice maps to the v2 privateServerPriceRobux field; nil
+	// leaves private-server pricing unmanaged.
+	PrivateServerPrice *int64 `json:"privateServerPrice,omitempty"`
 }
 
 type experienceProvider struct{}
@@ -158,6 +161,10 @@ func patchUniverse(ctx context.Context, c *Ctx, inputs any) (map[string]any, err
 			return nil, fmt.Errorf("invalid playability %q", in.Playability)
 		}
 		mask = append(mask, "visibility")
+	}
+	if in.PrivateServerPrice != nil {
+		u.PrivateServerPriceRobux = *in.PrivateServerPrice
+		mask = append(mask, "privateServerPriceRobux")
 	}
 	outputs := map[string]any{"universeId": c.UniverseID}
 	if len(mask) == 0 {
@@ -319,4 +326,333 @@ func uploadAsset(ctx context.Context, c *Ctx, inputs any) (map[string]any, error
 		return nil, err
 	}
 	return map[string]any{"assetId": asset.AssetID}, nil
+}
+
+// ----------------------------------------------------------------- game_pass
+
+// GamePassInputs creates/updates a game pass. Price nil means the pass is
+// not for sale. Icon, when set, names the asset resource that uploads the
+// icon file ("asset/<icon>"), exactly like badges; the uploaded asset id is
+// recorded in outputs (informational — Open Cloud has no pass-icon update
+// endpoint yet).
+type GamePassInputs struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Price       *int64 `json:"price,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+}
+
+type gamePassProvider struct{}
+
+func (gamePassProvider) Create(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	in, err := decodeInputs[GamePassInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	g, err := c.Cloud.CreateGamePass(ctx, c.UniverseID, cloud.CreateGamePassRequest{
+		Name:        in.Name,
+		Description: in.Description,
+		Price:       in.Price,
+	})
+	if err != nil {
+		return nil, err
+	}
+	outputs := map[string]any{"gamePassId": g.GamePassID}
+	addPassIcon(c, in, outputs)
+	return outputs, nil
+}
+
+func (gamePassProvider) Update(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	in, err := decodeInputs[GamePassInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	passID, ok := priorInt64(prior, "gamePassId")
+	if !ok {
+		return nil, fmt.Errorf("game pass state has no gamePassId; delete the state entry to recreate it")
+	}
+	forSale := in.Price != nil
+	if _, err := c.Cloud.UpdateGamePass(ctx, passID, cloud.UpdateGamePassRequest{
+		Name:        in.Name,
+		Description: in.Description,
+		Price:       in.Price,
+		IsForSale:   &forSale,
+	}); err != nil {
+		return nil, err
+	}
+	outputs := map[string]any{"gamePassId": passID}
+	addPassIcon(c, in, outputs)
+	return outputs, nil
+}
+
+// Delete takes the pass off sale (the legacy API has no hard delete) and
+// forgets it from state.
+func (gamePassProvider) Delete(ctx context.Context, c *Ctx, prior *StateEntry) error {
+	passID, ok := priorInt64(prior, "gamePassId")
+	if !ok {
+		return nil // never created; nothing to take off sale
+	}
+	offSale := false
+	_, err := c.Cloud.UpdateGamePass(ctx, passID, cloud.UpdateGamePassRequest{IsForSale: &offSale})
+	return err
+}
+
+// addPassIcon copies the icon asset's uploaded id into the pass outputs when
+// the pass declares an icon dependency.
+func addPassIcon(c *Ctx, in GamePassInputs, outputs map[string]any) {
+	if in.Icon == "" || c.Output == nil {
+		return
+	}
+	if v, ok := c.Output(ResourceRef{Kind: KindAsset, Name: in.Icon}, "assetId"); ok {
+		if id, ok := OutputInt64(v); ok {
+			outputs["iconAssetId"] = id
+		}
+	}
+}
+
+// ----------------------------------------------------------- experience_icon
+
+// ExperienceIconInputs uploads the experience's icon image. FileHash is the
+// content hash so an edited image plans as an update.
+type ExperienceIconInputs struct {
+	File     string `json:"file"`
+	FileHash string `json:"fileHash"`
+}
+
+type experienceIconProvider struct{}
+
+func (experienceIconProvider) Create(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	return uploadExperienceIcon(ctx, c, inputs)
+}
+
+func (experienceIconProvider) Update(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	return uploadExperienceIcon(ctx, c, inputs)
+}
+
+// Delete is state-only: the icon cannot be removed via Open Cloud, it is
+// just no longer managed.
+func (experienceIconProvider) Delete(ctx context.Context, c *Ctx, prior *StateEntry) error {
+	return nil
+}
+
+func uploadExperienceIcon(ctx context.Context, c *Ctx, inputs any) (map[string]any, error) {
+	in, err := decodeInputs[ExperienceIconInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	path := c.ResolvePath(in.File)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading icon file: %w", err)
+	}
+	id, err := c.Cloud.UploadUniverseIcon(ctx, c.UniverseID, filepath.Base(path), bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"iconAssetId": id}, nil
+}
+
+// ----------------------------------------------------- experience_thumbnails
+
+// ExperienceThumbnailsInputs manages the universe's ordered thumbnail set as
+// ONE resource: Files is the configured order and FileHashes the matching
+// content hashes, so adding, removing, editing, or reordering any thumbnail
+// changes the inputs hash and plans as a single update.
+//
+// v1 simplification (deliberate): any change is a full replace — every file
+// is re-uploaded, the new order is applied, and every thumbnail id recorded
+// by the previous apply is deleted. Per-thumbnail ids are kept in outputs
+// ("thumbnailIds", in display order) so the stale set is always known;
+// a smarter diff (re-upload only changed files) can slot in later without a
+// state migration.
+type ExperienceThumbnailsInputs struct {
+	Files      []string `json:"files"`
+	FileHashes []string `json:"fileHashes"`
+}
+
+type experienceThumbnailsProvider struct{}
+
+func (experienceThumbnailsProvider) Create(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	return replaceThumbnails(ctx, c, inputs, nil)
+}
+
+func (experienceThumbnailsProvider) Update(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	stale, _ := priorThumbnailIDs(prior)
+	return replaceThumbnails(ctx, c, inputs, stale)
+}
+
+// Delete removes every thumbnail this resource created (ids from the prior
+// outputs).
+func (experienceThumbnailsProvider) Delete(ctx context.Context, c *Ctx, prior *StateEntry) error {
+	ids, _ := priorThumbnailIDs(prior)
+	for _, id := range ids {
+		if err := c.Cloud.DeleteUniverseThumbnail(ctx, c.UniverseID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// replaceThumbnails uploads the configured set in order, applies the order,
+// then deletes the stale ids a previous apply created.
+func replaceThumbnails(ctx context.Context, c *Ctx, inputs any, stale []int64) (map[string]any, error) {
+	in, err := decodeInputs[ExperienceThumbnailsInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(in.Files))
+	for _, file := range in.Files {
+		path := c.ResolvePath(file)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading thumbnail file: %w", err)
+		}
+		id, err := c.Cloud.UploadUniverseThumbnail(ctx, c.UniverseID, filepath.Base(path), bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("uploading thumbnail %s: %w", file, err)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) > 0 {
+		if err := c.Cloud.SetUniverseThumbnailOrder(ctx, c.UniverseID, ids); err != nil {
+			return nil, fmt.Errorf("ordering thumbnails: %w", err)
+		}
+	}
+	for _, id := range stale {
+		if err := c.Cloud.DeleteUniverseThumbnail(ctx, c.UniverseID, id); err != nil {
+			return nil, fmt.Errorf("deleting stale thumbnail %d: %w", id, err)
+		}
+	}
+	return map[string]any{"thumbnailIds": ids}, nil
+}
+
+func priorThumbnailIDs(prior *StateEntry) ([]int64, bool) {
+	if prior == nil || prior.Outputs == nil {
+		return nil, false
+	}
+	return OutputInt64Slice(prior.Outputs["thumbnailIds"])
+}
+
+// --------------------------------------------------------- developer_product
+
+// DeveloperProductInputs creates/updates a developer product.
+type DeveloperProductInputs struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Price       int64  `json:"price"`
+}
+
+type developerProductProvider struct{}
+
+func (developerProductProvider) Create(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	in, err := decodeInputs[DeveloperProductInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.Cloud.CreateDeveloperProduct(ctx, c.UniverseID, cloud.CreateDeveloperProductRequest{
+		Name:         in.Name,
+		Description:  in.Description,
+		PriceInRobux: in.Price,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"productId": p.ID}, nil
+}
+
+func (developerProductProvider) Update(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	in, err := decodeInputs[DeveloperProductInputs](inputs)
+	if err != nil {
+		return nil, err
+	}
+	productID, ok := priorInt64(prior, "productId")
+	if !ok {
+		return nil, fmt.Errorf("developer product state has no productId; delete the state entry to recreate it")
+	}
+	if _, err := c.Cloud.UpdateDeveloperProduct(ctx, c.UniverseID, productID, cloud.UpdateDeveloperProductRequest{
+		Name:         in.Name,
+		Description:  in.Description,
+		PriceInRobux: in.Price,
+	}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"productId": productID}, nil
+}
+
+// Delete is state-only: Roblox has no developer-product delete; the product
+// is just no longer managed.
+func (developerProductProvider) Delete(ctx context.Context, c *Ctx, prior *StateEntry) error {
+	return nil
+}
+
+// --------------------------------------------------------------- social_link
+
+// SocialLinkInputs creates/updates a universe social link. Type is the
+// config-level lowercase enum; the provider maps it to the API spelling.
+type SocialLinkInputs struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Type  string `json:"type"` // facebook|twitter|youtube|twitch|discord|github|guilded
+}
+
+// socialLinkAPITypes maps the config enum onto the legacy API's PascalCase
+// type names.
+var socialLinkAPITypes = map[string]string{
+	"facebook": "Facebook",
+	"twitter":  "Twitter",
+	"youtube":  "YouTube",
+	"twitch":   "Twitch",
+	"discord":  "Discord",
+	"github":   "GitHub",
+	"guilded":  "Guilded",
+}
+
+type socialLinkProvider struct{}
+
+func (socialLinkProvider) Create(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	req, err := socialLinkRequest(inputs)
+	if err != nil {
+		return nil, err
+	}
+	s, err := c.Cloud.CreateSocialLink(ctx, c.UniverseID, req)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"socialLinkId": s.ID}, nil
+}
+
+func (socialLinkProvider) Update(ctx context.Context, c *Ctx, inputs any, prior *StateEntry) (map[string]any, error) {
+	req, err := socialLinkRequest(inputs)
+	if err != nil {
+		return nil, err
+	}
+	linkID, ok := priorInt64(prior, "socialLinkId")
+	if !ok {
+		return nil, fmt.Errorf("social link state has no socialLinkId; delete the state entry to recreate it")
+	}
+	if _, err := c.Cloud.UpdateSocialLink(ctx, c.UniverseID, linkID, req); err != nil {
+		return nil, err
+	}
+	return map[string]any{"socialLinkId": linkID}, nil
+}
+
+// Delete removes the link from the universe.
+func (socialLinkProvider) Delete(ctx context.Context, c *Ctx, prior *StateEntry) error {
+	linkID, ok := priorInt64(prior, "socialLinkId")
+	if !ok {
+		return nil // never created; nothing to remove
+	}
+	return c.Cloud.DeleteSocialLink(ctx, c.UniverseID, linkID)
+}
+
+func socialLinkRequest(inputs any) (cloud.SocialLinkRequest, error) {
+	in, err := decodeInputs[SocialLinkInputs](inputs)
+	if err != nil {
+		return cloud.SocialLinkRequest{}, err
+	}
+	apiType, ok := socialLinkAPITypes[in.Type]
+	if !ok {
+		return cloud.SocialLinkRequest{}, fmt.Errorf("invalid social link type %q", in.Type)
+	}
+	return cloud.SocialLinkRequest{Title: in.Title, URL: in.URL, Type: apiType}, nil
 }

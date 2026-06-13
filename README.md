@@ -71,9 +71,14 @@ export default defineConfig({
 			},
 			prod: {
 				universeId: 333,
-				places: { start: { file: "build/game.rbxl", placeId: 444 } },
-				experience: { name: "My Game", playability: "public" },
+				places: { start: { file: "build/game.rbxl", placeId: 444, name: "Start", maxPlayers: 30 } },
+				experience: { name: "My Game", playability: "public", privateServers: { price: 100 } },
 				badges: { winner: { name: "Winner!", description: "Beat the game", icon: "assets/badge.png" } },
+				gamePasses: { vip: { name: "VIP", price: 250, icon: "assets/vip.png" } },
+				icon: "assets/icon.png",
+				thumbnails: ["assets/thumb1.png", "assets/thumb2.png"],
+				products: { coins: { name: "100 Coins", price: 25 } },
+				socialLinks: { discord: { title: "Join us", url: "https://discord.gg/x", type: "discord" } },
 			},
 		},
 	},
@@ -81,7 +86,7 @@ export default defineConfig({
 ```
 
 - **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable), and generates `assets.luau` + `assets.d.ts`, so code references `assets.sounds.hit` instead of hardcoded `rbxassetid://` strings.
-- **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing, experience settings, badges (icons upload automatically first). Deletes require `--allow-deletes`.
+- **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
 - Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
 - Compile-time env vars come from `.env` / `.env.<NODE_ENV>` next to your tsconfig and are inlined by the `$env` macro; rotor writes `rotor-env.d.ts` so your editor sees the types.
 
@@ -93,20 +98,20 @@ Grab a binary from [GitHub Releases](https://github.com/uproot/rotor/releases), 
 
 ```sh
 # mise
-mise use -g github:uproot/rotor@1.4.2
+mise use -g github:uproot/rotor@1.5.0
 
 # rokit
-rokit add uproot/rotor@1.4.2
+rokit add uproot/rotor@1.5.0
 ```
 
 ```toml
 # aftman.toml
 [tools]
-rotor = "uproot/rotor@1.4.2"
+rotor = "uproot/rotor@1.5.0"
 
 # foreman.toml
 [tools]
-rotor = { github = "uproot/rotor", version = "1.4.2" }
+rotor = { github = "uproot/rotor", version = "1.5.0" }
 ```
 
 ### Install via npm / bun

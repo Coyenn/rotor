@@ -32,6 +32,28 @@ type fakeCloud struct {
 	failCreateAsset error
 	nextAssetID     int64
 	createdAssets   []cloud.CreateAssetRequest
+
+	nextGamePassID    int64
+	createdGamePasses []cloud.CreateGamePassRequest
+	updatedGamePasses []gamePassUpdate
+
+	nextIconID  int64
+	iconUploads []string // file names
+
+	failUploadThumbnail error
+	nextThumbnailID     int64
+	thumbnailUploads    []string // file names
+	thumbnailOrders     [][]int64
+	deletedThumbnails   []int64
+
+	nextProductID   int64
+	createdProducts []cloud.CreateDeveloperProductRequest
+	updatedProducts []productUpdate
+
+	nextLinkID   int64
+	createdLinks []cloud.SocialLinkRequest
+	updatedLinks []linkUpdate
+	deletedLinks []int64
 }
 
 type publishCall struct {
@@ -43,6 +65,21 @@ type publishCall struct {
 type badgeUpdate struct {
 	ID  int64
 	Req cloud.UpdateBadgeRequest
+}
+
+type gamePassUpdate struct {
+	ID  int64
+	Req cloud.UpdateGamePassRequest
+}
+
+type productUpdate struct {
+	ID  int64
+	Req cloud.UpdateDeveloperProductRequest
+}
+
+type linkUpdate struct {
+	ID  int64
+	Req cloud.SocialLinkRequest
 }
 
 func (f *fakeCloud) UpdateUniverse(ctx context.Context, universeID int64, u cloud.Universe, mask []string) (cloud.Universe, error) {
@@ -96,6 +133,73 @@ func (f *fakeCloud) PollOperation(ctx context.Context, path string, into any) er
 	}
 	return nil
 }
+
+func (f *fakeCloud) CreateGamePass(ctx context.Context, universeID int64, req cloud.CreateGamePassRequest) (cloud.GamePass, error) {
+	f.nextGamePassID++
+	f.createdGamePasses = append(f.createdGamePasses, req)
+	return cloud.GamePass{GamePassID: 300 + f.nextGamePassID, Name: req.Name}, nil
+}
+
+func (f *fakeCloud) UpdateGamePass(ctx context.Context, gamePassID int64, req cloud.UpdateGamePassRequest) (cloud.GamePass, error) {
+	f.updatedGamePasses = append(f.updatedGamePasses, gamePassUpdate{gamePassID, req})
+	return cloud.GamePass{GamePassID: gamePassID, Name: req.Name}, nil
+}
+
+func (f *fakeCloud) UploadUniverseIcon(ctx context.Context, universeID int64, fileName string, file io.Reader) (int64, error) {
+	f.nextIconID++
+	f.iconUploads = append(f.iconUploads, fileName)
+	return 800 + f.nextIconID, nil
+}
+
+func (f *fakeCloud) UploadUniverseThumbnail(ctx context.Context, universeID int64, fileName string, file io.Reader) (int64, error) {
+	if f.failUploadThumbnail != nil {
+		return 0, f.failUploadThumbnail
+	}
+	f.nextThumbnailID++
+	f.thumbnailUploads = append(f.thumbnailUploads, fileName)
+	return 900 + f.nextThumbnailID, nil
+}
+
+func (f *fakeCloud) SetUniverseThumbnailOrder(ctx context.Context, universeID int64, ids []int64) error {
+	f.thumbnailOrders = append(f.thumbnailOrders, append([]int64(nil), ids...))
+	return nil
+}
+
+func (f *fakeCloud) DeleteUniverseThumbnail(ctx context.Context, universeID, thumbnailID int64) error {
+	f.deletedThumbnails = append(f.deletedThumbnails, thumbnailID)
+	return nil
+}
+
+func (f *fakeCloud) CreateDeveloperProduct(ctx context.Context, universeID int64, req cloud.CreateDeveloperProductRequest) (cloud.DeveloperProduct, error) {
+	f.nextProductID++
+	f.createdProducts = append(f.createdProducts, req)
+	return cloud.DeveloperProduct{ID: 600 + f.nextProductID, Name: req.Name}, nil
+}
+
+func (f *fakeCloud) UpdateDeveloperProduct(ctx context.Context, universeID, productID int64, req cloud.UpdateDeveloperProductRequest) (cloud.DeveloperProduct, error) {
+	f.updatedProducts = append(f.updatedProducts, productUpdate{productID, req})
+	return cloud.DeveloperProduct{ID: productID, Name: req.Name}, nil
+}
+
+func (f *fakeCloud) CreateSocialLink(ctx context.Context, universeID int64, req cloud.SocialLinkRequest) (cloud.SocialLink, error) {
+	f.nextLinkID++
+	f.createdLinks = append(f.createdLinks, req)
+	return cloud.SocialLink{ID: 400 + f.nextLinkID, Title: req.Title}, nil
+}
+
+func (f *fakeCloud) UpdateSocialLink(ctx context.Context, universeID, linkID int64, req cloud.SocialLinkRequest) (cloud.SocialLink, error) {
+	f.updatedLinks = append(f.updatedLinks, linkUpdate{linkID, req})
+	return cloud.SocialLink{ID: linkID, Title: req.Title}, nil
+}
+
+func (f *fakeCloud) DeleteSocialLink(ctx context.Context, universeID, linkID int64) error {
+	f.deletedLinks = append(f.deletedLinks, linkID)
+	return nil
+}
+
+// Compile-time check that the fake stays in sync with the provider-facing
+// interface.
+var _ CloudClient = (*fakeCloud)(nil)
 
 // --- canonical hashing ---
 
@@ -342,5 +446,200 @@ func TestBuildResourcesGraph(t *testing.T) {
 	})
 	if _, _, err := BuildResources(dir, cfg2, "dev"); err == nil {
 		t.Fatal("missing place file not rejected")
+	}
+}
+
+// TestBuildResourcesExpandedGraph covers the v1.1 kinds: game passes (with
+// an icon shared with a badge deduping to ONE asset), experience icon,
+// thumbnails, developer products, social links, place_config emission, and
+// versionType wiring from the config.
+func TestBuildResourcesExpandedGraph(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "game.rbxl", []byte("rbxl-bytes"))
+	writeFile(t, dir, "shared.png", []byte("shared-icon"))
+	writeFile(t, dir, "icon.png", []byte("game-icon"))
+	writeFile(t, dir, "thumb1.png", []byte("thumb-one"))
+	writeFile(t, dir, "thumb2.png", []byte("thumb-two"))
+
+	price := int64(150)
+	cfg := testConfig(config.Environment{
+		UniverseID: 111,
+		Places: map[string]config.PlaceDeploy{
+			"start": {
+				File: "game.rbxl", PlaceID: 222,
+				Name: "Start Place", Description: "the start", MaxPlayers: 30,
+				VersionType: "saved",
+			},
+		},
+		Experience: &config.ExperienceConfig{
+			Name:           "My Game",
+			PrivateServers: &config.PrivateServers{Price: &price},
+		},
+		Badges:     map[string]config.Badge{"winner": {Name: "Winner!", Icon: "shared.png"}},
+		GamePasses: map[string]config.GamePass{"vip": {Name: "VIP", Price: &price, Icon: "shared.png"}},
+		Icon:       "icon.png",
+		Thumbnails: []string{"thumb1.png", "thumb2.png"},
+		Products:   map[string]config.Product{"coins": {Name: "100 Coins", Price: 25}},
+		SocialLinks: map[string]config.SocialLink{
+			"discord": {Title: "Join us", URL: "https://discord.gg/x", Type: "discord"},
+		},
+	})
+	resources, universeID, err := BuildResources(dir, cfg, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if universeID != 111 {
+		t.Fatalf("universeID = %d", universeID)
+	}
+	byKey := map[string]Resource{}
+	for _, r := range resources {
+		if _, dup := byKey[r.Ref().Key()]; dup {
+			t.Fatalf("duplicate resource %s", r.Ref().Key())
+		}
+		byKey[r.Ref().Key()] = r
+	}
+	wantKeys := []string{
+		"place_file/start", "place_config/start", "experience/universe",
+		"asset/shared.png", "badge/winner", "game_pass/vip",
+		"experience_icon/icon", "experience_thumbnails/thumbnails",
+		"developer_product/coins", "social_link/discord",
+	}
+	if len(byKey) != len(wantKeys) {
+		t.Fatalf("got %d resources, want %d: %v", len(byKey), len(wantKeys), byKey)
+	}
+	for _, k := range wantKeys {
+		if _, ok := byKey[k]; !ok {
+			t.Errorf("missing resource %s", k)
+		}
+	}
+
+	// versionType from config ("saved" -> "Saved").
+	pf := byKey["place_file/start"].Inputs.(PlaceFileInputs)
+	if pf.VersionType != "Saved" {
+		t.Errorf("versionType = %q, want Saved", pf.VersionType)
+	}
+	// place_config carries name/description/maxPlayers.
+	pc := byKey["place_config/start"].Inputs.(PlaceConfigInputs)
+	if pc.PlaceID != 222 || pc.Name != "Start Place" || pc.Description != "the start" || pc.ServerSize != 30 {
+		t.Errorf("place_config inputs = %+v", pc)
+	}
+	// privateServers price flows into experience inputs.
+	exp := byKey["experience/universe"].Inputs.(ExperienceInputs)
+	if exp.PrivateServerPrice == nil || *exp.PrivateServerPrice != 150 {
+		t.Errorf("experience inputs = %+v", exp)
+	}
+	// The shared icon deduped to one asset; both badge and pass depend on it.
+	badge := byKey["badge/winner"]
+	pass := byKey["game_pass/vip"]
+	if len(badge.DependsOn) != 1 || badge.DependsOn[0].Key() != "asset/shared.png" {
+		t.Errorf("badge deps = %v", badge.DependsOn)
+	}
+	if len(pass.DependsOn) != 1 || pass.DependsOn[0].Key() != "asset/shared.png" {
+		t.Errorf("pass deps = %v", pass.DependsOn)
+	}
+	gp := pass.Inputs.(GamePassInputs)
+	if gp.Name != "VIP" || gp.Price == nil || *gp.Price != 150 || gp.Icon != "shared.png" {
+		t.Errorf("game pass inputs = %+v", gp)
+	}
+	// Thumbnails: ordered files + matching hashes.
+	th := byKey["experience_thumbnails/thumbnails"].Inputs.(ExperienceThumbnailsInputs)
+	if !reflect.DeepEqual(th.Files, []string{"thumb1.png", "thumb2.png"}) || len(th.FileHashes) != 2 {
+		t.Errorf("thumbnail inputs = %+v", th)
+	}
+	if th.FileHashes[0] == th.FileHashes[1] {
+		t.Error("distinct thumbnail files hashed identically")
+	}
+	ic := byKey["experience_icon/icon"].Inputs.(ExperienceIconInputs)
+	if ic.File != "icon.png" || ic.FileHash == "" {
+		t.Errorf("icon inputs = %+v", ic)
+	}
+	dp := byKey["developer_product/coins"].Inputs.(DeveloperProductInputs)
+	if dp.Name != "100 Coins" || dp.Price != 25 {
+		t.Errorf("product inputs = %+v", dp)
+	}
+	sl := byKey["social_link/discord"].Inputs.(SocialLinkInputs)
+	if sl.Title != "Join us" || sl.URL != "https://discord.gg/x" || sl.Type != "discord" {
+		t.Errorf("social link inputs = %+v", sl)
+	}
+
+	// Missing icon / thumbnail files error clearly at build time.
+	for _, env := range []config.Environment{
+		{UniverseID: 1, Icon: "missing.png"},
+		{UniverseID: 1, Thumbnails: []string{"missing.png"}},
+		{UniverseID: 1, GamePasses: map[string]config.GamePass{"vip": {Name: "VIP", Icon: "missing.png"}}},
+	} {
+		if _, _, err := BuildResources(dir, testConfig(env), "dev"); err == nil {
+			t.Errorf("missing file not rejected for env %+v", env)
+		}
+	}
+}
+
+// TestPlanDiffsNewKinds: each v1.1 kind plans create when absent, no-op when
+// the recorded hash matches, and update when any input changes.
+func TestPlanDiffsNewKinds(t *testing.T) {
+	price := int64(99)
+	cases := []struct {
+		res     Resource
+		changed any // same kind, one input changed
+	}{
+		{
+			Resource{Kind: KindGamePass, Name: "vip", Inputs: GamePassInputs{Name: "VIP", Price: &price}},
+			GamePassInputs{Name: "VIP"}, // price removed -> off sale
+		},
+		{
+			Resource{Kind: KindExperienceIcon, Name: "icon", Inputs: ExperienceIconInputs{File: "icon.png", FileHash: "sha256:a"}},
+			ExperienceIconInputs{File: "icon.png", FileHash: "sha256:b"},
+		},
+		{
+			Resource{Kind: KindExperienceThumbnails, Name: "thumbnails", Inputs: ExperienceThumbnailsInputs{Files: []string{"a.png", "b.png"}, FileHashes: []string{"sha256:a", "sha256:b"}}},
+			// Reorder only: same files, same hashes, different order.
+			ExperienceThumbnailsInputs{Files: []string{"b.png", "a.png"}, FileHashes: []string{"sha256:b", "sha256:a"}},
+		},
+		{
+			Resource{Kind: KindDeveloperProduct, Name: "coins", Inputs: DeveloperProductInputs{Name: "Coins", Price: 10}},
+			DeveloperProductInputs{Name: "Coins", Price: 20},
+		},
+		{
+			Resource{Kind: KindSocialLink, Name: "discord", Inputs: SocialLinkInputs{Title: "Join", URL: "https://discord.gg/x", Type: "discord"}},
+			SocialLinkInputs{Title: "Join!", URL: "https://discord.gg/x", Type: "discord"},
+		},
+	}
+	for _, tc := range cases {
+		key := tc.res.Ref().Key()
+
+		// Absent from state -> create.
+		plan, err := BuildPlan([]Resource{tc.res}, NewState(), PlanOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Steps[0].Op != OpCreate {
+			t.Errorf("%s: op = %v, want create", key, plan.Steps[0].Op)
+		}
+
+		// Matching hash -> no-op.
+		hash, err := HashInputs(tc.res.Inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := NewState()
+		st.Resources[key] = &StateEntry{InputsHash: hash}
+		plan, err = BuildPlan([]Resource{tc.res}, st, PlanOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Steps[0].Op != OpNoop {
+			t.Errorf("%s: op = %v, want no-op", key, plan.Steps[0].Op)
+		}
+
+		// Changed inputs -> update.
+		changed := tc.res
+		changed.Inputs = tc.changed
+		plan, err = BuildPlan([]Resource{changed}, st, PlanOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if plan.Steps[0].Op != OpUpdate {
+			t.Errorf("%s: op = %v, want update after input change", key, plan.Steps[0].Op)
+		}
 	}
 }

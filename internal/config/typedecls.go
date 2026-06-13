@@ -39,10 +39,19 @@ declare module "@rotor-rbx/rotor" {
 		creator: Creator;
 	}
 
-	/** Publishes a built place file to a place id. */
+	/** Publishes a built place file to a place id (and optionally manages place metadata). */
 	export interface PlaceDeploy {
 		file: string;
 		placeId: number;
+		name?: string;
+		description?: string;
+		maxPlayers?: number;
+		versionType?: "saved" | "published";
+	}
+
+	/** Paid private servers; omit price for free private servers. */
+	export interface PrivateServers {
+		price?: number;
 	}
 
 	/** Universe-level experience settings. */
@@ -50,6 +59,7 @@ declare module "@rotor-rbx/rotor" {
 		name?: string;
 		description?: string;
 		playability?: "public" | "private" | "friends";
+		privateServers?: PrivateServers;
 	}
 
 	/** A badge to create or update. */
@@ -59,6 +69,28 @@ declare module "@rotor-rbx/rotor" {
 		icon?: string;
 	}
 
+	/** A game pass to create or update; omit price to leave it off sale. */
+	export interface GamePass {
+		name?: string;
+		description?: string;
+		price?: number;
+		icon?: string;
+	}
+
+	/** A developer product to create or update. */
+	export interface Product {
+		name?: string;
+		description?: string;
+		price?: number;
+	}
+
+	/** A universe social link. */
+	export interface SocialLink {
+		title?: string;
+		url?: string;
+		type?: "facebook" | "twitter" | "youtube" | "twitch" | "discord" | "github" | "guilded";
+	}
+
 	/** One named deploy target (e.g. "dev", "prod"). */
 	export interface Environment {
 		universeId?: number;
@@ -66,6 +98,15 @@ declare module "@rotor-rbx/rotor" {
 		experience?: ExperienceConfig;
 		payments?: string;
 		badges?: Record<string, Badge>;
+		gamePasses?: Record<string, GamePass>;
+		/** Experience icon image path. */
+		icon?: string;
+		/** Ordered thumbnail image paths (max 10). */
+		thumbnails?: string[];
+		/** Developer products. */
+		products?: Record<string, Product>;
+		/** Universe social links. */
+		socialLinks?: Record<string, SocialLink>;
 	}
 
 	/** Configures ` + "`rotor deploy`" + `. */

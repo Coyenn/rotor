@@ -4,10 +4,12 @@
 // of the Open Cloud client (internal/cloud).
 //
 // The engine is the deliverable; resource kinds plug into it via the
-// Provider interface. v1 ships place_file (publish an rbxl), place_config
-// (name/description PATCH), experience (universe settings PATCH with
-// updateMask), badge, and asset (badge-icon upload). More kinds are roadmap
-// items, not architecture changes.
+// Provider interface. v1 shipped place_file (publish an rbxl), place_config
+// (name/description/maxPlayers PATCH), experience (universe settings PATCH
+// with updateMask), badge, and asset (icon upload); the v1.1 mantle-parity
+// expansion adds game_pass, experience_icon, experience_thumbnails,
+// developer_product, and social_link. More kinds are roadmap items, not
+// architecture changes.
 package deploy
 
 import (
@@ -19,14 +21,19 @@ import (
 	"rotor/internal/cloud"
 )
 
-// Resource kinds implemented in v1. The state-file key for a resource is
-// "<kind>/<name>".
+// Resource kinds implemented in v1 (and the v1.1 mantle-parity expansion).
+// The state-file key for a resource is "<kind>/<name>".
 const (
-	KindPlaceFile   = "place_file"   // publish a built .rbxl to a place id
-	KindPlaceConfig = "place_config" // PATCH place name/description
-	KindExperience  = "experience"   // PATCH universe settings (updateMask)
-	KindBadge       = "badge"        // create/update a badge
-	KindAsset       = "asset"        // upload a file (badge icons) as an asset
+	KindPlaceFile            = "place_file"            // publish a built .rbxl to a place id
+	KindPlaceConfig          = "place_config"          // PATCH place name/description/maxPlayers
+	KindExperience           = "experience"            // PATCH universe settings (updateMask)
+	KindBadge                = "badge"                 // create/update a badge
+	KindAsset                = "asset"                 // upload a file (badge/pass icons) as an asset
+	KindGamePass             = "game_pass"             // create/update a game pass
+	KindExperienceIcon       = "experience_icon"       // upload the experience icon image
+	KindExperienceThumbnails = "experience_thumbnails" // manage the ordered thumbnail set
+	KindDeveloperProduct     = "developer_product"     // create/update a developer product
+	KindSocialLink           = "social_link"           // create/update/delete a universe social link
 )
 
 // ResourceRef names another resource in the graph, for DependsOn edges and
@@ -66,6 +73,17 @@ type CloudClient interface {
 	UpdateBadge(ctx context.Context, badgeID int64, req cloud.UpdateBadgeRequest) (cloud.Badge, error)
 	CreateAsset(ctx context.Context, req cloud.CreateAssetRequest, fileName string, file io.Reader) (operationPath string, err error)
 	PollOperation(ctx context.Context, path string, into any) error
+	CreateGamePass(ctx context.Context, universeID int64, req cloud.CreateGamePassRequest) (cloud.GamePass, error)
+	UpdateGamePass(ctx context.Context, gamePassID int64, req cloud.UpdateGamePassRequest) (cloud.GamePass, error)
+	UploadUniverseIcon(ctx context.Context, universeID int64, fileName string, file io.Reader) (int64, error)
+	UploadUniverseThumbnail(ctx context.Context, universeID int64, fileName string, file io.Reader) (int64, error)
+	SetUniverseThumbnailOrder(ctx context.Context, universeID int64, thumbnailIDs []int64) error
+	DeleteUniverseThumbnail(ctx context.Context, universeID, thumbnailID int64) error
+	CreateDeveloperProduct(ctx context.Context, universeID int64, req cloud.CreateDeveloperProductRequest) (cloud.DeveloperProduct, error)
+	UpdateDeveloperProduct(ctx context.Context, universeID, productID int64, req cloud.UpdateDeveloperProductRequest) (cloud.DeveloperProduct, error)
+	CreateSocialLink(ctx context.Context, universeID int64, req cloud.SocialLinkRequest) (cloud.SocialLink, error)
+	UpdateSocialLink(ctx context.Context, universeID, linkID int64, req cloud.SocialLinkRequest) (cloud.SocialLink, error)
+	DeleteSocialLink(ctx context.Context, universeID, linkID int64) error
 }
 
 // Compile-time check that the real client implements the provider-facing
@@ -105,14 +123,19 @@ type Provider interface {
 	Delete(ctx context.Context, c *Ctx, prior *StateEntry) error
 }
 
-// DefaultProviders returns the registry of v1 resource kinds.
+// DefaultProviders returns the registry of implemented resource kinds.
 func DefaultProviders() map[string]Provider {
 	return map[string]Provider{
-		KindPlaceFile:   placeFileProvider{},
-		KindPlaceConfig: placeConfigProvider{},
-		KindExperience:  experienceProvider{},
-		KindBadge:       badgeProvider{},
-		KindAsset:       assetProvider{},
+		KindPlaceFile:            placeFileProvider{},
+		KindPlaceConfig:          placeConfigProvider{},
+		KindExperience:           experienceProvider{},
+		KindBadge:                badgeProvider{},
+		KindAsset:                assetProvider{},
+		KindGamePass:             gamePassProvider{},
+		KindExperienceIcon:       experienceIconProvider{},
+		KindExperienceThumbnails: experienceThumbnailsProvider{},
+		KindDeveloperProduct:     developerProductProvider{},
+		KindSocialLink:           socialLinkProvider{},
 	}
 }
 
@@ -148,4 +171,25 @@ func OutputInt64(v any) (int64, bool) {
 		return i, err == nil
 	}
 	return 0, false
+}
+
+// OutputInt64Slice coerces a state output value to []int64. Slices stored as
+// []int64 come back as []any of float64 after a state reload; both are
+// accepted (per-element coercion via OutputInt64).
+func OutputInt64Slice(v any) ([]int64, bool) {
+	switch s := v.(type) {
+	case []int64:
+		return s, true
+	case []any:
+		out := make([]int64, 0, len(s))
+		for _, e := range s {
+			n, ok := OutputInt64(e)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, n)
+		}
+		return out, true
+	}
+	return nil, false
 }
