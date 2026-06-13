@@ -441,6 +441,10 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	declPath := envDeclPath(configPath)
 	fs = injectEnvDeclFS(fs, declPath)
 
+	// ... and likewise the synthetic $asset ambient declaration (assetdecl.go).
+	assetDecl := assetDeclPath(configPath)
+	fs = injectAssetDeclFS(fs, assetDecl)
+
 	host := compiler.NewCompilerHost(dir, fs, bundled.LibPath(), nil, nil)
 	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
 	if len(configDiags) > 0 {
@@ -459,6 +463,11 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	// a duplicate-identifier error (see projectDeclaresEnvOnDisk).
 	if !projectDeclaresEnvOnDisk(fs, parsed.ParsedConfig.FileNames) {
 		parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, declPath)
+	}
+	// Likewise for $asset (skipped when an identical on-disk rotor-asset.d.ts
+	// is already a root file — see projectDeclaresAssetOnDisk).
+	if !projectDeclaresAssetOnDisk(fs, parsed.ParsedConfig.FileNames) {
+		parsed.ParsedConfig.FileNames = append(parsed.ParsedConfig.FileNames, assetDecl)
 	}
 
 	return compiler.NewProgram(compiler.ProgramOptions{

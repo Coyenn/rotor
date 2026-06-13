@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"rotor/internal/assets"
 	"rotor/internal/compile"
 )
 
@@ -102,7 +103,8 @@ func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
 		// rotor's own generated companions are refreshed by the build itself;
 		// watching them would turn the first auto-write into a spurious
 		// rebuild (and a user edit is overwritten on the next pass anyway).
-		if strings.EqualFold(name, compile.EnvDeclFileName) {
+		if strings.EqualFold(name, compile.EnvDeclFileName) ||
+			strings.EqualFold(name, compile.AssetDeclFileName) {
 			continue
 		}
 		// entry.Info() reuses the metadata the directory enumeration already
@@ -330,6 +332,12 @@ func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed
 	} else if result != nil {
 		if result.WroteEnvTypes {
 			u.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
+		}
+		if result.WroteAssetTypes {
+			u.noteLine(compile.AssetDeclFileName + "  (generated — editor types for $asset)")
+		}
+		if result.WroteLockfile {
+			u.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")
 		}
 		u.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	}

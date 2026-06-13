@@ -204,9 +204,11 @@ func runCheckCore(dir string) checkCore {
 		program.GetBindDiagnostics, semanticProjectFilesOnly)
 	diags = compiler.SortAndDeduplicateDiagnostics(diags)
 
-	// rotor extension: refresh the rotor-env.d.ts editor companion when the
-	// project references $env (silent — check's stdout is byte-stable).
+	// rotor extension: refresh the rotor-env.d.ts / rotor-asset.d.ts editor
+	// companions when the project references $env / $asset (silent — check's
+	// stdout is byte-stable).
 	refreshEnvTypesForCheck(dir, parsed.FileNames(), program)
+	refreshAssetTypesForCheck(dir, parsed.FileNames(), program)
 
 	return checkCore{
 		diags:      diags,
@@ -287,6 +289,26 @@ func refreshEnvTypesForCheck(dir string, fileNames []string, program *compiler.P
 		}
 		if _, err := compile.WriteEnvDeclarations(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.EnvDeclFileName, err)
+		}
+		return
+	}
+}
+
+// refreshAssetTypesForCheck mirrors refreshEnvTypesForCheck for the $asset
+// macro: when any non-declaration project file references $asset, the on-disk
+// rotor-asset.d.ts editor companion is (re)written if missing or stale.
+// Failures only warn on stderr.
+func refreshAssetTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
+	for _, name := range fileNames {
+		if strings.HasSuffix(name, ".d.ts") {
+			continue
+		}
+		sf := program.GetSourceFile(name)
+		if sf == nil || !strings.Contains(sf.Text(), "$asset") {
+			continue
+		}
+		if _, err := compile.WriteAssetDeclarations(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.AssetDeclFileName, err)
 		}
 		return
 	}

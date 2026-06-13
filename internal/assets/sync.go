@@ -73,6 +73,41 @@ func Sync(ctx context.Context, client Cloud, projectDir string, plan *Plan, lock
 	return res, nil
 }
 
+// UploadFile creates a new asset from absPath (a Decal or Audio, classified
+// by extension), polls the upload operation to completion, and returns the
+// final asset id. It is the single-file create path the $asset resolver uses
+// on a cache miss; it shares CreateAsset + PollOperation with Sync. Files with
+// an unknown extension are rejected.
+func UploadFile(ctx context.Context, client Cloud, absPath string, creator cloud.Creator) (int64, error) {
+	assetType, ok := classifyExt(path.Ext(absPath))
+	if !ok {
+		return 0, fmt.Errorf("assets: %s has an unsupported extension for upload", path.Base(filepath.ToSlash(absPath)))
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return 0, err
+	}
+	fileName := path.Base(filepath.ToSlash(absPath))
+	req := cloud.CreateAssetRequest{
+		AssetType:       string(assetType),
+		DisplayName:     stem(fileName),
+		Description:     "uploaded by rotor $asset",
+		CreationContext: cloud.CreationContext{Creator: creator},
+	}
+	opPath, err := client.CreateAsset(ctx, req, fileName, bytes.NewReader(data))
+	if err != nil {
+		return 0, err
+	}
+	var asset cloud.Asset
+	if err := client.PollOperation(ctx, opPath, &asset); err != nil {
+		return 0, err
+	}
+	if asset.AssetID == 0 {
+		return 0, fmt.Errorf("assets: upload operation finished without an asset id")
+	}
+	return asset.AssetID, nil
+}
+
 // uploadOne performs a single create or update, polling the long-running
 // operation to completion, and returns the final asset id.
 func uploadOne(ctx context.Context, client Cloud, projectDir string, item PlanItem, creator cloud.Creator) (int64, error) {

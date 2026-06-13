@@ -10,6 +10,10 @@ import (
 	"regexp"
 	"strings"
 
+	"rotor/internal/assetresolve"
+	"rotor/internal/assets"
+	"rotor/internal/cloud"
+	"rotor/internal/config"
 	"rotor/internal/dotenv"
 	"rotor/internal/logservice"
 	"rotor/internal/rojo"
@@ -58,6 +62,16 @@ type projectContext struct {
 	// only, so files that inlined a stale value are not re-selected by an env
 	// change alone (documented on dotenv.Env).
 	env *dotenv.Env
+
+	// assets is the build-time resolver for the rotor $asset macro, built once
+	// per compile pass from rotor-lock.json + the [assets] config (creator) +
+	// an optional Open Cloud client (cloud.FromEnv; nil offline). Shared by
+	// every file's State (concurrency-safe). After a successful build the
+	// pipeline persists rotor-lock.json when the resolver is Dirty (see
+	// compileProjectSourceFiles' callers). nil only when construction itself
+	// fails (it never does — a missing config/lockfile yields an offline
+	// resolver that errors clearly on a $asset miss).
+	assets *assetresolve.Resolver
 }
 
 // newProjectProgram builds the tsgo Program for projectDir over the sanitized
@@ -264,6 +278,7 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		dir:         dir,
 		projectType: projectType,
 		env:         dotenv.Load(envDir),
+		assets:      newAssetResolver(envDir),
 		rojoContext: &transformer.RojoContext{
 			Resolver:          rojoResolver,
 			PathTranslator:    pathTranslator,
@@ -277,6 +292,50 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 			UseCaseSensitiveFileNames: useCaseSensitiveFileNames,
 		},
 	}, nil, nil
+}
+
+// newAssetResolver builds the build-time $asset resolver for one compile pass
+// (mirroring how dotenv.Load builds the $env snapshot). It loads
+// rotor-lock.json from projectDir (a missing/corrupt lockfile yields an empty
+// one — corrupt is tolerated here so a bad lockfile cannot abort an otherwise
+// valid build; the $asset macro then errors clearly per-reference), reads the
+// [assets].creator from rotor.toml (ErrNotFound tolerated → no creator), and
+// constructs an Open Cloud client via cloud.FromEnv (nil when ROBLOX_API_KEY
+// is unset). With no client/creator the resolver is deterministic and offline:
+// a $asset cache hit inlines, a cache miss errors with rotorAssetNotCached.
+func newAssetResolver(projectDir string) *assetresolve.Resolver {
+	lock, err := assets.LoadLockfile(projectDir)
+	if err != nil {
+		// A corrupt lockfile shouldn't abort the build; start empty so every
+		// $asset reference surfaces a clear miss diagnostic instead.
+		lock = assets.NewLockfile()
+	}
+
+	var creator cloud.Creator
+	if cfg, err := config.Load(projectDir); err == nil && cfg.Assets != nil {
+		switch cfg.Assets.Creator.Type {
+		case "user":
+			creator.UserID = cfg.Assets.Creator.ID
+		case "group":
+			creator.GroupID = cfg.Assets.Creator.ID
+		}
+	}
+
+	// Only build a cloud client when a creator is configured (uploads need an
+	// owner anyway); cloud.FromEnv returns nil without ROBLOX_API_KEY.
+	var client assets.Cloud
+	if creator.UserID != 0 || creator.GroupID != 0 {
+		if c, err := cloud.FromEnv(); err == nil {
+			client = c
+		}
+	}
+
+	return assetresolve.New(assetresolve.Options{
+		ProjectDir: projectDir,
+		Lockfile:   lock,
+		Client:     client,
+		Creator:    creator,
+	})
 }
 
 // createNodeModulesPathMapping ports
@@ -599,6 +658,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		}
 		state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 		state.Env = pctx.env
+		state.Assets = pctx.assets
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 

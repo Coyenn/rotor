@@ -12,6 +12,7 @@ import (
 
 	"rotor/internal/assets"
 	"rotor/internal/cloud"
+	"rotor/internal/compile"
 	"rotor/internal/config"
 	"rotor/internal/term"
 )
@@ -159,7 +160,7 @@ func assetSync(dir string, dryRun bool) int {
 	}
 
 	if plan.Changes() == 0 {
-		if code := assetWriteOutputs(s, dir, cfg.Assets.Output, lock); code != 0 {
+		if code := assetWriteOutputs(s, dir, cfg.Assets, lock); code != 0 {
 			return code
 		}
 		u.okLine("everything up to date", fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
@@ -209,7 +210,7 @@ func assetSync(dir string, dryRun bool) int {
 		return 1
 	}
 
-	if code := assetWriteOutputs(s, dir, cfg.Assets.Output, lock); code != 0 {
+	if code := assetWriteOutputs(s, dir, cfg.Assets, lock); code != 0 {
 		return code
 	}
 
@@ -243,20 +244,28 @@ func refreshConfigSchema(u *ui, dir string) {
 	}
 }
 
-// assetWriteOutputs regenerates the configured codegen targets from the
-// lockfile, printing what was written. Returns a process exit code.
-func assetWriteOutputs(s *term.Styler, dir string, out config.AssetsOutput, lock *assets.Lockfile) int {
-	if out.Luau == "" && out.Types == "" {
-		return 0
-	}
-	if err := assets.WriteOutputs(dir, out.Luau, out.Types, lock); err != nil {
+// assetWriteOutputs performs the mode-aware output step of `rotor asset sync`,
+// printing what was written. In "module" mode (default) it regenerates
+// assets.luau + assets.d.ts from the lockfile; in "macro" mode it writes the
+// rotor-asset.d.ts editor companion (and no assets.luau). Returns a process
+// exit code.
+func assetWriteOutputs(s *term.Styler, dir string, cfg *config.AssetsConfig, lock *assets.Lockfile) int {
+	written, err := assets.EmitForMode(
+		dir,
+		assets.ParseMode(cfg.Mode),
+		struct {
+			Luau  string
+			Types string
+		}{Luau: cfg.Output.Luau, Types: cfg.Output.Types},
+		assets.MacroCompanion{FileName: compile.AssetDeclFileName, Text: compile.AssetDeclFileText},
+		lock,
+	)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
 		return 1
 	}
-	for _, p := range []string{out.Luau, out.Types} {
-		if p != "" {
-			fmt.Printf("  %s %s %s\n", s.Muted(s.Glyphs().Arrow), p, s.Muted("(generated)"))
-		}
+	for _, p := range written {
+		fmt.Printf("  %s %s %s\n", s.Muted(s.Glyphs().Arrow), p, s.Muted("(generated)"))
 	}
 	return 0
 }

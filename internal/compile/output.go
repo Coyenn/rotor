@@ -9,11 +9,16 @@ import (
 	"sort"
 	"strings"
 
+	"rotor/internal/assets"
 	"rotor/internal/includefiles"
 	"rotor/internal/logservice"
 	"rotor/internal/rojo"
 	"rotor/tsgo/compiler"
 )
+
+// assetsLockfileName is the lockfile the $asset pipeline persists (aliased so
+// error text stays in sync with internal/assets).
+const assetsLockfileName = assets.LockfileName
 
 // BuildResult is the disk-writing sibling of CompileProject's pure text map.
 // Outputs contains the compiled Luau sources keyed by project-relative output
@@ -33,6 +38,17 @@ type BuildResult struct {
 	// WroteEnvTypes reports whether rotor-env.d.ts was (re)written this pass
 	// (false when it was already current, or when UsesEnvMacro is false).
 	WroteEnvTypes bool
+
+	// UsesAssetMacro reports whether any project source file references the
+	// rotor $asset macro (cheap text scan). When true the build also refreshes
+	// the on-disk rotor-asset.d.ts editor companion (see assetdecl.go).
+	UsesAssetMacro bool
+	// WroteAssetTypes reports whether rotor-asset.d.ts was (re)written this
+	// pass (false when current, or when UsesAssetMacro is false).
+	WroteAssetTypes bool
+	// WroteLockfile reports whether rotor-lock.json was persisted this pass
+	// (true only when $asset uploaded a new asset on a cache miss).
+	WroteLockfile bool
 }
 
 // BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
@@ -64,11 +80,14 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	// plugin's MODULE export (which shadows the global per-file), so rotor's
 	// macro never fires there and no editor companion is needed.
 	usesEnvMacro := false
+	usesAssetMacro := false
 	for _, sourceFile := range sourceFiles {
 		text := sourceFile.Text()
 		if strings.Contains(text, "$env") && !strings.Contains(text, "rbxts-transform-env") {
 			usesEnvMacro = true
-			break
+		}
+		if strings.Contains(text, "$asset") {
+			usesAssetMacro = true
 		}
 	}
 
@@ -152,12 +171,36 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
+	// rotor extension: same editor-companion refresh for $asset, plus the
+	// lockfile flush. The transformer never writes files/network beyond the
+	// upload inside Resolve; the lockfile PERSIST happens HERE, after a
+	// successful build, so a cache-hit build does zero IO beyond reading the
+	// lockfile (deterministic/parity-safe) and only a genuine upload-on-miss
+	// rewrites rotor-lock.json atomically.
+	wroteAssetTypes := false
+	if usesAssetMacro {
+		wroteAssetTypes, err = WriteAssetDeclarations(filepath.FromSlash(dir))
+		if err != nil {
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", AssetDeclFileName, err)
+		}
+	}
+	wroteLockfile := false
+	if pctx.assets != nil && pctx.assets.Dirty() {
+		if err := pctx.assets.Lockfile().Save(filepath.FromSlash(dir)); err != nil {
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", assetsLockfileName, err)
+		}
+		wroteLockfile = true
+	}
+
 	return &BuildResult{
-		Outputs:       outputs,
-		EmittedFiles:  emittedFiles,
-		OutputDir:     pathTranslator.OutDir,
-		UsesEnvMacro:  usesEnvMacro,
-		WroteEnvTypes: wroteEnvTypes,
+		Outputs:         outputs,
+		EmittedFiles:    emittedFiles,
+		OutputDir:       pathTranslator.OutDir,
+		UsesEnvMacro:    usesEnvMacro,
+		WroteEnvTypes:   wroteEnvTypes,
+		UsesAssetMacro:  usesAssetMacro,
+		WroteAssetTypes: wroteAssetTypes,
+		WroteLockfile:   wroteLockfile,
 	}, nil, nil
 }
 

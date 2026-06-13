@@ -141,6 +141,14 @@ type State struct {
 	// (dotenv.Env.Lookup is nil-receiver safe).
 	Env *dotenv.Env
 
+	// Assets is the project-level asset resolver consumed by the rotor $asset
+	// macro (assetmacro.go) — constructed once per compile pass by
+	// compile.newProjectContext (lockfile + optional cloud client) and shared
+	// by every file's State. nil in mechanics tests and checker-light states;
+	// the macro then emits a clear diagnostic (DiagRotorAssetNoResolver)
+	// rather than panicking.
+	Assets AssetResolver
+
 	// OptimizedLoops plumbs the `optimizedLoops` project option into
 	// transformForStatement (upstream gate: transformForStatement.ts L492;
 	// DEFAULT_PROJECT_OPTIONS.optimizedLoops = true). NewState defaults it on

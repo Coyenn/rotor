@@ -108,6 +108,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 	}
 	state.SetRojoContext(pctx.rojoContext, pctx.projectType)
 	state.Env = pctx.env
+	state.Assets = pctx.assets
 	return transformAndRenderDetailed(state)
 }
 

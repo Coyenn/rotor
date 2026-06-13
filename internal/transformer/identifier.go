@@ -68,6 +68,17 @@ func TransformIdentifier(s *State, node *ast.Node) luau.Expression {
 		}
 	}
 
+	// rotor extension: a bare `$asset` outside a call has no runtime value
+	// (the call position is consumed earlier, by interceptAssetChain — see
+	// assetmacro.go); emitting the identifier itself would produce invalid
+	// Luau.
+	if node.Text() == "$asset" {
+		if assetSymbol := assetMacroSymbol(s); assetSymbol != nil && symbol == assetSymbol {
+			s.Diags.Add(DiagRotorAssetBadUsage(node))
+			return luau.NewNone()
+		}
+	}
+
 	// Constructor-macro misuse (upstream L137-150): a constructor-macro
 	// identifier used WITHOUT `new` has no value to emit. As a class
 	// `extends` expression that is noMacroExtends; anywhere else

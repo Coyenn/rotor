@@ -104,8 +104,11 @@ func relSlash(root, p string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// hashFile returns "sha256:<hex>" of the file's content.
-func hashFile(p string) (string, error) {
+// HashFile returns "sha256:<hex>" of the file at p — the same content hash
+// Scan records and the lockfile is keyed by. Shared by the $asset resolver
+// (internal/assetresolve) so a build-time hash matches a sync-time hash
+// exactly (a single source of truth for the cache key).
+func HashFile(p string) (string, error) {
 	f, err := os.Open(p)
 	if err != nil {
 		return "", err
@@ -117,3 +120,6 @@ func hashFile(p string) (string, error) {
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// hashFile is the internal alias retained for Scan's call sites.
+func hashFile(p string) (string, error) { return HashFile(p) }

@@ -45,6 +45,7 @@ These compile under rotor but not under rbxtsc; everything rbxtsc accepts is sti
 
 - **`$getModuleTree` on folders** — rbxtsc requires the specifier to resolve as a module, so pointing it at a folder only works if the folder has an `index.ts`. rotor resolves folder specifiers directly: relative ones (`"./systems"`) against the importing file, non-relative ones against `baseUrl`/`paths` (`"shared/systems"`) and then the project root (`"src/shared/systems"`). The usual server-import/isolation guards still apply.
 - **`$env` compile-time environment macro** — a built-in replacement for the `rbxts-transform-env` plugin (no Node sidecar, no plugin install, no typings package). `$env("GAME_NAME")` inlines the variable's value as a Luau string literal (or `nil` when unset), `$env("GAME_NAME", "fallback")` inlines the value or the fallback, and `$env.GAME_NAME` / `$env["GAME_NAME"]` behave like the 1-arg call. Values resolve at compile time with priority **process environment > `.env.<NODE_ENV>` > `.env`** (files live next to your `tsconfig.json`; `NODE_ENV` itself resolves from the process env, then `.env`). The `.env` format is `KEY=VALUE` lines with `#` comments and optional single/double quotes; v1 inlines strings only. The type surface (`declare const $env: ...`) is injected automatically — no `.d.ts` needed — and names/fallbacks must be string literals so the value can be baked in (dynamic names get a clear diagnostic). For editors (which never see the injected declaration), rotor also generates an on-disk **`rotor-env.d.ts`** companion with the identical declaration: `rotor init` scaffolds it (and lists it in the tsconfig `include`), and `rotor build` / `rotor check` write or refresh it automatically whenever the project references `$env` — if your project predates this and `$env` red-squiggles in VS Code, add `rotor-env.d.ts` to your tsconfig `include`. The compiler skips its own synthetic copy when the on-disk file is part of the program, so the two never collide. If you migrate from `rbxts-transform-env`, drop the plugin from your tsconfig; its modern module-export form (`import { $env } from "rbxts-transform-env"`) still works through the plugin sidecar and never collides with the built-in global.
+- **`$asset` compile-time asset macro** — the headline rotor 2.0 feature. `$asset("assets/logo.png")` inlines a Luau string `"rbxassetid://<id>"`, resolving the file's content hash to a Roblox asset id through the committed lockfile (**`rotor-lock.json`**). The single argument is a string literal (dynamic paths get a clear diagnostic); a project-relative path is resolved against the project root, and a path beginning with `./` or `../` against the importing file. **Cache hit (the common case) is fully offline and deterministic** — the build reads only the lockfile and parity is unaffected. On a genuine cache miss, if `ROBLOX_API_KEY` is set and `[assets].creator` is configured, rotor uploads the file via Open Cloud, records the new id in `rotor-lock.json` (persisted atomically after a successful build), and inlines it; **offline + miss** is a clear compile error pointing at `rotor asset sync`. Missing files, bad usage (a bare `$asset`), and non-literal paths all surface diagnostics rather than panics. As with `$env`, the type surface (`declare function $asset(path: string): string;`) is injected automatically, and an on-disk **`rotor-asset.d.ts`** editor companion is written/refreshed by `rotor build` / `rotor check` whenever the project references `$asset` (add it to your tsconfig `include` if it red-squiggles; the compiler skips its synthetic copy when the on-disk file is in the program).
 
 ## Commands
 
@@ -69,7 +70,8 @@ rotor sourcemap [path] [-o out.json]
                               emit a Rojo-compatible sourcemap.json for luau-lsp
 rotor asset <sync|list> [path] [--dry-run]
                               upload assets via Open Cloud: lockfile + typed
-                              assets.luau / assets.d.ts codegen (asphalt-style)
+                              assets.luau / assets.d.ts codegen (asphalt-style),
+                              or the $asset macro companion in "macro" mode
 rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               declarative Open Cloud deployment with state +
                               plan/apply diffing (mantle-style); manages place
@@ -80,6 +82,11 @@ rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
 ```
 
 `asset` and `deploy` are configured by a typed **`rotor.config.ts`** at the project root (evaluated natively — no Node needed; `rotor init` writes the skeleton plus `rotor-config.d.ts` for editor typing) and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
+
+**Asset delivery modes** (`[assets] mode`): a project picks one way assets reach Luau, both sharing the same scan/hash/upload pipeline and `rotor-lock.json` cache.
+
+- **`"module"`** (default): `rotor asset sync` uploads the configured `paths` and regenerates the typed accessor module (`assets.luau` + `assets.d.ts`) from the lockfile — the asphalt-style 1.x behaviour. The `$asset` macro still works.
+- **`"macro"`**: `rotor asset sync` uploads `paths` and maintains the lockfile + the `rotor-asset.d.ts` editor companion (no `assets.luau`); the `$asset` macro is the consumption path, with build-time auto-upload filling any gaps. The macro itself works in either mode — `mode` only changes what `sync` emits.
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).

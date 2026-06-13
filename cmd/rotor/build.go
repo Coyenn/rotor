@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"rotor/internal/assets"
 	"rotor/internal/compile"
 	"rotor/internal/logservice"
 	"rotor/internal/transformer"
@@ -283,6 +284,12 @@ func cmdBuild(args []string) int {
 
 	if result.WroteEnvTypes {
 		out.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
+	}
+	if result.WroteAssetTypes {
+		out.noteLine(compile.AssetDeclFileName + "  (generated — editor types for $asset)")
+	}
+	if result.WroteLockfile {
+		out.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")
 	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
 	return 0

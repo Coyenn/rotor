@@ -171,5 +171,10 @@ func transformOptionalChain(s *State, node *ast.Node) luau.Expression {
 	if result, handled := interceptEnvChain(s, chain, expression); handled {
 		return result
 	}
+	// rotor extension: the $asset compile-time asset macro, same interception
+	// rationale (see assetmacro.go).
+	if result, handled := interceptAssetChain(s, chain, expression); handled {
+		return result
+	}
 	return transformOptionalChainInner(s, chain, TransformExpression(s, expression), nil, 0)
 }

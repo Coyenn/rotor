@@ -80,7 +80,7 @@ func cmdClean(args []string) int {
 		// rather than via internal/config so clean stays decoupled from the
 		// config package's filename churn; rotor-config.d.ts is legacy and
 		// removed only when present.
-		for _, name := range []string{compile.EnvDeclFileName, "rotor-asset.d.ts", "rotor-config.d.ts"} {
+		for _, name := range []string{compile.EnvDeclFileName, compile.AssetDeclFileName, "rotor-config.d.ts"} {
 			targets = append(targets, filepath.Join(dir, name))
 		}
 	}
