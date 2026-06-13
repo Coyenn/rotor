@@ -28,7 +28,17 @@ rotor build ./my-game -w     # byte-identical Luau, watch mode, incremental rebu
 rotor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
 ```
 
-Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags. Plus built-in extensions rbxtsc doesn't have: **`$env`** (compile-time environment variables from `.env` — `$env.GAME_NAME`, `$env("KEY", "fallback")`, no plugin needed) and **`$getModuleTree` on folders** (no `index.ts` required).
+Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags — plus built-in compile-time macros rbxtsc doesn't have (no plugins, no Node sidecar, fully typed):
+
+| Macro | Inlines |
+|-------|---------|
+| `$env("KEY", "fallback")` · `$env.KEY` | env vars from `.env` / `.env.<NODE_ENV>` |
+| `$asset("logo.png")` | a `rbxassetid://…` string (cached, auto-uploads on miss) |
+| `$keys<T>()` | a type's string keys (checker-powered) |
+| `$nameof(expr)` | the trailing identifier name as a string |
+| `$file("data.json")` | a file's contents as a Luau value (JSON→table, text→string) |
+| `$git("sha"\|"branch"\|"tag"\|"dirty")` · `$buildTime()` | build/VCS stamps |
+| `$getModuleTree("shared/systems")` | a folder's module tree (no `index.ts` required) |
 
 **Luau toolchain** — works on any Rojo project, no rbxts required:
 
@@ -50,47 +60,45 @@ rotor deploy apply -e prod   # publish places, settings, badges — only what dr
 
 **Scaffolding** — `rotor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
 
-## Configuration — `rotor.config.ts`
+## Configuration — `rotor.toml`
 
-One typed TypeScript config drives the cloud tools. rotor evaluates it natively (no Node needed), generates `rotor-config.d.ts` for editor typing, and refuses npm imports — it's config, not a program:
+One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:schema` directive and a generated `rotor.schema.json`, so taplo / Even Better TOML give validation + autocomplete. (Upgrading from a 1.x `rotor.config.ts`? Run `rotor migrate`.)
 
-```ts
-import { defineConfig } from "@rotor-rbx/rotor";
+```toml
+#:schema ./rotor.schema.json
 
-export default defineConfig({
-	assets: {
-		paths: ["assets/**/*.png", "assets/**/*.ogg"],
-		output: { luau: "src/shared/assets.luau", types: "src/shared/assets.d.ts" },
-		creator: { type: "group", id: 12345 },
-	},
-	deploy: {
-		environments: {
-			dev: {
-				universeId: 111,
-				places: { start: { file: "build/game.rbxl", placeId: 222 } },
-			},
-			prod: {
-				universeId: 333,
-				places: { start: { file: "build/game.rbxl", placeId: 444, name: "Start", maxPlayers: 30 } },
-				experience: { name: "My Game", playability: "public", privateServers: { price: 100 } },
-				badges: { winner: { name: "Winner!", description: "Beat the game", icon: "assets/badge.png" } },
-				gamepasses: { vip: { name: "VIP", price: 250, icon: "assets/vip.png" } },
-				icon: "assets/icon.png",
-				thumbnails: ["assets/thumb1.png", "assets/thumb2.png"],
-				products: { coins: { name: "100 Coins", price: 25 } },
-				socials: { discord: { title: "Join us", url: "https://discord.gg/x", type: "discord" } },
-			},
-		},
-	},
-});
+[assets]
+mode = "macro"                  # "module" (assets.luau) | "macro" ($asset transformer)
+paths = ["assets/**/*.png", "assets/**/*.ogg"]
+[assets.creator]
+type = "group"
+id = 12345
+
+[deploy.environments.prod]
+universeId = 333
+[deploy.environments.prod.places.start]
+file = "build/game.rbxl"
+placeId = 444
+maxPlayers = 30
+versionType = "published"
+[deploy.environments.prod.experience]
+name = "My Game"
+playability = "public"
+[deploy.environments.prod.gamepasses.vip]
+name = "VIP"
+price = 250
+icon = "assets/vip.png"
+[deploy.environments.prod.socials.discord]
+title = "Join us"
+url = "https://discord.gg/x"
+type = "discord"
 ```
 
-- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable), and generates `assets.luau` + `assets.d.ts`, so code references `assets.sounds.hit` instead of hardcoded `rbxassetid://` strings.
+- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable). In `mode = "module"` it generates `assets.luau` + `assets.d.ts`; in `mode = "macro"` you reference assets inline with **`$asset("assets/logo.png")`**, which resolves from the cache and auto-uploads any miss when `ROBLOX_API_KEY` is set.
 - **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
 - Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
-- Compile-time env vars come from `.env` / `.env.<NODE_ENV>` next to your tsconfig and are inlined by the `$env` macro; rotor writes `rotor-env.d.ts` so your editor sees the types.
 
-Full config shape and every command flag: [docs.md](docs.md).
+Full config shape, every command flag, and all the macros: [docs.md](docs.md).
 
 ## Install
 
@@ -98,20 +106,20 @@ Grab a binary from [GitHub Releases](https://github.com/uproot/rotor/releases), 
 
 ```sh
 # mise
-mise use -g github:uproot/rotor@1.5.1
+mise use -g github:uproot/rotor@2.0.0
 
 # rokit
-rokit add uproot/rotor@1.5.1
+rokit add uproot/rotor@2.0.0
 ```
 
 ```toml
 # aftman.toml
 [tools]
-rotor = "uproot/rotor@1.5.1"
+rotor = "uproot/rotor@2.0.0"
 
 # foreman.toml
 [tools]
-rotor = { github = "uproot/rotor", version = "1.5.1" }
+rotor = { github = "uproot/rotor", version = "2.0.0" }
 ```
 
 ### Install via npm / bun

@@ -299,3 +299,14 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 ## v1.5.0 — deploy resource expansion (June 12, 2026)
 
 - [x] **Mantle-parity deploy coverage** — new resource kinds on the unchanged v1 engine: `game_pass` (icons become dependent assets, deduped with badge icons; omitted price = off sale), `experience_icon` (content-hashed upload), `experience_thumbnails` (one resource over the ordered set; full-replace semantics with per-id stale deletion), `developer_product`, `social_link` (typed enum); `place_config` fed from `places.<name>.name/description/maxPlayers` (v2 `serverSize`), `versionType` wired from config, `experience.privateServers.price` → v2 `privateServerPriceRobux`. Icon/thumbnail/product/social endpoints are PATH CHOICE consts (unverified legacy proxies). `genre`/`ageRating` skipped — not writable on cloud/v2 Universe
+
+## v2.0.0 — TOML config, asset macro, more macros (June 13, 2026)
+
+*Spec: `docs/superpowers/specs/2026-06-12-rotor-2.0-design.md`. Major version; breaking config change.*
+
+- [x] **Config → `rotor.toml`** (breaking) — TOML via BurntSushi, `#:schema ./rotor.schema.json` taplo directive + generated `rotor.schema.json`; goja/esbuild loader survives only behind `rotor migrate` (renames the old `.ts` → `.bak`). `rotor init` writes TOML; asset/deploy/doctor updated.
+- [x] **`$asset("x.png")` macro** — inlines `rbxassetid://…`; lockfile cache (offline/deterministic on hit, parity-safe), auto-uploads on miss when `ROBLOX_API_KEY` is set, else `rotorAssetNotCached`. `[assets].mode = module|macro`. Synthetic decl + on-disk `rotor-asset.d.ts`.
+- [x] **More macros** — `$keys<T>()` (checker-powered type keys), `$nameof(expr)`, `$file(path)` (JSON→table / text→string inlined), `$git("sha"|"branch"|"tag"|"dirty")` + `$buildTime()` (native `.git` reader, StampProvider seam). Shared `rotor-macros.d.ts`.
+- [x] **Bundler imports** — `.luaurc` alias resolution, data-file embedding (`.json`→table, `.txt`/`.md`→string, run-once cached), repeatable `--exclude` globs.
+- [x] **CLI QOL** — `rotor clean` (outputs + `--types` companions, `--dry-run`), `--json` on build/check, `rotor add` (package.json deps, HTML-escape-safe), `rotor migrate`.
+- [x] All parity suites byte-green (macros are opt-in); npm `@rotor-rbx/rotor` auto-publishes on tag.
