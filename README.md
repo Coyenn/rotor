@@ -74,11 +74,11 @@ export default defineConfig({
 				places: { start: { file: "build/game.rbxl", placeId: 444, name: "Start", maxPlayers: 30 } },
 				experience: { name: "My Game", playability: "public", privateServers: { price: 100 } },
 				badges: { winner: { name: "Winner!", description: "Beat the game", icon: "assets/badge.png" } },
-				gamePasses: { vip: { name: "VIP", price: 250, icon: "assets/vip.png" } },
+				gamepasses: { vip: { name: "VIP", price: 250, icon: "assets/vip.png" } },
 				icon: "assets/icon.png",
 				thumbnails: ["assets/thumb1.png", "assets/thumb2.png"],
 				products: { coins: { name: "100 Coins", price: 25 } },
-				socialLinks: { discord: { title: "Join us", url: "https://discord.gg/x", type: "discord" } },
+				socials: { discord: { title: "Join us", url: "https://discord.gg/x", type: "discord" } },
 			},
 		},
 	},
@@ -98,20 +98,20 @@ Grab a binary from [GitHub Releases](https://github.com/uproot/rotor/releases), 
 
 ```sh
 # mise
-mise use -g github:uproot/rotor@1.5.0
+mise use -g github:uproot/rotor@1.5.1
 
 # rokit
-rokit add uproot/rotor@1.5.0
+rokit add uproot/rotor@1.5.1
 ```
 
 ```toml
 # aftman.toml
 [tools]
-rotor = "uproot/rotor@1.5.0"
+rotor = "uproot/rotor@1.5.1"
 
 # foreman.toml
 [tools]
-rotor = { github = "uproot/rotor", version = "1.5.0" }
+rotor = { github = "uproot/rotor", version = "1.5.1" }
 ```
 
 ### Install via npm / bun

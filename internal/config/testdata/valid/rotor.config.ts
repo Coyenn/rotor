@@ -39,7 +39,7 @@ export default defineConfig({
 						icon: "assets/badge.png",
 					},
 				},
-				gamePasses: {
+				gamepasses: {
 					vip: { name: "VIP", description: "VIP perks", price: 250, icon: "assets/vip.png" },
 				},
 				icon: "assets/icon.png",
@@ -47,7 +47,7 @@ export default defineConfig({
 				products: {
 					coins: { name: "100 Coins", description: "A pile of coins", price: 25 },
 				},
-				socialLinks: {
+				socials: {
 					discord: { title: "Join us", url: "https://discord.gg/x", type: "discord" },
 				},
 			},

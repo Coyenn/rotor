@@ -25,13 +25,13 @@ const DefaultVersionType = cloud.VersionTypePublished
 //   - experience / payments    -> experience/universe (universe PATCH inputs)
 //   - each badges entry        -> badge/<name>, depending on asset/<icon path>
 //     when an icon is set (the asset resource uploads the icon)
-//   - each gamePasses entry    -> game_pass/<name>, same icon-asset pattern;
+//   - each gamepasses entry    -> game_pass/<name>, same icon-asset pattern;
 //     icon files shared between badges and passes dedupe to one asset
 //   - icon                     -> experience_icon/icon (content-hashed)
 //   - thumbnails               -> experience_thumbnails/thumbnails (one
 //     resource over the ordered, content-hashed list)
 //   - each products entry      -> developer_product/<name>
-//   - each socialLinks entry   -> social_link/<name>
+//   - each socials entry   -> social_link/<name>
 func BuildResources(projectDir string, cfg *config.Config, envName string) ([]Resource, int64, error) {
 	if cfg == nil || cfg.Deploy == nil || len(cfg.Deploy.Environments) == 0 {
 		return nil, 0, fmt.Errorf("deploy: rotor.config.ts has no deploy.environments section")

@@ -96,7 +96,7 @@ func TestLoadValidFullConfig(t *testing.T) {
 	}
 	g := prod.GamePasses["vip"]
 	if g.Name != "VIP" || g.Price == nil || *g.Price != 250 || g.Icon != "assets/vip.png" {
-		t.Errorf("prod.gamePasses.vip = %+v", g)
+		t.Errorf("prod.gamepasses.vip = %+v", g)
 	}
 	if prod.Icon != "assets/icon.png" {
 		t.Errorf("prod.icon = %q", prod.Icon)
@@ -108,7 +108,7 @@ func TestLoadValidFullConfig(t *testing.T) {
 		t.Errorf("prod.products.coins = %+v", dp)
 	}
 	if sl := prod.SocialLinks["discord"]; sl.Title != "Join us" || sl.URL != "https://discord.gg/x" || sl.Type != "discord" {
-		t.Errorf("prod.socialLinks.discord = %+v", sl)
+		t.Errorf("prod.socials.discord = %+v", sl)
 	}
 
 	if len(cfg.Warnings) != 0 {
@@ -258,7 +258,7 @@ func TestValidate(t *testing.T) {
 			"maxPlayers"},
 		{"negative game pass price",
 			env(Environment{GamePasses: map[string]GamePass{"vip": {Name: "V", Price: &neg}}}),
-			"gamePasses.vip.price"},
+			"gamepasses.vip.price"},
 		{"nil game pass price ok (off sale)",
 			env(Environment{GamePasses: map[string]GamePass{"vip": {Name: "V"}}}),
 			""},
@@ -273,7 +273,7 @@ func TestValidate(t *testing.T) {
 			""},
 		{"bad social link type",
 			env(Environment{SocialLinks: map[string]SocialLink{"x": {Type: "myspace", URL: "https://x"}}}),
-			"socialLinks.x.type"},
+			"socials.x.type"},
 		{"social link missing url",
 			env(Environment{SocialLinks: map[string]SocialLink{"x": {Type: "discord"}}}),
 			"url is required"},

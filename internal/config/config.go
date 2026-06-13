@@ -54,11 +54,11 @@ type Environment struct {
 	Experience  *ExperienceConfig      `json:"experience,omitempty"`
 	Payments    string                 `json:"payments,omitempty"`
 	Badges      map[string]Badge       `json:"badges,omitempty"`
-	GamePasses  map[string]GamePass    `json:"gamePasses,omitempty"`
+	GamePasses  map[string]GamePass    `json:"gamepasses,omitempty"`
 	Icon        string                 `json:"icon,omitempty"`        // experience icon image path
 	Thumbnails  []string               `json:"thumbnails,omitempty"`  // ordered thumbnail image paths (max 10)
 	Products    map[string]Product     `json:"products,omitempty"`    // developer products
-	SocialLinks map[string]SocialLink  `json:"socialLinks,omitempty"` // universe social links
+	SocialLinks map[string]SocialLink  `json:"socials,omitempty"` // universe social links
 }
 
 // PlaceDeploy publishes a built place file to a place id and optionally
@@ -185,7 +185,7 @@ func (c *Config) Validate() []error {
 			for passName, pass := range env.GamePasses {
 				if pass.Price != nil && *pass.Price < 0 {
 					errs = append(errs, fmt.Errorf(
-						"deploy.environments.%s.gamePasses.%s.price must be >= 0, got %d",
+						"deploy.environments.%s.gamepasses.%s.price must be >= 0, got %d",
 						envName, passName, *pass.Price))
 				}
 			}
@@ -204,12 +204,12 @@ func (c *Config) Validate() []error {
 			for linkName, link := range env.SocialLinks {
 				if !SocialLinkTypeValid(link.Type) {
 					errs = append(errs, fmt.Errorf(
-						"deploy.environments.%s.socialLinks.%s.type must be one of facebook, twitter, youtube, twitch, discord, github, guilded; got %q",
+						"deploy.environments.%s.socials.%s.type must be one of facebook, twitter, youtube, twitch, discord, github, guilded; got %q",
 						envName, linkName, link.Type))
 				}
 				if link.URL == "" {
 					errs = append(errs, fmt.Errorf(
-						"deploy.environments.%s.socialLinks.%s: url is required",
+						"deploy.environments.%s.socials.%s: url is required",
 						envName, linkName))
 				}
 			}

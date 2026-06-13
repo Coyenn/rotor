@@ -98,7 +98,7 @@ declare module "@rotor-rbx/rotor" {
 		experience?: ExperienceConfig;
 		payments?: string;
 		badges?: Record<string, Badge>;
-		gamePasses?: Record<string, GamePass>;
+		gamepasses?: Record<string, GamePass>;
 		/** Experience icon image path. */
 		icon?: string;
 		/** Ordered thumbnail image paths (max 10). */
@@ -106,7 +106,7 @@ declare module "@rotor-rbx/rotor" {
 		/** Developer products. */
 		products?: Record<string, Product>;
 		/** Universe social links. */
-		socialLinks?: Record<string, SocialLink>;
+		socials?: Record<string, SocialLink>;
 	}
 
 	/** Configures ` + "`rotor deploy`" + `. */
