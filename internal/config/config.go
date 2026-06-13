@@ -23,8 +23,11 @@ type Config struct {
 	Warnings []string `json:"-"`
 }
 
-// AssetsConfig configures `rotor asset sync`.
+// AssetsConfig configures `rotor asset sync` and the `$asset` macro.
 type AssetsConfig struct {
+	// Mode selects how assets reach Luau: "module" (generate assets.luau +
+	// assets.d.ts; default) or "macro" (the $asset transformer + rotor-asset.d.ts).
+	Mode    string       `json:"mode,omitempty"`
 	Paths   []string     `json:"paths,omitempty"`
 	Output  AssetsOutput `json:"output,omitempty"`
 	Creator Creator      `json:"creator,omitempty"`
