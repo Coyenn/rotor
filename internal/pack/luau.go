@@ -160,8 +160,10 @@ func EmitLuau(roots []*Instance, entry string) (string, error) {
 
 func emitImpl(b *strings.Builder, n *Instance) {
 	if _, diags := cst.Parse(n.Source); len(diags) != 0 {
+		d := diags[0]
 		fmt.Fprintf(b, "i%d._impl = function(script, require) error(%s) end\n",
-			n.id, luauString("rotor pack: "+n.Name+" failed to compile: "+diags[0].Message))
+			n.id, luauString(fmt.Sprintf("rotor pack: %s failed to compile at %d:%d: %s",
+				n.Name, d.Pos.Line, d.Pos.Col, d.Message)))
 		return
 	}
 	fmt.Fprintf(b, "i%d._impl = function(script, require)\n", n.id)
