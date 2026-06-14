@@ -7,6 +7,8 @@ package diagframe
 
 import (
 	"strings"
+
+	"rotor/internal/term"
 )
 
 // Severity selects the headline word and caret color.
@@ -91,4 +93,84 @@ func lineText(src string, line int) string {
 		end++
 	}
 	return strings.TrimSuffix(src[start:end], "\r")
+}
+
+// luauKeywords is the 21 Luau reserved words (mirrors internal/luau's canonical
+// set; a later drift test guards against divergence).
+var luauKeywords = map[string]struct{}{
+	"and": {}, "break": {}, "do": {}, "else": {}, "elseif": {}, "end": {},
+	"false": {}, "for": {}, "function": {}, "if": {}, "in": {}, "local": {},
+	"nil": {}, "not": {}, "or": {}, "repeat": {}, "return": {}, "then": {},
+	"true": {}, "until": {}, "while": {},
+}
+
+// tsKeywords is the TypeScript/JavaScript reserved + contextual keyword set used
+// for highlighting (presentation only — not a parser).
+var tsKeywords = map[string]struct{}{
+	"abstract": {}, "any": {}, "as": {}, "asserts": {}, "async": {}, "await": {},
+	"boolean": {}, "break": {}, "case": {}, "catch": {}, "class": {}, "const": {},
+	"continue": {}, "debugger": {}, "declare": {}, "default": {}, "delete": {},
+	"do": {}, "else": {}, "enum": {}, "export": {}, "extends": {}, "false": {},
+	"finally": {}, "for": {}, "from": {}, "function": {}, "if": {}, "implements": {},
+	"import": {}, "in": {}, "infer": {}, "instanceof": {}, "interface": {},
+	"keyof": {}, "let": {}, "namespace": {}, "never": {}, "new": {}, "null": {},
+	"number": {}, "object": {}, "of": {}, "private": {}, "protected": {},
+	"public": {}, "readonly": {}, "return": {}, "static": {}, "string": {},
+	"super": {}, "switch": {}, "this": {}, "throw": {}, "true": {}, "try": {},
+	"type": {}, "typeof": {}, "undefined": {}, "unknown": {}, "var": {}, "void": {},
+	"while": {}, "yield": {},
+}
+
+func isKeyword(word string, lang Language) bool {
+	if lang == TypeScript {
+		_, ok := tsKeywords[word]
+		return ok
+	}
+	_, ok := luauKeywords[word]
+	return ok
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// highlightKeywords colors reserved words in one line of source. A no-color
+// styler returns the line unchanged (identity), so uncolored output is
+// byte-stable. The scan is word-boundary based (keywords inside strings/comments
+// may be colored — accepted for the keywords-only tier).
+func highlightKeywords(line string, lang Language, s *term.Styler) string {
+	if !s.Color() {
+		return line
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(line) {
+		c := line[i]
+		if c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			j := i + 1
+			for j < len(line) && isIdentByte(line[j]) {
+				j++
+			}
+			word := line[i:j]
+			if isKeyword(word, lang) {
+				b.WriteString(s.Accent(word))
+			} else {
+				b.WriteString(word)
+			}
+			i = j
+			continue
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
+// stylerFor builds a Styler with color forced on or off (the renderer's single
+// source of truth for the Options.Color decision, and a test seam).
+func stylerFor(color bool) *term.Styler {
+	if color {
+		return term.For(term.ForceColorWriter{})
+	}
+	return term.For(term.PlainWriter{})
 }

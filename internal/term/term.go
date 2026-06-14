@@ -112,11 +112,28 @@ func (s *Styler) SuccessBold(t string) string { return s.wrap(bold+fgBrightGreen
 func (s *Styler) ErrorBold(t string) string   { return s.wrap(bold+fgRed, t) }
 func (s *Styler) WarnBold(t string) string    { return s.wrap(bold+fgYellow, t) }
 
+// ForceColorWriter / PlainWriter are zero-cost writers used to construct a
+// Styler with color forced on or off without consulting the environment. They
+// discard all writes; only their identity matters to ColorEnabled.
+type ForceColorWriter struct{}
+
+func (ForceColorWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+type PlainWriter struct{}
+
+func (PlainWriter) Write(p []byte) (int, error) { return len(p), nil }
+
 // ColorEnabled reports whether ANSI color should be written to w. NO_COLOR
 // (any value) disables; FORCE_COLOR (any value) forces; otherwise color is on
 // only when w is a character device (an interactive terminal). This mirrors the
 // kleur/standard heuristic the rest of the toolchain already follows.
 func ColorEnabled(w io.Writer) bool {
+	switch w.(type) {
+	case ForceColorWriter:
+		return true
+	case PlainWriter:
+		return false
+	}
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
 	}

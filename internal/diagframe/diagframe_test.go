@@ -1,6 +1,11 @@
 package diagframe
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"rotor/internal/term"
+)
 
 func TestLineColAt(t *testing.T) {
 	src := "ab\ncde\nf"
@@ -29,3 +34,52 @@ func TestLineTextStripsCR(t *testing.T) {
 		t.Errorf("lineText line 1 = %q, want %q", got, "x = 1")
 	}
 }
+
+func TestHighlightKeywords_Luau(t *testing.T) {
+	got := highlightKeywords("local function f()", Luau, stylerFor(true))
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("expected ANSI codes, got %q", got)
+	}
+	if stripANSI(got) != "local function f()" {
+		t.Errorf("visible text changed: %q", stripANSI(got))
+	}
+}
+
+func TestHighlightKeywords_NoColorIsIdentity(t *testing.T) {
+	in := "const x = 1"
+	if got := highlightKeywords(in, TypeScript, stylerFor(false)); got != in {
+		t.Errorf("no-color highlight changed text: %q", got)
+	}
+}
+
+func TestKeywordSets(t *testing.T) {
+	if !isKeyword("function", Luau) || !isKeyword("function", TypeScript) {
+		t.Error("`function` should be a keyword in both")
+	}
+	if isKeyword("print", Luau) {
+		t.Error("`print` is a global, not a reserved keyword")
+	}
+	if !isKeyword("const", TypeScript) || isKeyword("const", Luau) {
+		t.Error("`const` is TS-only")
+	}
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if r == 'm' {
+				inEsc = false
+			}
+		case r == '\x1b':
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+var _ = term.For // keep the term import referenced even if not used directly elsewhere
