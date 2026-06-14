@@ -58,6 +58,10 @@ type BuildResult struct {
 	// WroteLockfile reports whether rotor-lock.json was persisted this pass
 	// (true only when $asset uploaded a new asset on a cache miss).
 	WroteLockfile bool
+
+	// Diagnostics holds the structured diagnostics from this build (populated
+	// even when the build fails on diagnostics). Empty on success.
+	Diagnostics []DiagnosticInfo
 }
 
 // BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
@@ -127,9 +131,9 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
-	outputs, diags, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
+	outputs, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	if err != nil {
-		return nil, diags, err
+		return &BuildResult{Diagnostics: infos}, diagnosticInfoMessages(infos), err
 	}
 
 	emittedFiles := make([]string, 0, len(outputs))

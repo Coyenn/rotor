@@ -211,6 +211,28 @@ func TestBuildProjectEmitsDeclarationsForPackage(t *testing.T) {
 	}
 }
 
+func TestBuildResultCarriesStructuredDiagnostics(t *testing.T) {
+	res, msgs, err := BuildProjectWithOptions("testdata/env_diag_model", ProjectOptions{})
+	if err == nil {
+		t.Fatal("expected a diagnostic error")
+	}
+	if res == nil || len(res.Diagnostics) == 0 {
+		t.Fatalf("BuildResult.Diagnostics empty (res=%v)", res)
+	}
+	if len(msgs) != len(res.Diagnostics) {
+		t.Errorf("msgs (%d) and structured diags (%d) length mismatch", len(msgs), len(res.Diagnostics))
+	}
+	var located bool
+	for _, d := range res.Diagnostics {
+		if d.FileName != "" && d.Len > 0 {
+			located = true
+		}
+	}
+	if !located {
+		t.Errorf("no structured diagnostic carried a location: %+v", res.Diagnostics)
+	}
+}
+
 func TestRewriteDeclarationTypeReferences(t *testing.T) {
 	input := "/// <reference types=\"types\" />\n/// <reference types=\"other\" />\n"
 	got := rewriteDeclarationTypeReferences(input)
