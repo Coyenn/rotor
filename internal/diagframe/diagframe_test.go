@@ -83,3 +83,44 @@ func stripANSI(s string) string {
 }
 
 var _ = term.For // keep the term import referenced even if not used directly elsewhere
+
+func TestRender_BasicNoColor(t *testing.T) {
+	src := "x = 1\n"
+	got := Render("a.luau", src, Luau, []Spot{{
+		Offset: 0, Len: 1, Severity: Error, Message: "bad",
+	}}, Options{Color: false})
+	want := "error: bad\n" +
+		"  --> a.luau:1:1\n" +
+		"  |\n" +
+		"1 | x = 1\n" +
+		"  | ^ bad\n"
+	if got != want {
+		t.Errorf("frame mismatch:\n--- got ---\n%q\n--- want ---\n%q", got, want)
+	}
+}
+
+func TestRender_HelpLines(t *testing.T) {
+	src := "x = 1\n"
+	got := Render("a.luau", src, Luau, []Spot{{
+		Offset: 0, Len: 1, Severity: Error, Message: "bad", Help: []string{"do this instead"},
+	}}, Options{Color: false})
+	if !strings.Contains(got, "help: do this instead") {
+		t.Errorf("missing help line:\n%s", got)
+	}
+}
+
+func TestRender_EmptySourceFallsBack(t *testing.T) {
+	got := Render("a.luau", "", Luau, []Spot{{Offset: 0, Message: "boom", Severity: Error}}, Options{})
+	if got != "a.luau:1:1: boom\n" {
+		t.Errorf("fallback = %q", got)
+	}
+}
+
+func TestRender_TabExpansionCaretAligns(t *testing.T) {
+	src := "\tbad\n" // one leading tab, then "bad"
+	got := Render("a.luau", src, Luau, []Spot{{Offset: 1, Len: 3, Severity: Error, Message: "x"}}, Options{Color: false})
+	// tab expands to 4 spaces; caret sits under "bad" (visual col 5).
+	if !strings.Contains(got, "  |     ^^^ x") {
+		t.Errorf("caret not aligned after tab expansion:\n%q", got)
+	}
+}

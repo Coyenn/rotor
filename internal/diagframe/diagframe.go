@@ -6,6 +6,8 @@
 package diagframe
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"rotor/internal/term"
@@ -173,4 +175,137 @@ func stylerFor(color bool) *term.Styler {
 		return term.For(term.ForceColorWriter{})
 	}
 	return term.For(term.PlainWriter{})
+}
+
+const tabWidth = 4
+
+// Render returns the framed (and, when o.Color, ANSI-colored) block for one
+// file's spots. Pure: no I/O — the caller writes the result where it wants.
+func Render(path, source string, lang Language, spots []Spot, o Options) string {
+	if o.Context == 0 {
+		o.Context = 1
+	}
+	s := stylerFor(o.Color)
+	var b strings.Builder
+	for _, sp := range spots {
+		renderSpot(&b, path, source, lang, sp, o, s)
+	}
+	return b.String()
+}
+
+func renderSpot(b *strings.Builder, path, source string, lang Language, sp Spot, o Options, s *term.Styler) {
+	total := countLines(source)
+	line, col, _ := lineColAt(source, sp.Offset)
+	if source == "" || line > total {
+		// No usable source line -> one-line fallback.
+		fmt.Fprintf(b, "%s:%d:%d: %s\n", path, line, col, sp.Message)
+		return
+	}
+
+	sevWord := "error"
+	paint := s.Error
+	if sp.Severity == Warning {
+		sevWord = "warning"
+		paint = s.Warn
+	}
+
+	head := sevWord + ": " + sp.Message
+	if sp.Code != "" {
+		head = sevWord + "[" + sp.Code + "]: " + sp.Message
+	}
+	fmt.Fprintln(b, paint(head))
+
+	loc := fmt.Sprintf("%s:%d:%d", path, line, col)
+	if o.Link {
+		loc = s.Hyperlink("file://"+path, loc)
+	}
+	fmt.Fprintf(b, "  %s %s\n", s.Muted("-->"), loc)
+
+	last := line + o.Context
+	if last > total {
+		last = total
+	}
+	gw := len(strconv.Itoa(last))
+	gutterPad := strings.Repeat(" ", gw)
+	bar := s.Muted("|")
+
+	fmt.Fprintf(b, "%s %s\n", gutterPad, bar)
+
+	for ln := line - o.Context; ln <= last; ln++ {
+		if ln < 1 {
+			continue
+		}
+		raw := lineText(source, ln)
+		expanded := expandTabs(raw)
+		num := s.Muted(fmt.Sprintf("%*d", gw, ln))
+		fmt.Fprintf(b, "%s %s %s\n", num, bar, highlightKeywords(expanded, lang, s))
+		if ln == line {
+			caretCol := expandedCol(raw, col)
+			n := sp.Len
+			if n < 1 {
+				n = 1
+			}
+			if maxN := len(expanded) - (caretCol - 1); maxN >= 1 && n > maxN {
+				n = maxN
+			}
+			caretLine := fmt.Sprintf("%s %s %s%s %s",
+				gutterPad, bar, strings.Repeat(" ", caretCol-1), paint(strings.Repeat("^", n)), paint(sp.Message))
+			fmt.Fprintln(b, strings.TrimRight(caretLine, " "))
+		}
+	}
+	for _, h := range sp.Help {
+		fmt.Fprintf(b, "%s %s %s\n", gutterPad, bar, s.Info("help: "+h))
+	}
+}
+
+// countLines returns the number of display lines in src (a single trailing
+// newline does not add an empty line).
+func countLines(src string) int {
+	n := 1
+	for i := 0; i < len(src); i++ {
+		if src[i] == '\n' {
+			n++
+		}
+	}
+	if strings.HasSuffix(src, "\n") {
+		n--
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// expandTabs replaces tabs with spaces to the next tabWidth stop.
+func expandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			b.WriteString(strings.Repeat(" ", spaces))
+			col += spaces
+			continue
+		}
+		b.WriteRune(r)
+		col++
+	}
+	return b.String()
+}
+
+// expandedCol maps a 1-based byte column on the raw line to a 1-based visual
+// column on the tab-expanded line.
+func expandedCol(raw string, byteCol int) int {
+	visual := 0
+	for i := 0; i < byteCol-1 && i < len(raw); i++ {
+		if raw[i] == '\t' {
+			visual += tabWidth - (visual % tabWidth)
+		} else {
+			visual++
+		}
+	}
+	return visual + 1
 }
