@@ -1,67 +1,77 @@
-# rotor unified code-frame diagnostics — design
+# rotor diagnostics & DX improvements — design
 
 Date: 2026-06-14. Status: approved under the standing autonomous-execution grant.
+
+Centerpiece: a unified **code-frame renderer** so a failed compile shows the
+offending source (line, caret, highlighted keywords) everywhere errors surface.
+Around it, a set of diagnostics-polish and developer-experience improvements
+selected during brainstorming.
 
 ## Goal
 
 When user code fails to compile, rotor should **show the offending source** — the
 line(s) of code, a caret/underline pointing at the span, and reserved keywords
-highlighted — instead of a bare `path:line:col: message` one-liner.
+highlighted — instead of a bare `path:line:col: message` one-liner. This must
+hold in one-shot builds **and in watch / `rotor dev`**.
 
-Today only `rotor check` does this (via tsgo's `diagnosticwriter`). Every other
-error path prints a flat message:
+Today only `rotor check` shows source context (via tsgo's `diagnosticwriter`).
+Every other error path prints a flat message:
 
-- `rotor build` — both TypeScript pre-emit errors **and** rotor's own
+- `rotor build` / watch — both TypeScript pre-emit errors **and** rotor's own
   transformer/macro diagnostics (`noAny`, `rotorNotYetSupported`, `$env`/`$asset`
   errors, …) surface as message-only strings. The build pipeline flattens
   diagnostics to `[]string` and the transformer→`DiagnosticInfo` conversion
-  **drops the `Node`**, so position is lost before it reaches the CLI.
+  **drops the `Node`**, so position is lost before it reaches the CLI
   (`internal/compile/compile.go` `transformAndRenderDetailed`,
-  `internal/compile/project.go` `compiledProjectSourceFile.diags []string`.)
+  `internal/compile/project.go` `compiledProjectSourceFile.diags []string`).
+  Watch and one-shot build share `runBuildOnce` → `reportBuildPass` →
+  `ui.buildFailure`, which prints `"    %s\n"` per diagnostic
+  (`cmd/rotor/ui.go:70`) — so fixing `buildFailure` fixes watch too.
 - `rotor bundle` / `rotor minify` / `rotor pack` — Luau parse/lex errors
   (`cst.Diagnostic{Pos{Offset,Line,Col}, Message}`) print as
   `path:line:col: message` (`cmd/rotor/minify.go:75`,
   `internal/bundle/bundle.go:86`, `internal/pack/luau.go`).
-
-A single, language-agnostic **frame renderer** fixes all of these with one unit
-of code, used by every error site across `build`/`bundle`/`minify`/`pack`.
 
 ## Decisions (settled during brainstorming)
 
 1. **Unified rotor frame for both TypeScript and Luau** — one renderer, one
    visual style across the toolchain (not tsgo-style for TS + rotor-style for
    Luau).
-2. **Highlight tier: keywords + caret** — show the source line(s) with a gutter
-   and a severity-colored caret/underline, and color reserved keywords. *Not* a
-   full tokenizer-driven syntax highlighter (no string/number/comment coloring).
+2. **Highlight tier: keywords + caret** — source line(s) with a gutter and a
+   severity-colored caret/underline, reserved keywords colored. *Not* a full
+   tokenizer-driven syntax highlighter.
+3. **Watch shows frames** — the same renderer drives one-shot build, watch, and
+   `rotor dev`.
+4. **Diagnostics polish, all four**: error summary + per-file grouping;
+   clickable `file:line:col` links (OSC 8); distinct `help:` lines for
+   suggestion/more-info text; truncation of long lists with `--max-errors`.
+5. **DX**: `rotor init` adopts an existing project (config-only); `rotor doctor`
+   flags a missing/invalid `rotor.toml` and points at `rotor init`; watch gets
+   transition cues (clear-on-rebuild, persistent error banner, optional bell).
+6. **Deferred**: an editor/Studio diagnostics feed (`diagnostics.json` / Studio
+   plugin push) — separate follow-up.
 
 ## Scope & non-goals
 
-**In scope:**
-
-- A new `internal/diagframe` renderer package.
-- Threading structured location (file + byte offset + length) through the
-  `build`/compile diagnostic path so TS and transformer/macro errors can be
-  framed.
-- Wiring the renderer into `rotor build`, `rotor bundle`, `rotor minify`,
-  `rotor pack`.
+**In scope:** the `internal/diagframe` renderer; structured-location plumbing
+through the compile/build path; wiring into `build`, watch/`dev`, `bundle`,
+`minify`, `pack`; the four diagnostics-polish items; init-adopt; doctor↔init
+synergy; watch transition cues.
 
 **Explicit non-goals:**
 
-- **Changing `rotor check`'s output.** It keeps tsgo's `diagnosticwriter`. The
-  conformance/differential harness asserts on tsgo's exact diagnostic
-  formatting, and the byte-parity contract makes this the high-risk path to
-  leave alone.
-- **Changing diagnostic message or code text.** The frame is a presentation
-  wrapper *around* the existing message; `noAny` still says exactly what it says
-  today. The diff/conformance harness asserts codes and messages, which are
-  preserved.
-- **Changing generated `.luau` bytes.** This effort touches only error
-  presentation on stderr.
-- **Full syntax highlighting** (strings/numbers/comments). Deferred; the chosen
-  tier is keywords-only.
-- **Config-file errors** (`internal/config/load.go`'s `path:line:col` lines).
-  Out of scope for this pass; the renderer is reusable there later if wanted.
+- **Changing `rotor check`'s output.** It keeps tsgo's `diagnosticwriter`; the
+  conformance/differential harness asserts on tsgo's exact formatting and the
+  byte-parity contract makes this the high-risk path to leave alone.
+- **Changing diagnostic message or code text.** The frame wraps the existing
+  message; `noAny` says exactly what it says today (the diff/conformance harness
+  asserts codes and messages). Splitting out `help:` lines is presentational and
+  reconstructs the original text byte-for-byte when uncolored.
+- **Changing generated `.luau` bytes.** Error presentation on stderr only.
+- **Full syntax highlighting** (strings/numbers/comments). Keywords only.
+- **Config-file errors** (`internal/config/load.go`'s `path:line:col` lines) get
+  framing only incidentally via the doctor work; not a focus.
+- **Editor/Studio diagnostics feed.** Deferred to a follow-up plan.
 
 ## Architecture
 
@@ -82,12 +92,14 @@ type Spot struct {
     Len      int          // span length in bytes; rendered caret count is max(1, …)
     Severity Severity
     Code     string       // optional, shown after message: "TS2322", "noAny", ""
-    Message  string
+    Message  string       // primary message (without suggestion/more-info tail)
+    Help     []string     // suggestion / "More information:" lines, rendered as help:
 }
 
 type Options struct {
     Context int           // context lines above/below (default 1)
     Color   bool          // caller sets from term.ColorEnabled(w)
+    Link    bool          // emit OSC 8 hyperlink on the locator (caller: Color && supported)
 }
 
 // Render returns the framed (and, when o.Color, ANSI-colored) block for one
@@ -97,9 +109,9 @@ func Render(path, source string, lang Language, spots []Spot, o Options) string
 
 Behavior:
 
-- **Position math.** Line/col are computed from `Offset` by counting newlines in
+- **Position math.** Line/col computed from `Offset` by counting newlines in
   `Source` (1-based line, 1-based byte column). No dependency on tsgo's position
-  APIs — the same code resolves Luau and TS spots.
+  APIs — one code path resolves Luau and TS spots.
 - **Layout** (matches the approved mock):
 
   ```
@@ -109,124 +121,207 @@ Behavior:
    2 | local function f()
    3 |   return print(1 2)
      |                  ^ expected ')'
-     |
+     |   help: add the missing ')'
   ```
 
-  Severity headline (`error:` red / `warning:` yellow), `-->` locator, a gutter
+  Severity headline (`error:` red / `warning:` yellow), `-->` locator, gutter
   with right-aligned line numbers, one context line above/below the primary
-  line, and a caret/underline line in the severity color.
-- **Keyword highlighting.** A word-boundary scan (`[A-Za-z_][A-Za-z0-9_]*`) over
-  each visible source line colors words that are in the language's reserved set.
-  Both sets live in this package:
-  - Luau: the 21 reserved words (`and`/`break`/…/`while`).
-  - TypeScript/JS: the standard reserved set (`const`, `let`, `function`,
-    `class`, `return`, `if`, `import`, `export`, …).
-  Inside the chosen tier this naïve scan may color a keyword that appears inside
-  a string/comment on the shown line; that is an accepted cosmetic limitation of
-  the keywords-only tier (full tokenization was explicitly declined).
-- **Color gating.** The caller passes `o.Color` from `term.ColorEnabled(w)`
-  (which honors `NO_COLOR`/`FORCE_COLOR`/TTY). When color is off, the output is
-  plain ASCII and byte-stable (so piped output and golden tests are
-  deterministic).
-- **Edge cases.** Tabs in the source line are expanded to spaces for caret
-  alignment; a multi-line span underlines only through the end of the first
-  line; `Len == 0` renders a single caret; an out-of-range / empty `Source`
-  degrades to the legacy `path:line:col: message` one-liner.
+  line, a caret/underline line in the severity color, then any `help:` lines.
+- **Keyword highlighting.** Word-boundary scan (`[A-Za-z_][A-Za-z0-9_]*`) over
+  each visible source line colors words in the language's reserved set. Both
+  sets live here (Luau: the 21 reserved words; TS/JS: the standard reserved
+  set). The keywords-only tier may color a keyword inside a string/comment on
+  the shown line — an accepted cosmetic limitation.
+- **Clickable links.** When `o.Link`, the locator path is wrapped in an OSC 8
+  hyperlink (`term.Styler.Hyperlink`) pointing at a `file://…` URI with the line
+  fragment, so supporting terminals jump to the spot. No-op when color/links are
+  off; never affects the uncolored byte output.
+- **Help lines.** `Spot.Help` entries render as a muted/cyan `help:` line under
+  the frame. Callers populate it by splitting the existing multi-line message
+  (transformer messages join `suggestion(...)` and `issue(...)` with `\n`); the
+  uncolored rendering still contains the exact original text.
+- **Color gating.** Caller passes `o.Color` from `term.ColorEnabled(w)`
+  (honors `NO_COLOR`/`FORCE_COLOR`/TTY). Color off → plain ASCII, byte-stable.
+- **Edge cases.** Tabs expanded for caret alignment; a multi-line span
+  underlines only through the first line's end; `Len==0` → single caret; empty
+  or out-of-range `Source` degrades to `path:line:col: message`; never panics.
 
 A drift-guard test imports `internal/luau` and asserts diagframe's Luau keyword
-set equals the canonical set behind `luau.IsValidIdentifier` (the source of
-truth in `internal/luau/validate.go`). To enable it, `internal/luau` exposes a
-small `IsReservedKeyword(string) bool` (or an exported set); diagframe keeps its
-own copy for rendering but the test pins them together.
+set equals the canonical set behind `internal/luau/validate.go`. `internal/luau`
+exposes `IsReservedKeyword(string) bool` to enable it.
 
-### 2. TypeScript / compile plumbing
+### 2. Summary, grouping & truncation
 
-The renderer needs `(path, source, offset, len)` per diagnostic. Today the
-compile layer throws location away. Changes:
+A thin presentation layer over `Render`, used by build/watch and the Luau
+commands:
+
+- **Grouping.** Diagnostics are bucketed by file; each file renders its frames
+  together under its path, files in stable sorted order.
+- **Summary footer.** After the frames: `✗ 3 errors in 2 files` (and
+  `· 1 warning` when present), in rotor chrome colors. Replaces the current
+  `buildFailure` headline-only behavior; warnings that don't fail the build
+  still get a frame + count.
+- **Truncation.** A `--max-errors N` flag (default e.g. 50; `0` = unlimited)
+  caps rendered frames; the footer notes `…and 12 more` so silent truncation
+  never reads as "all clear". The cap is per-invocation across all files.
+
+### 3. TypeScript / compile plumbing
+
+The renderer needs `(path, source, offset, len)` per diagnostic; the compile
+layer currently throws location away. Changes:
 
 - **`DiagnosticInfo`** (`internal/compile/compile.go`) gains `FileName string`,
-  `Offset int`, `Len int` (alongside existing `Code`, `Message`, `Warning`).
-- **`transformAndRenderDetailed`** populates location from `d.Node`: the token
-  start (skipping leading trivia) and end give `Offset`/`Len`; the node's source
-  file gives `FileName` and the source text.
-- **`tsDiagnosticInfos`** populates location from each `*ast.Diagnostic`
-  (`File()`, `Pos()`, `Len()`).
+  `Offset int`, `Len int` (alongside `Code`, `Message`, `Warning`).
+- **`transformAndRenderDetailed`** populates location from `d.Node`: token start
+  (skipping leading trivia) and end give `Offset`/`Len`; the node's source file
+  gives `FileName` and source text.
+- **`tsDiagnosticInfos`** populates from each `*ast.Diagnostic`
+  (`File()`/`Pos()`/`Len()`).
 - **Project path** (`internal/compile/project.go`): `compiledProjectSourceFile`
-  carries structured per-file diagnostics plus the file's source text. A
+  carries structured per-file diagnostics plus the file's source text; a
   detailed collector surfaces these through `BuildResult`. The existing
-  message-only accessors (`diagnosticInfoMessages`, the `[]string`-returning
-  `CompileFile`/`CompileProject`/`BuildProjectWithOptions`) are **kept
-  unchanged** so conformance/diff tests are untouched; new structured output is
-  additive.
+  message-only accessors (`diagnosticInfoMessages` and the `[]string`-returning
+  `CompileFile`/`CompileProject`/`BuildProjectWithOptions`) stay unchanged, so
+  conformance/diff tests are untouched; the structured output is additive.
 - **`cmd/rotor/build.go`**: `runBuildOnce` returns structured diagnostics;
-  `buildFailure` (in `cmd/rotor/ui.go`) groups them by file and renders frames
-  via `diagframe`. Bonus: the `--json` path (`jsonDiagnostic`) can now emit real
-  `file`/`line`/`col` instead of the message-only placeholder it documents
-  today.
+  `--json` (`jsonDiagnostic`) can now emit real `file`/`line`/`col` instead of
+  the message-only placeholder it documents today.
 
 Source text for the frame is captured at collection time (we hold the
-`*ast.SourceFile`), so the renderer never re-reads the disk and virtual/in-memory
+`*ast.SourceFile`), so the renderer never re-reads disk and virtual/in-memory
 test sources work unchanged.
 
-### 3. Luau plumbing
+### 4. Luau plumbing
 
 `cmd/rotor/minify.go`, `cmd/rotor/bundle.go` (+ the error surface in
 `internal/bundle`), and `internal/pack/luau.go` already hold the source string
-and a `[]cst.Diagnostic`. Each maps `cst.Diagnostic` → `diagframe.Spot`
-(`Offset` from `Pos.Offset`, `Message`, `Severity=Error`) and calls
-`Render(..., diagframe.Luau, …)`. The `internal/bundle` parse-error path
-currently returns a formatted `error` string; it will instead return enough
-structured context (path, source, diagnostic) for the CLI to frame it, or frame
-it at the boundary — chosen in the implementation plan to keep `internal/bundle`
+and `[]cst.Diagnostic`. Each maps `cst.Diagnostic` → `diagframe.Spot` (`Offset`
+from `Pos.Offset`, `Message`, `Severity=Error`) and renders with
+`diagframe.Luau`. The `internal/bundle` parse-error path returns structured
+context (path, source, diagnostic) so the CLI frames it, keeping `internal/bundle`
 free of presentation concerns.
+
+### 5. Watch wiring & transition cues
+
+- **Frames in watch.** `reportBuildPass`/`ui.buildFailure` render via the
+  grouping layer (§2). Because watch and one-shot build share this path, no
+  watch-specific rendering code is needed.
+- **Transition cues** (`cmd/rotor/watch.go`, `cmd/rotor/ui.go`):
+  - Clear the screen (or print a separator) at the start of each rebuild so the
+    latest result is unambiguous (respects non-TTY: no escape codes when piped).
+  - A persistent error banner: while the last build failed, the idle "watching"
+    line shows `✗ N errors — watching for changes`; on the next passing build it
+    flips to the success line.
+  - Optional terminal bell (`\a`) on a pass→fail or fail→pass *transition*
+    (not every rebuild), gated behind a `--bell` flag (off by default; suppressed
+    when not a TTY).
+
+### 6. `rotor init` — adopt an existing project
+
+Today `cmdInit` refuses when `package.json`/`default.project.json` exist
+(`init.go:89-97`). New behavior:
+
+- When run in a directory that **is already a project** (has `package.json`,
+  `tsconfig.json`, or `default.project.json`) **and has no `rotor.toml`**, switch
+  to **adopt mode** instead of refusing: write only the missing rotor pieces —
+  `rotor.toml`, `rotor.schema.json`, and `rotor-env.d.ts` (if absent) — and never
+  overwrite an existing file (each pre-existing target is reported as
+  `· path (exists, kept)`).
+- **Template detection** picks the `rotor.toml` skeleton: `plain` when there's a
+  `default.project.json` but no `tsconfig.json`; `package` when `tsconfig.json`
+  has `"declaration": true` (or the Rojo tree points at a model, not a
+  DataModel); `game` otherwise. Detection only chooses which commented skeleton
+  to emit; it writes no source files.
+- When `rotor.toml` already exists, adopt mode reports "already configured" and
+  exits 0 (idempotent), suggesting `rotor doctor`.
+- A `--config` flag forces config-only adopt mode explicitly (useful in scripts
+  / when the heuristics are ambiguous). Greenfield scaffolding (empty dir) is
+  unchanged.
+
+Refactor: `writeInitFiles` already skips nothing; adopt mode reuses `scaffold`'s
+config-file producers (`rotorTOML`, schema, env types) via a small
+`adoptFiles(opts)` that returns only those, and a write path that skips existing
+targets rather than failing.
+
+### 7. `rotor doctor` ↔ `init` synergy
+
+`runDoctor` (`cmd/rotor/doctor.go`) gains a `rotor.toml` check:
+
+- `config.Load(dir)` → `ErrNotFound`: a `warn` row, "no rotor.toml — run
+  `rotor init` to add one" (asset/deploy features need it).
+- Load error (parse/validation): a `fail` row carrying the message (framed via
+  diagframe when the error has a position — `internal/config/load.go` already has
+  `path:line:col`).
+- Valid: an OK row, "rotor.toml" with the resolved path; surface any unknown-key
+  warnings (`load.go:79`) as warn rows.
 
 ## Data flow
 
 ```
 Luau:  source + []cst.Diagnostic ─┐
-                                  ├─► []diagframe.Spot ─► diagframe.Render ─► stderr
+                                  ├─► []diagframe.Spot ─► group by file ─► Render ─► stderr
 TS:    *ast.Diagnostic ───────────┤        (per file, with that file's source)
-       transformer.Diagnostic ────┘
+       transformer.Diagnostic ────┘                              └─► summary footer
        (Node → offset/len/source via tsgo AST)
 ```
 
 ## Error handling & degradation
 
-- No color (pipe/redirect/`NO_COLOR`) → plain framed text, ASCII, byte-stable.
-- Missing/empty source or out-of-range offset → fall back to
-  `path:line:col: message`. The renderer never panics on bad input.
-- Warnings render in the warning color and do not change exit codes; existing
-  error/warning semantics are unchanged.
+- No color (pipe/redirect/`NO_COLOR`) → plain framed text, ASCII, byte-stable;
+  no hyperlinks, no bell, no screen clear.
+- Missing/empty source or out-of-range offset → `path:line:col: message`
+  fallback; renderer never panics.
+- Warnings render in the warning color, counted separately, and do not change
+  exit codes.
+- adopt mode never overwrites; a write failure on one file aborts with a clear
+  message and leaves others as-is.
 
 ## Testing
 
-- **Renderer unit/golden tests** (`internal/diagframe`): basic error, warning,
-  multi-spot-per-file, color vs `NO_COLOR`, tab expansion, multi-line span,
-  `Len==0`, offset at start/end of file, keyword coloring for both languages.
-- **Keyword drift test**: diagframe Luau set == `internal/luau` canonical set.
-- **Integration goldens**: updated stderr expectations for `rotor minify`,
-  `rotor bundle`, and `rotor build` error cases (these goldens change by design).
-- **Regression**: conformance/diff harness still passes (codes/messages and
-  generated `.luau` unchanged); `rotor check` output unchanged.
+- **Renderer unit/golden** (`internal/diagframe`): error, warning, multi-spot,
+  color vs `NO_COLOR`, tab expansion, multi-line span, `Len==0`, offset at file
+  start/end, keyword coloring (both langs), help lines, OSC 8 link on/off.
+- **Keyword drift**: diagframe Luau set == `internal/luau` canonical set.
+- **Grouping/summary/truncation**: footer counts, sort order, `--max-errors`
+  truncation note.
+- **Integration goldens**: `rotor minify`/`bundle`/`build` error stderr (change
+  by design); watch failure→success transition; `--bell`/`--max-errors`.
+- **init-adopt**: existing game/package/plain project → correct skeleton, no
+  clobber, idempotent re-run, `--config`; greenfield path unchanged.
+- **doctor**: missing / invalid / valid `rotor.toml` rows.
+- **Regression**: conformance/diff harness passes (codes/messages and generated
+  `.luau` unchanged); `rotor check` output unchanged.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `internal/diagframe/diagframe.go` | new — renderer, `Spot`/`Severity`/`Language`/`Options`, keyword sets |
-| `internal/diagframe/diagframe_test.go` | new — golden + edge-case tests |
+| `internal/diagframe/diagframe.go` | new — renderer + `Spot`/`Severity`/`Language`/`Options` + keyword sets |
+| `internal/diagframe/group.go` | new — group-by-file, summary footer, truncation |
+| `internal/diagframe/*_test.go` | new — golden + edge-case + drift tests |
 | `internal/luau/validate.go` | export `IsReservedKeyword` (drift-guard hook) |
 | `internal/compile/compile.go` | `DiagnosticInfo` gains location; populate it |
 | `internal/compile/project.go` | structured per-file diagnostics + source through `BuildResult` |
-| `cmd/rotor/build.go` | render frames; fill `--json` line/col |
-| `cmd/rotor/ui.go` | `buildFailure` renders via diagframe |
+| `cmd/rotor/build.go` | structured diags; frames; fill `--json` line/col; `--max-errors` |
+| `cmd/rotor/ui.go` | `buildFailure` → grouping layer; summary footer; watch banner states |
+| `cmd/rotor/watch.go` | clear-on-rebuild; persistent error banner; `--bell` transitions |
 | `cmd/rotor/minify.go` | frame Luau diagnostics |
-| `cmd/rotor/bundle.go` / `internal/bundle/bundle.go` | frame Luau parse errors |
+| `cmd/rotor/bundle.go` / `internal/bundle/bundle.go` | structured parse-error context; frame |
 | `internal/pack/luau.go` | frame Luau parse errors |
+| `cmd/rotor/init.go` | adopt mode (`--config`, template detection, no-clobber) |
+| `cmd/rotor/doctor.go` | `rotor.toml` check |
 
-## Rollout
+## Decomposition (implementation plans)
 
-Single change set (one feature). The renderer lands first (self-contained,
-fully tested), then the Luau call sites (smallest, source already in hand), then
-the TS plumbing (largest). Roadmap + measured-number upkeep per the standing
-convention after completion.
+One spec, executed as ordered plans so each lands self-contained and reviewable:
+
+1. **Renderer + Luau wiring** — `diagframe` (render + group/summary/truncate),
+   keyword drift guard, then `minify`/`bundle`/`pack` (source already in hand).
+   Self-contained; smallest blast radius.
+2. **TS plumbing + build/watch** — structured location through compile/build,
+   `buildFailure` frames, `--json` line/col, watch frames + transition cues +
+   `--max-errors`/`--bell`.
+3. **init-adopt + doctor synergy** — independent of diagnostics; can run in
+   parallel with (2). Adopt mode, template detection, doctor `rotor.toml` row.
+
+Roadmap + measured-number upkeep per the standing convention after each plan.
