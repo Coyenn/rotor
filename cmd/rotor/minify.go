@@ -22,6 +22,7 @@ import (
 func cmdMinify(args []string) int {
 	input := ""
 	output := ""
+	indexToField := true // rotor DX: collapse t["foo"] -> t.foo (opt out with --no-index-field)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -39,6 +40,8 @@ func cmdMinify(args []string) int {
 			output = strings.TrimPrefix(a, "--output=")
 		case strings.HasPrefix(a, "-o="):
 			output = strings.TrimPrefix(a, "-o=")
+		case a == "--no-index-field":
+			indexToField = false
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "rotor minify: unknown flag %q\n\n", a)
 			usage(os.Stderr)
@@ -70,7 +73,7 @@ func cmdMinify(args []string) int {
 		return 1
 	}
 
-	minified, diags := cst.Minify(string(src))
+	minified, diags := cst.MinifyWith(string(src), cst.MinifyOptions{ConvertIndexToField: indexToField})
 	if len(diags) != 0 {
 		errUI.failLine(fmt.Sprintf("rotor minify: %s has %s", input, plural(len(diags), "syntax error")))
 		spots := make([]diagframe.Spot, len(diags))

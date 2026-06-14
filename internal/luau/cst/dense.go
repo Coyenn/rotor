@@ -3,22 +3,39 @@ package cst
 import (
 	"strings"
 
+	"rotor/internal/luau"
 	"rotor/internal/luau/lex"
 )
+
+// MinifyOptions tunes the minifier. The zero value strips comments + whitespace
+// only (semantically identical, faithful token stream); fields enable extra
+// size-reducing rewrites that change tokens but preserve program behavior.
+type MinifyOptions struct {
+	// ConvertIndexToField rewrites string indexing into dotted field access
+	// where the string is a valid Luau identifier (base["foo"] -> base.foo and
+	// table keys ["foo"] = v -> foo = v). Always semantics-preserving in Luau.
+	ConvertIndexToField bool
+}
 
 // Minify parses src and returns minified Luau. It preserves leading `--!` directive
 // comments (e.g. `--!strict`, `--!native`), which affect how Luau compiles the file,
 // but drops every other comment and all superfluous whitespace. Diagnostics from
 // parsing are returned; on a clean parse the result is semantically identical to src
-// (no variable renaming — that is a later minifier pass).
+// (no variable renaming — that is a later minifier pass). The string-index-to-field
+// rewrite is on by default (a pure size win); use MinifyWith to disable it.
 func Minify(src string) (string, []Diagnostic) {
+	return MinifyWith(src, MinifyOptions{ConvertIndexToField: true})
+}
+
+// MinifyWith is Minify with explicit options.
+func MinifyWith(src string, opts MinifyOptions) (string, []Diagnostic) {
 	file, diags := Parse(src)
 	var b strings.Builder
 	for _, d := range directives(file) {
 		b.WriteString(d)
 		b.WriteByte('\n')
 	}
-	b.WriteString(Dense(file))
+	b.WriteString(DenseWith(file, DenseOptions{ConvertIndexToField: opts.ConvertIndexToField}))
 	return b.String(), diags
 }
 
@@ -69,16 +86,30 @@ func firstRef(n Node) *TokenRef {
 // Dense drops ALL trivia, including comments. Semantic `--!` directive comments must
 // therefore be preserved by the caller (the minifier), not by Dense.
 func Dense(n Node) string {
-	w := &denseWriter{}
+	return DenseWith(n, DenseOptions{})
+}
+
+// DenseOptions tunes the dense serializer. The zero value is a faithful dense
+// serializer whose significant tokens are identical to the source's; setting a
+// field enables a size-reducing rewrite that changes tokens but not semantics.
+type DenseOptions struct {
+	// ConvertIndexToField: see MinifyOptions.ConvertIndexToField.
+	ConvertIndexToField bool
+}
+
+// DenseWith is Dense with explicit options.
+func DenseWith(n Node, opts DenseOptions) string {
+	w := &denseWriter{convertIndexToField: opts.ConvertIndexToField}
 	w.node(n)
 	return w.b.String()
 }
 
 type denseWriter struct {
-	b        strings.Builder
-	prev     string
-	prevKind lex.Kind
-	started  bool
+	b                   strings.Builder
+	prev                string
+	prevKind            lex.Kind
+	started             bool
+	convertIndexToField bool
 }
 
 func (w *denseWriter) tok(t lex.Token) {
@@ -87,13 +118,31 @@ func (w *denseWriter) tok(t lex.Token) {
 	}
 	// No separator is ever needed adjacent to an interpolation chunk: its `, {, }
 	// delimiters already separate it from neighbouring tokens.
-	if w.started && !isInterpKind(w.prevKind) && !isInterpKind(t.Kind) && needsSeparator(w.prev, t.Text) {
+	if w.started && !isInterpKind(w.prevKind) && !isInterpKind(t.Kind) &&
+		(needsSeparator(w.prev, t.Text) || (w.prevKind == lex.Number && numberGluesToNext(t.Text))) {
 		w.b.WriteByte(' ')
 	}
 	w.b.WriteString(t.Text)
 	w.prev = t.Text
 	w.prevKind = t.Kind
 	w.started = true
+}
+
+// numberGluesToNext reports whether a token beginning with s, emitted directly
+// after a numeric literal, would be misread by Luau's greedy number scanner as a
+// single malformed number (e.g. `100` then `print` -> `100print`, or `1` then
+// `..` -> `1..`). rotor's lexer is more permissive and splits these into two
+// valid tokens, so needsSeparator's re-lex misses the hazard; the dense writer
+// must force a separator. The trigger set is every char Luau's number scanner
+// would keep consuming: identifier chars, digits, and `.`.
+func numberGluesToNext(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	return c == '_' || c == '.' ||
+		(c >= '0' && c <= '9') ||
+		(c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
 // forced writes a fixed separator token (e.g. ";") without a leading space.
@@ -114,16 +163,88 @@ func (w *denseWriter) node(n Node) {
 		w.block(v.Body)
 	case *Block:
 		w.block(v)
-	default:
-		n.tokens(func(ref *TokenRef, child Node) {
-			switch {
-			case ref != nil:
-				w.tok(ref.Token)
-			case child != nil:
-				w.node(child)
+	case *IndexExpr:
+		// base["foo"] -> base.foo when "foo" is a valid identifier.
+		if w.convertIndexToField {
+			if name, ok := fieldName(v.Key); ok {
+				w.node(v.Base)
+				w.tok(lex.Token{Kind: lex.Symbol, Text: "."})
+				w.tok(lex.Token{Kind: lex.Name, Text: name})
+				return
 			}
-		})
+		}
+		w.emitTokens(v)
+	case *Table:
+		// ["foo"] = v -> foo = v for valid-identifier keys; emit fields one by one.
+		if w.convertIndexToField {
+			w.table(v)
+			return
+		}
+		w.emitTokens(v)
+	default:
+		w.emitTokens(n)
 	}
+}
+
+// emitTokens is the faithful default emission: every leaf token, recursing into
+// child nodes (which may themselves rewrite).
+func (w *denseWriter) emitTokens(n Node) {
+	n.tokens(func(ref *TokenRef, child Node) {
+		switch {
+		case ref != nil:
+			w.tok(ref.Token)
+		case child != nil:
+			w.node(child)
+		}
+	})
+}
+
+// table emits a table constructor, collapsing ["name"] = v keys to name = v when
+// the key is a valid identifier (the convertIndexToField rewrite).
+func (w *denseWriter) table(t *Table) {
+	w.tok(t.Open.Token)
+	for i := range t.Fields {
+		w.field(&t.Fields[i])
+	}
+	w.tok(t.Close.Token)
+}
+
+func (w *denseWriter) field(f *TableField) {
+	if f.LBracket != nil {
+		if name, ok := fieldName(f.Key); ok {
+			w.tok(lex.Token{Kind: lex.Name, Text: name})
+			if f.Eq != nil {
+				w.tok(f.Eq.Token)
+			}
+			if f.Value != nil {
+				w.node(f.Value)
+			}
+			if f.Sep != nil {
+				w.tok(f.Sep.Token)
+			}
+			return
+		}
+	}
+	w.emitTokens(f)
+}
+
+// fieldName returns the identifier a string-literal key collapses to in dotted
+// field access, and whether the collapse is valid — the decoded string must be a
+// Luau identifier that is not a reserved keyword (`t["end"]` cannot become
+// `t.end`, which is a syntax error).
+func fieldName(key Node) (string, bool) {
+	s, ok := key.(*String)
+	if !ok {
+		return "", false
+	}
+	value, ok := StringValue(s)
+	if !ok {
+		return "", false
+	}
+	if !luau.IsValidIdentifier(value) {
+		return "", false
+	}
+	return value, true
 }
 
 func (w *denseWriter) block(b *Block) {

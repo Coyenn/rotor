@@ -40,7 +40,9 @@ func TestCmdMinifyToFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "--!strict\nlocal x=1return x"
+	// Note the space in "1 return": `1return` would be a malformed number to
+	// Luau's greedy number scanner, so the dense writer must separate them.
+	want := "--!strict\nlocal x=1 return x"
 	if string(got) != want {
 		t.Fatalf("minified = %q, want %q", got, want)
 	}
