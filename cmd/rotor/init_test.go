@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,7 +9,16 @@ import (
 	"testing"
 
 	"rotor/internal/compile"
+	"rotor/internal/config"
 )
+
+// must fails the surrounding test if err is non-nil (test setup helper).
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 // stripJSONCComments removes //-comment lines so JSONC (tsconfig.json) can be
 // validated with encoding/json.
@@ -120,15 +130,114 @@ func TestCmdInitGame(t *testing.T) {
 	}
 }
 
-func TestCmdInitRefusesExistingProject(t *testing.T) {
-	for _, marker := range []string{"package.json", "default.project.json"} {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, marker), []byte("{}"), 0o644); err != nil {
-			t.Fatal(err)
+func TestDetectTemplate(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{"plain", map[string]string{
+			"default.project.json": `{"name":"x","tree":{"$path":"src"}}`,
+		}, "plain"},
+		{"package", map[string]string{
+			"tsconfig.json":        `{"compilerOptions":{"declaration":true}}`,
+			"default.project.json": `{"name":"x","tree":{"$path":"out"}}`,
+		}, "package"},
+		{"game", map[string]string{
+			"tsconfig.json":        `{"compilerOptions":{}}`,
+			"default.project.json": `{"name":"x","tree":{"$className":"DataModel"}}`,
+		}, "game"},
+		{"package via commented declaration stays game", map[string]string{
+			"tsconfig.json": "{\n\t// \"declaration\": true,\n}",
+		}, "game"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, content := range c.files {
+				must(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+			}
+			if got := detectTemplate(dir); got != c.want {
+				t.Errorf("detectTemplate = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAdoptFilesAndWrite(t *testing.T) {
+	dir := t.TempDir()
+	// An existing project plus a pre-existing env decl we must NOT clobber.
+	must(t, os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{"compilerOptions":{}}`), 0o644))
+	must(t, os.WriteFile(filepath.Join(dir, compile.EnvDeclFileName), []byte("// mine\n"), 0o644))
+
+	var out bytes.Buffer
+	if code := writeAdoptFiles(&out, dir, "game"); code != 0 {
+		t.Fatalf("writeAdoptFiles = %d", code)
+	}
+	if !fileExists(filepath.Join(dir, config.ConfigFileName)) {
+		t.Error("rotor.toml not created")
+	}
+	if configSchema != "" && !fileExists(filepath.Join(dir, config.SchemaFileName)) {
+		t.Error("rotor.schema.json not created")
+	}
+	// The env decl must be kept verbatim.
+	if got, _ := os.ReadFile(filepath.Join(dir, compile.EnvDeclFileName)); string(got) != "// mine\n" {
+		t.Errorf("env decl clobbered: %q", got)
+	}
+	if !strings.Contains(out.String(), "exists, kept") {
+		t.Errorf("expected a kept-file note:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "game project") {
+		t.Errorf("expected the detected-template note:\n%s", out.String())
+	}
+}
+
+func TestCmdInitAdoptsExistingProjectInsteadOfRefusing(t *testing.T) {
+	for _, marker := range []string{"package.json", "tsconfig.json", "default.project.json"} {
+		t.Run(marker, func(t *testing.T) {
+			dir := t.TempDir()
+			must(t, os.WriteFile(filepath.Join(dir, marker), []byte("{}"), 0o644))
+
+			if code := cmdInit([]string{dir, "--yes"}); code != 0 {
+				t.Fatalf("cmdInit over existing %s = %d (want adopt, exit 0)", marker, code)
+			}
+			if !fileExists(filepath.Join(dir, config.ConfigFileName)) {
+				t.Errorf("adopt mode did not create rotor.toml for %s", marker)
+			}
+			// The pre-existing marker file must be left untouched.
+			if got, _ := os.ReadFile(filepath.Join(dir, marker)); string(got) != "{}" {
+				t.Errorf("%s was modified: %q", marker, got)
+			}
+		})
+	}
+}
+
+func TestCmdInitConfigFlagAdoptsEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if code := cmdInit([]string{dir, "--config"}); code != 0 {
+		t.Fatalf("cmdInit --config = %d, want 0", code)
+	}
+	if !fileExists(filepath.Join(dir, config.ConfigFileName)) {
+		t.Error("--config did not create rotor.toml")
+	}
+	// --config is config-only: it must not scaffold any source/project files.
+	for _, f := range []string{"package.json", "tsconfig.json", "src/shared/module.ts"} {
+		if fileExists(filepath.Join(dir, f)) {
+			t.Errorf("--config wrote a non-config file %s", f)
 		}
-		if code := cmdInit([]string{dir}); code != 1 {
-			t.Errorf("init over existing %s: exit %d, want 1", marker, code)
-		}
+	}
+}
+
+func TestCmdInitAlreadyConfiguredIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"x"}`), 0o644))
+	must(t, os.WriteFile(filepath.Join(dir, config.ConfigFileName), []byte("# mine\n"), 0o644))
+
+	if code := cmdInit([]string{dir, "--yes"}); code != 0 {
+		t.Fatalf("cmdInit (already configured) = %d", code)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, config.ConfigFileName)); string(got) != "# mine\n" {
+		t.Errorf("existing rotor.toml was overwritten: %q", got)
 	}
 }
 
