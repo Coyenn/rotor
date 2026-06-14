@@ -3,8 +3,6 @@ package diagframe
 import (
 	"strings"
 	"testing"
-
-	"rotor/internal/term"
 )
 
 func TestLineColAt(t *testing.T) {
@@ -82,8 +80,6 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-var _ = term.For // keep the term import referenced even if not used directly elsewhere
-
 func TestRender_BasicNoColor(t *testing.T) {
 	src := "x = 1\n"
 	got := Render("a.luau", src, Luau, []Spot{{
@@ -122,5 +118,13 @@ func TestRender_TabExpansionCaretAligns(t *testing.T) {
 	// tab expands to 4 spaces; caret sits under "bad" (visual col 5).
 	if !strings.Contains(got, "  |     ^^^ x") {
 		t.Errorf("caret not aligned after tab expansion:\n%q", got)
+	}
+}
+
+func TestRender_CaretAtEOFNoTrailingNewline(t *testing.T) {
+	src := "abc" // no trailing newline; span starts at EOF
+	got := Render("a.luau", src, Luau, []Spot{{Offset: 3, Len: 3, Severity: Error, Message: "x"}}, Options{Color: false})
+	if n := strings.Count(got, "^"); n != 1 {
+		t.Errorf("want a single caret at EOF, got %d:\n%q", n, got)
 	}
 }

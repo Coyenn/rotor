@@ -31,8 +31,8 @@ const (
 
 // Spot is one diagnostic anchored to a byte span of the source.
 type Spot struct {
-	Offset   int      // byte offset of the span start into the source
-	Len      int      // span length in bytes; the caret count is max(1, Len-on-line)
+	Offset   int // byte offset of the span start into the source
+	Len      int // span length in bytes; the caret count is max(1, Len-on-line)
 	Severity Severity
 	Code     string   // optional, shown after the message: "TS2322", "noAny", ""
 	Message  string   // primary message (no suggestion/more-info tail)
@@ -43,14 +43,15 @@ type Spot struct {
 // the destination writer (term.ColorEnabled); with Color false the output is
 // plain ASCII and byte-stable.
 type Options struct {
-	Context int  // context lines above/below the primary line (default 1)
+	Context int  // context lines above/below the primary line; 0 means the default (1)
 	Color   bool // emit ANSI styling
 	Link    bool // emit OSC 8 hyperlink on the locator (caller: Color && wanted)
 }
 
 // lineColAt returns the 1-based line and column (byte column) for a byte offset,
 // plus the 0-based index of the line's first byte. The offset is clamped to
-// [0, len(src)].
+// [0, len(src)]. Column is byte-based; it may differ from the display column on
+// lines containing multi-byte UTF-8 characters.
 func lineColAt(src string, offset int) (line, col, lineStart int) {
 	if offset < 0 {
 		offset = 0
@@ -245,9 +246,15 @@ func renderSpot(b *strings.Builder, path, source string, lang Language, sp Spot,
 			if n < 1 {
 				n = 1
 			}
-			if maxN := len(expanded) - (caretCol - 1); maxN >= 1 && n > maxN {
+			// Clamp the caret run to the visible line; if the span starts at or
+			// past end-of-line (e.g. offset == EOF), show a single caret.
+			if maxN := len(expanded) - (caretCol - 1); maxN < 1 {
+				n = 1
+			} else if n > maxN {
 				n = maxN
 			}
+			// The message is echoed inline at the caret (rustc-style) in
+			// addition to the headline above.
 			caretLine := fmt.Sprintf("%s %s %s%s %s",
 				gutterPad, bar, strings.Repeat(" ", caretCol-1), paint(strings.Repeat("^", n)), paint(sp.Message))
 			fmt.Fprintln(b, strings.TrimRight(caretLine, " "))

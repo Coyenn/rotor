@@ -17,9 +17,10 @@ type Group struct {
 }
 
 // RenderGroups renders all groups (files sorted by path), then a summary footer.
-// maxErrors caps the number of rendered frames across all groups (0 =
-// unlimited); when capped, the footer notes how many were hidden.
-func RenderGroups(groups []Group, o Options, maxErrors int) string {
+// maxFrames caps the total number of rendered diagnostic frames across all
+// groups — errors and warnings alike (0 = unlimited); when capped, the footer
+// notes how many were hidden.
+func RenderGroups(groups []Group, o Options, maxFrames int) string {
 	sorted := append([]Group(nil), groups...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
 
@@ -37,7 +38,7 @@ func RenderGroups(groups []Group, o Options, maxErrors int) string {
 			} else {
 				errs++
 			}
-			if maxErrors > 0 && shown >= maxErrors {
+			if maxFrames > 0 && shown >= maxFrames {
 				continue
 			}
 			render = append(render, sp)
@@ -51,7 +52,11 @@ func RenderGroups(groups []Group, o Options, maxErrors int) string {
 
 	s := stylerFor(o.Color)
 	if hidden := total - shown; hidden > 0 {
-		fmt.Fprintf(&b, "  %s\n", s.Muted(fmt.Sprintf("…and %d more", hidden)))
+		ell := "…"
+		if !o.Color {
+			ell = "..." // keep no-color output plain ASCII / byte-stable
+		}
+		fmt.Fprintf(&b, "  %s\n", s.Muted(fmt.Sprintf("%sand %d more", ell, hidden)))
 	}
 	b.WriteString(summaryLine(s, errs, warns, filesWithDiags))
 	return b.String()
@@ -68,8 +73,17 @@ func summaryLine(s *term.Styler, errs, warns, files int) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("  %s %s %s\n", s.ErrorBold("✗"),
-		strings.Join(parts, " · "), s.Muted(fmt.Sprintf("in %s", plural(files, "file"))))
+	g := s.Glyphs() // unicode when color is on, ASCII fallbacks otherwise
+	glyph := s.ErrorBold(g.Cross)
+	if errs == 0 {
+		glyph = s.WarnBold(g.Warn)
+	}
+	sep := " · "
+	if !s.Color() {
+		sep = ", " // keep no-color output plain ASCII / byte-stable
+	}
+	return fmt.Sprintf("  %s %s %s\n", glyph,
+		strings.Join(parts, sep), s.Muted(fmt.Sprintf("in %s", plural(files, "file"))))
 }
 
 // plural renders "1 error" / "3 errors".
