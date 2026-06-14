@@ -1,10 +1,29 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns what
+// was written, plus fn's return value. Mirrors captureStdout in build_test.go.
+func captureStderr(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	prev := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	code := fn()
+	_ = w.Close()
+	os.Stderr = prev
+	data, _ := io.ReadAll(r)
+	return string(data), code
+}
 
 func TestCmdMinifyToFile(t *testing.T) {
 	dir := t.TempDir()
@@ -42,5 +61,30 @@ func TestCmdMinifyParseError(t *testing.T) {
 	}
 	if code := cmdMinify([]string{in}); code != 1 {
 		t.Fatalf("expected exit 1 for parse error, got %d", code)
+	}
+}
+
+func TestCmdMinifyParseErrorCodeFrame(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "bad.luau")
+	// "1 2" adjacent literals are a parse error; the code frame must include
+	// the source line and a caret.
+	src := "local x = 1\nreturn print(1 2)\n"
+	if err := os.WriteFile(in, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, code := captureStderr(t, func() int {
+		return cmdMinify([]string{in})
+	})
+	if code != 1 {
+		t.Fatalf("expected exit 1 for parse error, got %d", code)
+	}
+	// The code frame must contain the source line with the error.
+	if !strings.Contains(stderr, "return print(1 2)") {
+		t.Errorf("stderr does not contain the source line %q\nstderr:\n%s", "return print(1 2)", stderr)
+	}
+	// The code frame must contain a caret pointing at the error.
+	if !strings.Contains(stderr, "^") {
+		t.Errorf("stderr does not contain a caret '^'\nstderr:\n%s", stderr)
 	}
 }
