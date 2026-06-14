@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +9,9 @@ import (
 	"time"
 
 	"rotor/internal/bundle"
+	"rotor/internal/diagframe"
 	"rotor/internal/luau/cst"
+	"rotor/internal/term"
 )
 
 // cmdBundle bundles a Luau require graph rooted at an entry file into one runnable
@@ -80,6 +83,16 @@ func cmdBundle(args []string) int {
 	start := time.Now()
 	out, err := bundle.BundleWith(entry, bundle.Options{Exclude: exclude})
 	if err != nil {
+		var pe *bundle.ParseError
+		if errors.As(err, &pe) {
+			errUI.failLine("rotor bundle: syntax error")
+			color := term.ColorEnabled(os.Stderr)
+			fmt.Fprint(os.Stderr, diagframe.RenderGroups(
+				[]diagframe.Group{{Path: pe.Path, Source: pe.Source, Lang: diagframe.Luau,
+					Spots: []diagframe.Spot{{Offset: pe.Diag.Pos.Offset, Len: 1, Severity: diagframe.Error, Message: pe.Diag.Message}}}},
+				diagframe.Options{Color: color, Link: color}, 0))
+			return 1
+		}
 		errUI.failLine(fmt.Sprintf("rotor bundle: %v", err))
 		return 1
 	}

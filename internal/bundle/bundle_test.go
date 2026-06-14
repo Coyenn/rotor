@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -347,5 +348,34 @@ func TestBundleCycleTerminates(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("cyclic bundle missing %q", want)
 		}
+	}
+}
+
+func TestBundleParseErrorTyped(t *testing.T) {
+	dir := t.TempDir()
+	// "1 2" adjacent integer literals is a Luau parse error (unexpected token).
+	entry := write(t, dir, "entry.luau", "return 1 2\n")
+
+	_, err := Bundle(entry)
+	if err == nil {
+		t.Fatal("Bundle on invalid Luau should return an error")
+	}
+	var pe *ParseError
+	if !errors.As(err, &pe) {
+		t.Fatalf("error is %T (%v), want *ParseError", err, err)
+	}
+	if pe.Path == "" {
+		t.Error("ParseError.Path is empty")
+	}
+	if pe.Source == "" {
+		t.Error("ParseError.Source is empty")
+	}
+	if pe.Diag.Message == "" {
+		t.Error("ParseError.Diag.Message is empty")
+	}
+	// Error() must preserve the legacy one-line "path:line:col: message" format.
+	legacy := pe.Error()
+	if !strings.Contains(legacy, ":") || !strings.Contains(legacy, pe.Diag.Message) {
+		t.Errorf("ParseError.Error() = %q, want path:line:col: message form", legacy)
 	}
 }

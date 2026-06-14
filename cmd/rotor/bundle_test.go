@@ -41,3 +41,27 @@ func TestCmdBundleBadEntry(t *testing.T) {
 		t.Fatalf("expected exit 1 for missing file, got %d", code)
 	}
 }
+
+func TestCmdBundleParseErrorCodeFrame(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "entry.luau")
+	// "return 1 2" — adjacent literals are a Luau parse error.
+	src := "local x = 1\nreturn 1 2\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stderr, code := captureStderr(t, func() int {
+		return cmdBundle([]string{entry})
+	})
+	if code != 1 {
+		t.Fatalf("expected exit 1 for parse error, got %d", code)
+	}
+	// The code frame must contain the offending source line.
+	if !strings.Contains(stderr, "return 1 2") {
+		t.Errorf("stderr does not contain offending source line %q\nstderr:\n%s", "return 1 2", stderr)
+	}
+	// The code frame must contain a caret pointing at the error.
+	if !strings.Contains(stderr, "^") {
+		t.Errorf("stderr does not contain a caret '^'\nstderr:\n%s", stderr)
+	}
+}
