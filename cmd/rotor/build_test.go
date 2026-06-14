@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"rotor/internal/compile"
 )
 
 // TestParseBuildArgs covers the rbxtsc-compatible flag surface
@@ -290,5 +292,132 @@ func TestCmdBuildJSONWithDiagnostic(t *testing.T) {
 	}
 	if res.Diagnostics[0].Message == "" {
 		t.Error("diagnostic message is empty")
+	}
+	// Structured location: file/line/col must be populated for a TS type error.
+	if res.Diagnostics[0].File == "" {
+		t.Error("diagnostic file is empty (want structured location)")
+	}
+	if res.Diagnostics[0].Line == 0 {
+		t.Error("diagnostic line is 0 (want ≥ 1)")
+	}
+	if res.Diagnostics[0].Col == 0 {
+		t.Error("diagnostic col is 0 (want ≥ 1)")
+	}
+}
+
+// TestRenderDiagFrames is a focused unit test for renderDiagFrames: it creates
+// a synthetic .ts file, constructs a DiagnosticInfo pointing at a span in it,
+// and asserts the rendered output contains the source line and a caret.
+func TestRenderDiagFrames(t *testing.T) {
+	dir := t.TempDir()
+	src := "export const s: string = 5;\n"
+	tsFile := filepath.Join(dir, "main.ts")
+	if err := os.WriteFile(tsFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Offset 25 points at "5" (the numeric literal): "export const s: string = "
+	diags := []compile.DiagnosticInfo{
+		{
+			Message:  "Type 'number' is not assignable to type 'string'.",
+			FileName: tsFile,
+			Offset:   25,
+			Len:      1,
+		},
+	}
+
+	out := renderDiagFrames(os.Stderr, diags, 0)
+
+	// The rendered frame must contain the source line.
+	if !strings.Contains(out, "export const s: string = 5;") {
+		t.Errorf("frame does not contain source line\noutput:\n%s", out)
+	}
+	// The rendered frame must contain a caret pointing at the error.
+	if !strings.Contains(out, "^") {
+		t.Errorf("frame does not contain caret '^'\noutput:\n%s", out)
+	}
+	// The rendered frame must contain the '-->' locator arrow.
+	if !strings.Contains(out, "-->") {
+		t.Errorf("frame does not contain '-->' locator\noutput:\n%s", out)
+	}
+	// The summary line must mention 'error'.
+	if !strings.Contains(out, "error") {
+		t.Errorf("frame does not contain 'error' summary\noutput:\n%s", out)
+	}
+}
+
+// TestParseBuildArgsMaxErrors verifies that --max-errors is parsed correctly.
+func TestParseBuildArgsMaxErrors(t *testing.T) {
+	t.Run("default is 50", func(t *testing.T) {
+		got, err := parseBuildArgs(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 50 {
+			t.Errorf("maxErrors = %d, want 50", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors value", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors", "10"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 10 {
+			t.Errorf("maxErrors = %d, want 10", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors=N form", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors=5"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 5 {
+			t.Errorf("maxErrors = %d, want 5", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors 0 means unlimited", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors", "0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 0 {
+			t.Errorf("maxErrors = %d, want 0", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors with negative value errors", func(t *testing.T) {
+		_, err := parseBuildArgs([]string{"--max-errors", "-1"})
+		if err == nil {
+			t.Error("expected error for negative --max-errors")
+		}
+	})
+}
+
+// TestCmdBuildFailureCodeFrame verifies that a build failure renders code frames
+// (containing '-->' and '^') to stderr.
+func TestCmdBuildFailureCodeFrame(t *testing.T) {
+	// A type error: assign a number to a string-typed const.
+	dir := writeBuildableProject(t, "export const s: string = 5;\n")
+
+	stderr, code := captureStderr(t, func() int {
+		return cmdBuild([]string{dir})
+	})
+	if code != 1 {
+		t.Fatalf("cmdBuild (error) exit = %d, want 1; stderr:\n%s", code, stderr)
+	}
+	// The code frame must contain the '-->' locator line.
+	if !strings.Contains(stderr, "-->") {
+		t.Errorf("stderr does not contain '-->' locator\nstderr:\n%s", stderr)
+	}
+	// The code frame must contain a caret.
+	if !strings.Contains(stderr, "^") {
+		t.Errorf("stderr does not contain caret '^'\nstderr:\n%s", stderr)
+	}
+	// The failure summary must mention 'error'.
+	if !strings.Contains(stderr, "error") {
+		t.Errorf("stderr does not contain 'error'\nstderr:\n%s", stderr)
 	}
 }

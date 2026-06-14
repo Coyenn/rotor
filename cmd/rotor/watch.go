@@ -37,8 +37,9 @@ type fileStamp struct {
 // watchStats accumulates per-session build counts and durations for the watch
 // idle line.
 type watchStats struct {
-	builds  int
-	history []time.Duration // most recent last, capped at watchHistoryLen
+	builds    int
+	history   []time.Duration // most recent last, capped at watchHistoryLen
+	maxErrors int             // cap for rendered code frames (0 = unlimited)
 }
 
 func (s *watchStats) record(d time.Duration) {
@@ -257,9 +258,9 @@ func snapshotFiles(files []string) map[string]fileStamp {
 	return stamps
 }
 
-func runBuildWatch(dir, tsConfigPath string, opts projectOptions) int {
+func runBuildWatch(dir, tsConfigPath string, opts projectOptions, maxErrors int) int {
 	u := newUI(os.Stdout)
-	stats := &watchStats{}
+	stats := &watchStats{maxErrors: maxErrors}
 
 	w := newTreeWatcher(dir)
 	w.setSkipDirs(guessedOutputDir(dir, nil), watchIncludeDir(dir, opts))
@@ -327,9 +328,9 @@ func watchIncludeDir(dir string, opts projectOptions) string {
 	return abs
 }
 
-func reportBuildPass(u *ui, result *compile.BuildResult, diags []string, elapsed time.Duration, err error, stats *watchStats) {
+func reportBuildPass(u *ui, result *compile.BuildResult, diags []compile.DiagnosticInfo, elapsed time.Duration, err error, stats *watchStats) {
 	if err != nil {
-		newUI(os.Stderr).buildFailure(err.Error(), diags)
+		newUI(os.Stderr).buildFailure(err.Error(), diags, stats.maxErrors)
 	} else if result != nil {
 		if result.WroteEnvTypes {
 			u.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")

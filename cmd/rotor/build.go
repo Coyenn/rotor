@@ -36,6 +36,7 @@ type buildArgs struct {
 	version    bool
 	jsonOut    bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile string // rotor DX extension: write a pprof CPU profile here
+	maxErrors  int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -47,7 +48,7 @@ type buildArgs struct {
 // As rotor sugar (kept from the earlier CLI), one positional argument is
 // accepted as the project path.
 func parseBuildArgs(args []string) (*buildArgs, error) {
-	res := &buildArgs{project: "."} // yargs default: --project "."
+	res := &buildArgs{project: ".", maxErrors: 50} // yargs default: --project "."; maxErrors default 50
 	positional := ""
 	projectSet := false
 
@@ -139,6 +140,16 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			continue
 		case "cpuprofile":
 			res.cpuprofile = takeValue()
+			continue
+		case "max-errors":
+			v := takeValue()
+			n := 0
+			if v != "" {
+				if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
+					return nil, fmt.Errorf("invalid --max-errors value %q (must be a non-negative integer)", v)
+				}
+			}
+			res.maxErrors = n
 			continue
 		case "json":
 			// rotor DX extension (not in rbxtsc): a plain boolean flag that
@@ -267,7 +278,7 @@ func cmdBuild(args []string) int {
 		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
-		return runBuildWatch(dir, tsConfigPath, opts)
+		return runBuildWatch(dir, tsConfigPath, opts, parsed.maxErrors)
 	}
 
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
@@ -278,7 +289,7 @@ func cmdBuild(args []string) int {
 
 	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
 	if err != nil {
-		newUI(os.Stderr).buildFailure(err.Error(), diags)
+		newUI(os.Stderr).buildFailure(err.Error(), diags, parsed.maxErrors)
 		return 1
 	}
 
@@ -298,13 +309,13 @@ func cmdBuild(args []string) int {
 	return 0
 }
 
-func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []string, time.Duration, error) {
+func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
 	// Real builds carry rotor's own header; the upstream-header default is
 	// only load-bearing for differential byte-comparison in tests.
 	transformer.HeaderComment = " Compiled with rotor v" + version
 
 	start := time.Now()
-	result, diags, err := compile.BuildProjectWithOptions(dir, compile.ProjectOptions{
+	result, msgs, err := compile.BuildProjectWithOptions(dir, compile.ProjectOptions{
 		TsConfigPath:           tsConfigPath,
 		IncludePath:            opts.includePath,
 		EmitIncludeFiles:       !opts.noInclude,
@@ -316,14 +327,21 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 		LuaExtension:           !opts.luau,
 		WriteOnlyChanged:       opts.writeOnlyChanged,
 	})
+	var diags []compile.DiagnosticInfo
+	if result != nil {
+		diags = result.Diagnostics
+	}
+	if len(diags) == 0 && len(msgs) > 0 { // config/validation errors have no source span
+		for _, m := range msgs {
+			diags = append(diags, compile.DiagnosticInfo{Message: m})
+		}
+	}
 	return result, diags, time.Since(start), err
 }
 
 // jsonDiagnostic is one entry in the --json diagnostics array. file/line/col
-// are best-effort: build's compile path surfaces diagnostics as already-
-// formatted messages (no structured location), so for build they carry only
-// message+severity; `rotor check --json` fills in file/line/col from the
-// structured AST diagnostics it already holds.
+// are populated from the structured DiagnosticInfo location when available;
+// `rotor check --json` also fills these from its own structured AST diagnostics.
 type jsonDiagnostic struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
@@ -365,11 +383,17 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions) int {
 		DurationMs: elapsed.Milliseconds(),
 	}
 	if err != nil {
-		// Build diagnostics are message-only strings (the compile API does not
-		// return structured locations here); surface them as errors with empty
-		// file/line/col. An empty diags list still gets the failure message.
 		for _, d := range diags {
-			res.Diagnostics = append(res.Diagnostics, jsonDiagnostic{Severity: "error", Message: d})
+			sev := "error"
+			if d.Warning {
+				sev = "warning"
+			}
+			jd := jsonDiagnostic{Severity: sev, Message: d.Message}
+			if d.FileName != "" {
+				jd.File = relForDisplay(d.FileName)
+				jd.Line, jd.Col = lineColOf(d.FileName, d.Offset)
+			}
+			res.Diagnostics = append(res.Diagnostics, jd)
 		}
 		if len(diags) == 0 {
 			res.Diagnostics = append(res.Diagnostics, jsonDiagnostic{Severity: "error", Message: err.Error()})
@@ -380,4 +404,22 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions) int {
 	res.Files = len(result.Outputs)
 	writeJSONResult(os.Stdout, res)
 	return 0
+}
+
+// lineColOf computes 1-based line/col for a byte offset in a file (0,0 if unreadable).
+func lineColOf(fileName string, offset int) (int, int) {
+	data, err := os.ReadFile(fileName)
+	if err != nil || offset < 0 || offset > len(data) {
+		return 0, 0
+	}
+	line, col := 1, 1
+	for i := 0; i < offset; i++ {
+		if data[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
 }
