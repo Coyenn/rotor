@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"rotor/internal/assets"
 	"rotor/internal/compile"
+	"rotor/internal/term"
 )
 
 // Polling cadence. Snapshots are cheap (pruned os.ReadDir walks that reuse the
@@ -34,12 +36,29 @@ type fileStamp struct {
 	size    int64
 }
 
-// watchStats accumulates per-session build counts and durations for the watch
-// idle line.
+// watchStats accumulates per-session build counts, durations, and the last
+// build's outcome for the watch idle line. The trailing fields are watch
+// configuration (set once at session start) rather than running state.
 type watchStats struct {
-	builds    int
-	history   []time.Duration // most recent last, capped at watchHistoryLen
-	maxErrors int             // cap for rendered code frames (0 = unlimited)
+	builds  int
+	history []time.Duration // most recent last, capped at watchHistoryLen
+
+	// Last-build outcome, used for the persistent error banner on the idle
+	// line and for fail<->pass transition cues.
+	lastFailed   bool
+	lastErrCount int
+
+	// Session configuration.
+	maxErrors   int  // cap for rendered code frames (0 = unlimited)
+	bell        bool // ring the terminal bell on a fail<->pass flip (TTY only)
+	clearScreen bool // clear the screen before each rebuild (TTY only)
+}
+
+// watchOptions carries the rebuild-display configuration into runBuildWatch.
+type watchOptions struct {
+	maxErrors   int
+	bell        bool
+	clearScreen bool
 }
 
 func (s *watchStats) record(d time.Duration) {
@@ -258,9 +277,13 @@ func snapshotFiles(files []string) map[string]fileStamp {
 	return stamps
 }
 
-func runBuildWatch(dir, tsConfigPath string, opts projectOptions, maxErrors int) int {
+func runBuildWatch(dir, tsConfigPath string, opts projectOptions, wopts watchOptions) int {
 	u := newUI(os.Stdout)
-	stats := &watchStats{maxErrors: maxErrors}
+	stats := &watchStats{
+		maxErrors:   wopts.maxErrors,
+		bell:        wopts.bell,
+		clearScreen: wopts.clearScreen,
+	}
 
 	w := newTreeWatcher(dir)
 	w.setSkipDirs(guessedOutputDir(dir, nil), watchIncludeDir(dir, opts))
@@ -290,6 +313,7 @@ func runBuildWatch(dir, tsConfigPath string, opts projectOptions, maxErrors int)
 		if len(changed) == 0 {
 			continue
 		}
+		clearForRebuild(os.Stdout, stats)
 		u.watchChanges(changed)
 
 		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
@@ -328,10 +352,34 @@ func watchIncludeDir(dir string, opts projectOptions) string {
 	return abs
 }
 
+// clearForRebuild wipes the screen (and scrollback) before a rebuild so each
+// pass starts clean, like vite/tsc --watch. TTY only (gated on color, the
+// interactive proxy) and opt-out via --no-clear; piped output keeps the full
+// scroll history with the per-rebuild separator rule instead.
+func clearForRebuild(w io.Writer, stats *watchStats) {
+	if stats.clearScreen && term.ColorEnabled(w) {
+		fmt.Fprint(w, "\x1b[2J\x1b[3J\x1b[H")
+	}
+}
+
 func reportBuildPass(u *ui, result *compile.BuildResult, diags []compile.DiagnosticInfo, elapsed time.Duration, err error, stats *watchStats) {
-	if err != nil {
+	failed := err != nil
+	// Ring the bell on a fail<->pass flip (not on the first build, which has no
+	// prior state to transition from) so an unattended watch surfaces the
+	// change audibly. Opt-in via --bell; TTY only.
+	if stats.builds > 1 && failed != stats.lastFailed && stats.bell && isTerminal(os.Stderr) {
+		fmt.Fprint(os.Stderr, "\a")
+	}
+	stats.lastFailed = failed
+	if failed {
+		n := len(diags)
+		if n == 0 {
+			n = 1 // a config/validation error with no structured diagnostics
+		}
+		stats.lastErrCount = n
 		newUI(os.Stderr).buildFailure(err.Error(), diags, stats.maxErrors)
 	} else if result != nil {
+		stats.lastErrCount = 0
 		if result.WroteEnvTypes {
 			u.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
 		}

@@ -396,6 +396,41 @@ func TestParseBuildArgsMaxErrors(t *testing.T) {
 	})
 }
 
+// TestParseBuildArgsWatchDXFlags verifies the watch DX booleans --bell and
+// --no-clear (and their defaults).
+func TestParseBuildArgsWatchDXFlags(t *testing.T) {
+	t.Run("defaults: bell off, clear on", func(t *testing.T) {
+		got, err := parseBuildArgs(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.bell {
+			t.Error("bell default = true, want false")
+		}
+		if !got.clearScreen {
+			t.Error("clearScreen default = false, want true")
+		}
+	})
+	t.Run("--bell enables the bell", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--bell"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.bell {
+			t.Error("--bell not parsed")
+		}
+	})
+	t.Run("--no-clear disables clear-on-rebuild", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--no-clear"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.clearScreen {
+			t.Error("--no-clear did not disable clearScreen")
+		}
+	})
+}
+
 // TestCmdBuildFailureCodeFrame verifies that a build failure renders code frames
 // (containing '-->' and '^') to stderr.
 func TestCmdBuildFailureCodeFrame(t *testing.T) {

@@ -30,13 +30,15 @@ var projectTypeChoices = map[string]transformer.ProjectType{
 // CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
 // flags the user passed.
 type buildArgs struct {
-	project    string
-	opts       partialProjectOptions
-	help       bool
-	version    bool
-	jsonOut    bool   // rotor DX extension: emit a machine-readable result object
-	cpuprofile string // rotor DX extension: write a pprof CPU profile here
-	maxErrors  int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
+	project     string
+	opts        partialProjectOptions
+	help        bool
+	version     bool
+	jsonOut     bool   // rotor DX extension: emit a machine-readable result object
+	cpuprofile  string // rotor DX extension: write a pprof CPU profile here
+	maxErrors   int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
+	bell        bool   // rotor DX extension (watch): ring the bell on a fail<->pass flip
+	clearScreen bool   // rotor DX extension (watch): clear the screen before each rebuild (default true)
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -48,7 +50,8 @@ type buildArgs struct {
 // As rotor sugar (kept from the earlier CLI), one positional argument is
 // accepted as the project path.
 func parseBuildArgs(args []string) (*buildArgs, error) {
-	res := &buildArgs{project: ".", maxErrors: 50} // yargs default: --project "."; maxErrors default 50
+	// yargs default: --project "."; maxErrors default 50; clear-on-rebuild on.
+	res := &buildArgs{project: ".", maxErrors: 50, clearScreen: true}
 	positional := ""
 	projectSet := false
 
@@ -164,21 +167,28 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			name, negated = rest, true
 		}
 		if target := boolTargets(name); target != nil {
-			b := !negated
-			if hasValue {
-				switch value {
-				case "true", "1":
-					b = true
-				case "false", "0":
-					b = false
-				default:
-					return nil, fmt.Errorf("invalid boolean value %q for --%s", value, name)
-				}
-				if negated {
-					b = !b
-				}
+			b, err := resolveBool(negated, hasValue, value, name)
+			if err != nil {
+				return nil, err
 			}
 			*target = &b
+			continue
+		}
+		// rotor DX watch booleans (not part of the rbxtsc flag surface).
+		switch name {
+		case "bell":
+			b, err := resolveBool(negated, hasValue, value, name)
+			if err != nil {
+				return nil, err
+			}
+			res.bell = b
+			continue
+		case "clear":
+			b, err := resolveBool(negated, hasValue, value, name)
+			if err != nil {
+				return nil, err
+			}
+			res.clearScreen = b
 			continue
 		}
 
@@ -199,6 +209,27 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 	}
 
 	return res, nil
+}
+
+// resolveBool resolves a yargs-style boolean flag: bare `--flag` is true,
+// `--no-flag` is false, and `--flag=<bool>` takes the explicit value (an outer
+// `no-` prefix inverts it). It rejects non-boolean `=value`s.
+func resolveBool(negated, hasValue bool, value, name string) (bool, error) {
+	b := !negated
+	if hasValue {
+		switch value {
+		case "true", "1":
+			b = true
+		case "false", "0":
+			b = false
+		default:
+			return false, fmt.Errorf("invalid boolean value %q for --%s", value, name)
+		}
+		if negated {
+			b = !b
+		}
+	}
+	return b, nil
 }
 
 // cmdBuild is the compile-to-disk command, porting the rbxtsc build handler
@@ -278,7 +309,11 @@ func cmdBuild(args []string) int {
 		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
-		return runBuildWatch(dir, tsConfigPath, opts, parsed.maxErrors)
+		return runBuildWatch(dir, tsConfigPath, opts, watchOptions{
+			maxErrors:   parsed.maxErrors,
+			bell:        parsed.bell,
+			clearScreen: parsed.clearScreen,
+		})
 	}
 
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {

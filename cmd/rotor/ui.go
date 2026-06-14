@@ -176,12 +176,21 @@ func (u *ui) watchBanner(n int, stats *watchStats) {
 
 // watchIdle prints the post-build "watching for changes" line for build watch,
 // where the watched set is the whole project tree rather than a fixed count.
+// After a failed build it shows a persistent ✗ error banner so the failure
+// state stays visible after the code frames have scrolled off.
 func (u *ui) watchIdle(stats *watchStats) {
 	g := u.s.Glyphs()
-	parts := []string{u.s.Muted("watching for changes")}
+	icon := u.s.Info(g.Watch)
+	var parts []string
+	if stats != nil && stats.lastFailed {
+		icon = u.s.ErrorBold(g.Cross)
+		parts = append(parts, u.s.Error(plural(stats.lastErrCount, "error"))+u.s.Muted(" — watching for changes"))
+	} else {
+		parts = append(parts, u.s.Muted("watching for changes"))
+	}
 	parts = append(parts, u.watchStatParts(stats)...)
 	parts = append(parts, u.s.Muted("Ctrl+C to exit"))
-	fmt.Fprintf(u.w, "  %s  %s\n", u.s.Info(g.Watch), joinDot(u.s, parts))
+	fmt.Fprintf(u.w, "  %s  %s\n", icon, joinDot(u.s, parts))
 }
 
 // watchStatParts renders the rebuild counter and the build-time sparkline for
