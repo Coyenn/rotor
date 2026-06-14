@@ -319,8 +319,10 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 - [x] **`internal/diagframe`** — language-agnostic code-frame renderer: offset→line/col math, gutter + caret/underline, reserved-keyword highlighting (Luau + TS sets, drift-guarded against `internal/luau`), `help:` lines, OSC 8 links, tab expansion, one-liner fallback. No-color output is pure ASCII / byte-stable (regression-tested). `RenderGroups` groups by file + summary footer + `maxFrames` truncation.
 - [x] **Luau command wiring** — `rotor minify` and `rotor bundle` now show framed Luau syntax errors (bundle via a typed `bundle.ParseError`); `rotor pack` embeds `line:col` in its in-artifact compile-failure message. Foundation passed an adversarial code review (ASCII-output, caret-at-EOF, naming fixes). Full suite green (25 ok packages, byte-parity intact).
 
-**Plan 2 — TS location plumbing + build/watch frames** ⬜ (next)
-- [ ] Structured location through compile/build (`DiagnosticInfo` + node/tsgo resolvers, `BuildResult.Diagnostics`); `rotor build`/watch/`dev` frames; `--max-errors`; `--json` line/col; watch transition cues.
+**Plan 2 — TS location plumbing + build/watch frames** ✅
+- [x] **Structured location through compile/build** — `compile.DiagnosticInfo` gained `FileName`/`Offset`/`Len` with `infoFromNodeDiag` (transformer `*ast.Node` → token span via `scanner.GetTokenPosOfNode`) and `infoFromTSDiag` (tsgo `*ast.Diagnostic`) resolvers; `BuildResult.Diagnostics` carries the structured set even on failure; the public `[]string` accessors stay byte-identical via `diagnosticInfoMessages` (conformance/diff suites green).
+- [x] **`rotor build`/watch/`dev` code frames** — build failures render `diagframe` frames (grouped by file, source line + caret/underline, keyword highlighting, OSC 8 links, `✗ N errors in M files` footer); `--max-errors` caps rendered frames (default 50, 0 = unlimited); `--json` carries real `line`/`col`; located vs. loose (config) diagnostics split cleanly.
+- [x] **Watch transition cues** — clear-on-rebuild (TTY only, opt-out `--no-clear`), a persistent `✗ N errors — watching for changes` banner that survives until the next green pass, and a `--bell` fail↔pass audible cue. 25/25 Go packages green, 0 failures.
 
-**Plan 3 — `init` adopt-existing + `doctor` synergy** ⬜
+**Plan 3 — `init` adopt-existing + `doctor` synergy** ⬜ (next)
 - [ ] `rotor init` adopts an existing project (config-only, no clobber, template detect, `--config`); `rotor doctor` reports on `rotor.toml`.
