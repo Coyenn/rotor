@@ -310,3 +310,17 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 - [x] **Bundler imports** — `.luaurc` alias resolution, data-file embedding (`.json`→table, `.txt`/`.md`→string, run-once cached), repeatable `--exclude` globs.
 - [x] **CLI QOL** — `rotor clean` (outputs + `--types` companions, `--dry-run`), `--json` on build/check, `rotor add` (package.json deps, HTML-escape-safe), `rotor migrate`.
 - [x] All parity suites byte-green (macros are opt-in); npm `@rotor-rbx/rotor` auto-publishes on tag.
+
+## v2.1 — diagnostics code frames + DX (June 14, 2026) 🚧
+
+*Spec: `docs/superpowers/specs/2026-06-14-unified-code-frame-diagnostics-design.md`. Plans 1–3 under `docs/superpowers/plans/`.*
+
+**Plan 1 — `internal/diagframe` renderer + Luau wiring** ✅
+- [x] **`internal/diagframe`** — language-agnostic code-frame renderer: offset→line/col math, gutter + caret/underline, reserved-keyword highlighting (Luau + TS sets, drift-guarded against `internal/luau`), `help:` lines, OSC 8 links, tab expansion, one-liner fallback. No-color output is pure ASCII / byte-stable (regression-tested). `RenderGroups` groups by file + summary footer + `maxFrames` truncation.
+- [x] **Luau command wiring** — `rotor minify` and `rotor bundle` now show framed Luau syntax errors (bundle via a typed `bundle.ParseError`); `rotor pack` embeds `line:col` in its in-artifact compile-failure message. Foundation passed an adversarial code review (ASCII-output, caret-at-EOF, naming fixes). Full suite green (25 ok packages, byte-parity intact).
+
+**Plan 2 — TS location plumbing + build/watch frames** ⬜ (next)
+- [ ] Structured location through compile/build (`DiagnosticInfo` + node/tsgo resolvers, `BuildResult.Diagnostics`); `rotor build`/watch/`dev` frames; `--max-errors`; `--json` line/col; watch transition cues.
+
+**Plan 3 — `init` adopt-existing + `doctor` synergy** ⬜
+- [ ] `rotor init` adopts an existing project (config-only, no clobber, template detect, `--config`); `rotor doctor` reports on `rotor.toml`.
