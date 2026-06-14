@@ -209,9 +209,10 @@ func cloudChecks(dir string) []doctorCheck {
 	case errors.Is(err, config.ErrNotFound):
 		hasConfig = false
 		checks = append(checks, doctorCheck{
-			status: doctorInfo,
+			status: doctorWarn,
 			label:  config.ConfigFileName,
-			detail: "not found (only needed for rotor asset / rotor deploy)",
+			detail: "not found",
+			hint:   "run `rotor init` to add rotor config (needed for rotor asset / rotor deploy)",
 		})
 	case err != nil:
 		checks = append(checks, doctorCheck{
