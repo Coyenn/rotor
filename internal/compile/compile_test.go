@@ -199,6 +199,28 @@ func TestCompileFileMissingSource(t *testing.T) {
 	}
 }
 
+// TestTransformerDiagnosticCarriesLocation verifies that the FileName, Offset,
+// and Len fields added to DiagnosticInfo are populated for transformer
+// diagnostics that have an AST node. env_diag_model/src/main.ts passes a
+// non-literal variable to $env, which triggers DiagRotorEnvNonLiteralArg with
+// the argument node attached — a reliable case that always carries a source
+// location.
+func TestTransformerDiagnosticCarriesLocation(t *testing.T) {
+	_, infos, _ := CompileFileDetailed("testdata/env_diag_model", "src/main.ts")
+	if len(infos) == 0 {
+		t.Fatal("expected at least one diagnostic")
+	}
+	var located bool
+	for _, d := range infos {
+		if d.FileName != "" && d.Len > 0 {
+			located = true
+		}
+	}
+	if !located {
+		t.Errorf("no diagnostic carried a location: %+v", infos)
+	}
+}
+
 func TestCompileFileUsesFileAffinedCheckerForImports(t *testing.T) {
 	got, diags, err := CompileFile(filepath.Join("testdata", "imports_model"), filepath.Join("src", "_scratch_once.ts"))
 	if err != nil {
