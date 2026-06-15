@@ -62,10 +62,10 @@ rotor deploy apply -e prod   # publish places, settings, badges — only what dr
 
 ## Configuration — `rotor.toml`
 
-One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:schema` directive and a generated `rotor.schema.json`, so taplo / Even Better TOML give validation + autocomplete. (Upgrading from a 1.x `rotor.config.ts`? Run `rotor migrate`.)
+One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:schema` directive that points at the schema **hosted in this repo** (served via raw GitHub), so taplo / Even Better TOML give validation + autocomplete with no per-project `rotor.schema.json` to generate or commit. Need a local copy for offline editing? `rotor schema > rotor.schema.json`. (Upgrading from a 1.x `rotor.config.ts`? Run `rotor migrate`.)
 
 ```toml
-#:schema ./rotor.schema.json
+#:schema https://raw.githubusercontent.com/uproot/rotor/master/rotor.schema.json
 
 [assets]
 mode = "macro"                  # "module" (assets.luau) | "macro" ($asset transformer)
