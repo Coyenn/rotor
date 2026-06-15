@@ -260,7 +260,8 @@ own plan.*
 **Sub-project C — Minifier** (`rotor minify`; depends on A)
 
 - [x] **`rotor minify <file> [-o out]` MVP** — `cst.Minify` + the CLI command: drops comments + whitespace via `cst.Dense`, preserves leading `--!` directives, fails on parse/lex diagnostics. Verified end-to-end (RuntimeLib 6018→4373 bytes, still valid). 405/405 corpus semantics-preserving.
-- [ ] Scope-aware `rename_variables` (locals/params), `convert_index_to_field`, `group_local_assignment` (further size wins; Lune behavioral-equivalence gate)
+- [x] `convert_index_to_field` (`t["foo"]` → `t.foo`, table keys too) — shipped in v2.1; also fixed a latent number-glue separator bug (`100print` was invalid Luau). See the v2.1 section.
+- [ ] Scope-aware `rename_variables` (locals/params), `group_local_assignment` (further size wins; Lune behavioral-equivalence gate)
 
 **Sub-project D — Bundler** (`rotor bundle`; depends on A + `internal/rojo`)
 
@@ -311,7 +312,7 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 - [x] **CLI QOL** — `rotor clean` (outputs + `--types` companions, `--dry-run`), `--json` on build/check, `rotor add` (package.json deps, HTML-escape-safe), `rotor migrate`.
 - [x] All parity suites byte-green (macros are opt-in); npm `@rotor-rbx/rotor` auto-publishes on tag.
 
-## v2.1 — diagnostics code frames + DX (June 14, 2026) 🚧
+## v2.1 — diagnostics code frames + DX + minifier (June 14, 2026) ✅
 
 *Spec: `docs/superpowers/specs/2026-06-14-unified-code-frame-diagnostics-design.md`. Plans 1–3 under `docs/superpowers/plans/`.*
 
@@ -327,3 +328,12 @@ subagents on shared foundations; all packages httptest/fake-covered, no network 
 **Plan 3 — `init` adopt-existing + `doctor` synergy** ✅
 - [x] **`rotor init` adopt mode** — a non-empty directory is no longer refused: when a project exists (package.json / tsconfig.json / default.project.json) without a `rotor.toml`, init detects the template (`detectTemplate`: plain / package-via-`declaration` / game) and writes only the missing `rotor.toml` / `rotor.schema.json` / `rotor-env.d.ts`, never clobbering (pre-existing targets reported `(exists, kept)`). An existing `rotor.toml` is an idempotent no-op pointing at `rotor doctor`; `--config` forces config-only adopt even in an empty dir; greenfield scaffolding is unchanged.
 - [x] **`doctor` ↔ `init` synergy** — a missing `rotor.toml` is now a warn row suggesting `rotor init` (was a muted info line); it only fires for projects that already have a tsconfig, so plain bundle projects never see it. Valid/invalid config rows unchanged.
+
+**Minifier + toolchain features** ✅
+- [x] **`convert_index_to_field` minifier rewrite** — `base["foo"]` → `base.foo` and table keys `["foo"] = v` → `foo = v` when `"foo"` is a valid Luau identifier (reserved keywords like `["end"]` stay bracketed). On by default in `rotor minify`, opt out with `--no-index-field`; gated by `DenseOptions`/`MinifyOptions` so the faithful-`Dense` corpus token-equivalence gate is unchanged.
+- [x] **Number-glue separator fix (correctness)** — rotor's lexer leniently split `100print` / `1return` / `1..2` into two tokens, but Luau's greedy number scanner reads them as one malformed number, so the dense minifier was emitting invalid Luau. The dense writer now forces a separator after a numeric literal when the next token would glue onto it. Caught by a Lune behavioral smoke (`local x=1return x` → "Malformed number"; fixed `local x=1 return x` runs); all 458 corpus files still re-parse.
+- [x] **`rotor build --minify`** — passes every emitted `.luau`/`.lua` source through the minifier before writing (hooked in the compile emit path; `BuildResult`/`EmittedFiles`/write loop all see minified content). Strictly opt-in (`ProjectOptions.MinifyOutput` default false → conformance + diff byte-parity unaffected); the incremental manifest hashes source files, so it never desyncs incremental builds; declaration + include files never minified.
+
+**Deferred to a future minifier pass** ⬜
+- [ ] **Scope-aware `rename_variables`** — rename locals/params to short names. Deliberately deferred: a single missed reference silently breaks programs (`local x = x` scoping, recursive `local function`, `typeof(x)` in type positions, interpolation captures, shadowing), so it needs a comprehensive Lune behavioral-equivalence corpus before shipping — its own focused session.
+- [ ] **`readable` (pretty) generator + `rotor fmt`** — a StyLua-style formatter. Safe to validate (significant-token equivalence + re-parse, like the dense gate) but needs comment-preserving layout for every construct; deferred as its own task.

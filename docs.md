@@ -60,8 +60,9 @@ rotor check [path] [-w]       typecheck the project (native, full strictness)
 rotor build [options] [path]  compile the project to Luau
 rotor doctor [path]           diagnose the setup: tsconfig, @rbxts packages,
                               Node.js + transformer plugins, Rojo wiring
-rotor minify <file> [-o out]  minify a Luau file (strips comments + whitespace,
-                              keeps --! directives)
+rotor minify <file> [-o out] [--no-index-field]
+                              minify a Luau file (strips comments + whitespace,
+                              collapses t["x"] to t.x, keeps --! directives)
 rotor bundle <entry> [-o out] [--minify]
                               inline a Luau require graph into one runnable file
 rotor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio
@@ -116,6 +117,12 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 `rotor build` accepts the full rbxtsc flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, `--luau`, plus rotor's own `--cpuprofile`. Run `rotor --help` for details.
 
 Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; merge order: defaults < rbxts < command line.
+
+**rotor DX extensions** (not in rbxtsc; safe to ignore for parity):
+
+- **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. Semantics-preserving and opt-in, so a default build stays byte-identical to rbxtsc; declaration and `include/` files are never minified.
+- **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
+- **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `rotor check`.
 
 ## Production readiness
 
