@@ -26,6 +26,11 @@ type projectOptions struct {
 	optimizedLoops         bool
 	allowCommentDirectives bool
 	luau                   bool
+
+	// minify is a rotor extension (no rbxtsc analog): pass every emitted
+	// .luau/.lua source through the Luau minifier before writing. Set from
+	// --minify; never merged from the rbxts tsconfig key.
+	minify bool
 }
 
 // defaultProjectOptions ports DEFAULT_PROJECT_OPTIONS (Shared/constants.ts

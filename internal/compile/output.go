@@ -12,6 +12,7 @@ import (
 	"rotor/internal/assets"
 	"rotor/internal/includefiles"
 	"rotor/internal/logservice"
+	"rotor/internal/luau/cst"
 	"rotor/internal/rojo"
 	"rotor/tsgo/compiler"
 )
@@ -134,6 +135,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	outputs, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	if err != nil {
 		return &BuildResult{Diagnostics: infos}, diagnosticInfoMessages(infos), err
+	}
+
+	// rotor extension: --minify post-processes each compiled Luau source through
+	// the minifier before write + manifest. The incremental manifest hashes
+	// SOURCE files (not output content), so this never desyncs incremental
+	// builds; semantics are preserved (see ProjectOptions.MinifyOutput).
+	if opts.MinifyOutput {
+		if err := minifyOutputs(outputs); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	emittedFiles := make([]string, 0, len(outputs))
@@ -274,6 +285,26 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 
 func rewriteDeclarationTypeReferences(text string) string {
 	return strings.ReplaceAll(text, `types="types"`, `types="@rbxts/types"`)
+}
+
+// minifyOutputs rewrites every compiled .luau/.lua entry in outputs to its
+// minified form in place (rotor's --minify build flag). A minifier diagnostic
+// on rotor-generated Luau is an internal error — the compiler emits Luau the
+// minifier's parser handles — so it fails the build loudly rather than writing
+// truncated output.
+func minifyOutputs(outputs map[string]string) error {
+	for rel, text := range outputs {
+		lower := strings.ToLower(rel)
+		if !strings.HasSuffix(lower, ".luau") && !strings.HasSuffix(lower, ".lua") {
+			continue
+		}
+		minified, diags := cst.Minify(text)
+		if len(diags) != 0 {
+			return fmt.Errorf("compile: --minify: internal error minifying %s: %s", rel, diags[0].Message)
+		}
+		outputs[rel] = minified
+	}
+	return nil
 }
 
 // assertLocalOutputPath rejects project-relative output paths that are

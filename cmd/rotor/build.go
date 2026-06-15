@@ -39,6 +39,7 @@ type buildArgs struct {
 	maxErrors   int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
 	bell        bool   // rotor DX extension (watch): ring the bell on a fail<->pass flip
 	clearScreen bool   // rotor DX extension (watch): clear the screen before each rebuild (default true)
+	minify      bool   // rotor DX extension: minify emitted Luau before writing
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -158,6 +159,10 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			// rotor DX extension (not in rbxtsc): a plain boolean flag that
 			// swaps the styled UI for one machine-readable result object.
 			res.jsonOut = true
+			continue
+		case "minify":
+			// rotor DX extension: minify emitted Luau before writing.
+			res.minify = true
 			continue
 		}
 
@@ -287,6 +292,7 @@ func cmdBuild(args []string) int {
 	// Merge order (build.ts L125-130): defaults < tsconfig `rbxts` key <
 	// argv. Absent CLI booleans (nil) never clobber `rbxts` values.
 	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &parsed.opts)
+	opts.minify = parsed.minify // rotor extension: CLI-only, outside the rbxts merge
 
 	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
 	logservice.Verbose = opts.verbose
@@ -361,6 +367,7 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 		NoOptimizedLoops:       !opts.optimizedLoops,
 		LuaExtension:           !opts.luau,
 		WriteOnlyChanged:       opts.writeOnlyChanged,
+		MinifyOutput:           opts.minify,
 	})
 	var diags []compile.DiagnosticInfo
 	if result != nil {

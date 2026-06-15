@@ -468,6 +468,14 @@ type ProjectOptions struct {
 	// skip: unchanged compiled outputs and copied passthrough files are left
 	// untouched on disk.
 	WriteOnlyChanged bool
+
+	// MinifyOutput is a rotor extension (no rbxtsc analog): when set, every
+	// emitted `.luau`/`.lua` source is passed through the Luau minifier
+	// (internal/luau/cst) before it is written, stripping comments + whitespace
+	// and collapsing string indexing to field access. Semantics-preserving; the
+	// default (false) leaves output byte-identical to rbxtsc. Declaration
+	// (`.d.ts`) and include files are never minified.
+	MinifyOutput bool
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —

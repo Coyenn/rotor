@@ -145,6 +145,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --cpuprofile <path>       write a pprof CPU profile of the build (diagnostics)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Diagnostics & watch DX (rotor extensions):")
+	fmt.Fprintln(w, "  --minify                  minify emitted Luau (strip comments/whitespace, t[\"x\"] -> t.x)")
 	fmt.Fprintln(w, "  --max-errors <n>          cap the rendered code frames on failure (default 50; 0 = all)")
 	fmt.Fprintln(w, "  --json                    emit one machine-readable result object instead of styled output")
 	fmt.Fprintln(w, "  --bell                    ring the terminal bell on a watch fail<->pass transition")
