@@ -27,6 +27,7 @@ func writeCleanProject(t *testing.T, outDir string) string {
 	mustWrite(t, filepath.Join(dir, filepath.FromSlash(outDir), "main.luau"), "print('hi')\n")
 	mustWrite(t, filepath.Join(dir, filepath.FromSlash(outDir), "nested", "mod.luau"), "return {}\n")
 	mustWrite(t, filepath.Join(dir, "include", "RuntimeLib.luau"), "return {}\n")
+	mustWrite(t, filepath.Join(dir, compile.RotorTypesFileName), "// generated\n")
 	mustWrite(t, filepath.Join(dir, compile.EnvDeclFileName), "// generated\n")
 	mustWrite(t, filepath.Join(dir, "rotor-asset.d.ts"), "// generated\n")
 	return dir
@@ -64,6 +65,9 @@ func TestCmdCleanRemovesOutputs(t *testing.T) {
 		t.Error("src/nested/mod.ts was removed — clean must never touch source")
 	}
 	// Without --types the companions survive.
+	if !fileExists(filepath.Join(dir, compile.RotorTypesFileName)) {
+		t.Error("rotor.d.ts removed without --types")
+	}
 	if !fileExists(filepath.Join(dir, compile.EnvDeclFileName)) {
 		t.Error("rotor-env.d.ts removed without --types")
 	}
@@ -74,6 +78,9 @@ func TestCmdCleanTypesRemovesCompanions(t *testing.T) {
 
 	if code := cmdClean([]string{dir, "--types"}); code != 0 {
 		t.Fatalf("cmdClean --types exit = %d, want 0", code)
+	}
+	if fileExists(filepath.Join(dir, compile.RotorTypesFileName)) {
+		t.Error("rotor.d.ts still present after --types clean")
 	}
 	if fileExists(filepath.Join(dir, compile.EnvDeclFileName)) {
 		t.Error("rotor-env.d.ts still present after --types clean")
@@ -96,6 +103,7 @@ func TestCmdCleanDryRunRemovesNothing(t *testing.T) {
 	for _, p := range []string{
 		filepath.Join(dir, "out", "main.luau"),
 		filepath.Join(dir, "include", "RuntimeLib.luau"),
+		filepath.Join(dir, compile.RotorTypesFileName),
 		filepath.Join(dir, compile.EnvDeclFileName),
 		filepath.Join(dir, "rotor-asset.d.ts"),
 	} {

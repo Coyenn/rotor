@@ -204,12 +204,9 @@ func runCheckCore(dir string) checkCore {
 		program.GetBindDiagnostics, semanticProjectFilesOnly)
 	diags = compiler.SortAndDeduplicateDiagnostics(diags)
 
-	// rotor extension: refresh the rotor-env.d.ts / rotor-asset.d.ts editor
-	// companions when the project references $env / $asset (silent — check's
-	// stdout is byte-stable).
-	refreshEnvTypesForCheck(dir, parsed.FileNames(), program)
-	refreshAssetTypesForCheck(dir, parsed.FileNames(), program)
-	refreshMacroTypesForCheck(dir, parsed.FileNames(), program)
+	// rotor extension: refresh the consolidated rotor.d.ts editor companion when
+	// the project references any macro (silent — check's stdout is byte-stable).
+	refreshRotorTypesForCheck(dir, parsed.FileNames(), program)
 
 	return checkCore{
 		diags:      diags,
@@ -275,62 +272,26 @@ func severityName(d *ast.Diagnostic) string {
 	return "warning"
 }
 
-// refreshEnvTypesForCheck mirrors the build-side rotor-env.d.ts refresh for
-// `rotor check`: when any non-declaration project file references $env, the
-// on-disk editor companion is (re)written if missing or stale. Failures only
-// warn on stderr — they never affect the check result or its stdout shape.
-func refreshEnvTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
+// refreshRotorTypesForCheck (re)writes the consolidated rotor.d.ts editor
+// companion when any non-declaration project file references one of rotor's
+// macros ($env / $asset / $nameof / $keys / $file / $git / $buildTime). The
+// on-disk file is written only when missing or stale. Failures only warn on
+// stderr — they never affect the check result or its stdout shape.
+func refreshRotorTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
 	for _, name := range fileNames {
 		if strings.HasSuffix(name, ".d.ts") {
 			continue
 		}
 		sf := program.GetSourceFile(name)
-		if sf == nil || !strings.Contains(sf.Text(), "$env") {
+		if sf == nil {
 			continue
 		}
-		if _, err := compile.WriteEnvDeclarations(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.EnvDeclFileName, err)
-		}
-		return
-	}
-}
-
-// refreshAssetTypesForCheck mirrors refreshEnvTypesForCheck for the $asset
-// macro: when any non-declaration project file references $asset, the on-disk
-// rotor-asset.d.ts editor companion is (re)written if missing or stale.
-// Failures only warn on stderr.
-func refreshAssetTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
-	for _, name := range fileNames {
-		if strings.HasSuffix(name, ".d.ts") {
+		text := sf.Text()
+		if !strings.Contains(text, "$env") && !strings.Contains(text, "$asset") && !compile.SourceUsesMacros(text) {
 			continue
 		}
-		sf := program.GetSourceFile(name)
-		if sf == nil || !strings.Contains(sf.Text(), "$asset") {
-			continue
-		}
-		if _, err := compile.WriteAssetDeclarations(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.AssetDeclFileName, err)
-		}
-		return
-	}
-}
-
-// refreshMacroTypesForCheck mirrors refreshEnvTypesForCheck for the shared
-// $nameof / $keys / $file / $git / $buildTime declaration: when any
-// non-declaration project file references one of those macros, the on-disk
-// rotor-macros.d.ts editor companion is (re)written if missing or stale.
-// Failures only warn on stderr.
-func refreshMacroTypesForCheck(dir string, fileNames []string, program *compiler.Program) {
-	for _, name := range fileNames {
-		if strings.HasSuffix(name, ".d.ts") {
-			continue
-		}
-		sf := program.GetSourceFile(name)
-		if sf == nil || !compile.SourceUsesMacros(sf.Text()) {
-			continue
-		}
-		if _, err := compile.WriteMacroDeclarations(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.MacroDeclFileName, err)
+		if _, err := compile.WriteRotorTypes(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.RotorTypesFileName, err)
 		}
 		return
 	}

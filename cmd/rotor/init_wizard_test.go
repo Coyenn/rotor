@@ -56,7 +56,7 @@ func TestWizardFullFlow(t *testing.T) {
 		"package.json", "tsconfig.json", "default.project.json", "biome.json",
 		"rotor.toml", "assets/.gitkeep", "include/.gitkeep",
 		"src/shared/module.ts", "src/server/main.server.ts", "src/client/main.client.ts",
-		"rotor-env.d.ts",
+		"rotor.d.ts",
 	} {
 		if !fileExists(filepath.Join(dir, f)) {
 			t.Errorf("missing scaffolded file %s", f)

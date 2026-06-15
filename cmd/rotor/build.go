@@ -334,14 +334,8 @@ func cmdBuild(args []string) int {
 		return 1
 	}
 
-	if result.WroteEnvTypes {
-		out.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
-	}
-	if result.WroteAssetTypes {
-		out.noteLine(compile.AssetDeclFileName + "  (generated — editor types for $asset)")
-	}
-	if result.WroteMacroTypes {
-		out.noteLine(compile.MacroDeclFileName + "  (generated — editor types for $nameof/$keys/$file/$git/$buildTime)")
+	if result.WroteRotorTypes {
+		out.noteLine(compile.RotorTypesFileName + "  (generated — editor types for rotor macros)")
 	}
 	if result.WroteLockfile {
 		out.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")

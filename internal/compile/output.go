@@ -33,29 +33,18 @@ type BuildResult struct {
 
 	// UsesEnvMacro reports whether any project source file references the
 	// rotor $env macro (cheap text scan over the already-loaded sources).
-	// When true the build also refreshes the on-disk rotor-env.d.ts editor
-	// companion (see envdecl.go).
 	UsesEnvMacro bool
-	// WroteEnvTypes reports whether rotor-env.d.ts was (re)written this pass
-	// (false when it was already current, or when UsesEnvMacro is false).
-	WroteEnvTypes bool
-
 	// UsesAssetMacro reports whether any project source file references the
-	// rotor $asset macro (cheap text scan). When true the build also refreshes
-	// the on-disk rotor-asset.d.ts editor companion (see assetdecl.go).
+	// rotor $asset macro (cheap text scan).
 	UsesAssetMacro bool
-	// WroteAssetTypes reports whether rotor-asset.d.ts was (re)written this
-	// pass (false when current, or when UsesAssetMacro is false).
-	WroteAssetTypes bool
-
 	// UsesMacros reports whether any project source file references one of the
-	// rotor $nameof / $keys / $file / $git / $buildTime macros (cheap text
-	// scan). When true the build also refreshes the on-disk rotor-macros.d.ts
-	// editor companion (see macrodecl.go).
+	// rotor $nameof / $keys / $file / $git / $buildTime macros (cheap text scan).
 	UsesMacros bool
-	// WroteMacroTypes reports whether rotor-macros.d.ts was (re)written this
-	// pass (false when current, or when UsesMacros is false).
-	WroteMacroTypes bool
+
+	// WroteRotorTypes reports whether the consolidated rotor.d.ts editor
+	// companion was (re)written this pass (true when the project references any
+	// macro and the on-disk file was missing or stale; see rotortypes.go).
+	WroteRotorTypes bool
 	// WroteLockfile reports whether rotor-lock.json was persisted this pass
 	// (true only when $asset uploaded a new asset on a cache miss).
 	WroteLockfile bool
@@ -187,31 +176,24 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	// rotor extension: keep the on-disk rotor-env.d.ts editor companion fresh
-	// for projects that reference $env (written only when missing or stale;
-	// see envdecl.go). Editors never see the synthetic in-memory declaration,
-	// so this file is what stops $env from red-squiggling in VS Code.
-	wroteEnvTypes := false
-	if usesEnvMacro {
-		wroteEnvTypes, err = WriteEnvDeclarations(filepath.FromSlash(dir))
+	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
+	// fresh for projects that reference any macro ($env / $asset / $nameof /
+	// $keys / $file / $git / $buildTime). Editors never see the synthetic
+	// in-memory declarations, so this single file is what stops the macros from
+	// red-squiggling in VS Code. Written only when missing or stale (rotortypes.go).
+	wroteRotorTypes := false
+	if usesEnvMacro || usesAssetMacro || usesMacros {
+		wroteRotorTypes, err = WriteRotorTypes(filepath.FromSlash(dir))
 		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", EnvDeclFileName, err)
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", RotorTypesFileName, err)
 		}
 	}
 
-	// rotor extension: same editor-companion refresh for $asset, plus the
-	// lockfile flush. The transformer never writes files/network beyond the
-	// upload inside Resolve; the lockfile PERSIST happens HERE, after a
-	// successful build, so a cache-hit build does zero IO beyond reading the
-	// lockfile (deterministic/parity-safe) and only a genuine upload-on-miss
-	// rewrites rotor-lock.json atomically.
-	wroteAssetTypes := false
-	if usesAssetMacro {
-		wroteAssetTypes, err = WriteAssetDeclarations(filepath.FromSlash(dir))
-		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", AssetDeclFileName, err)
-		}
-	}
+	// rotor extension: the $asset lockfile flush. The transformer never writes
+	// files/network beyond the upload inside Resolve; the lockfile PERSIST
+	// happens HERE, after a successful build, so a cache-hit build does zero IO
+	// beyond reading the lockfile (deterministic/parity-safe) and only a genuine
+	// upload-on-miss rewrites rotor-lock.json atomically.
 	wroteLockfile := false
 	if pctx.assets != nil && pctx.assets.Dirty() {
 		if err := pctx.assets.Lockfile().Save(filepath.FromSlash(dir)); err != nil {
@@ -220,26 +202,14 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		wroteLockfile = true
 	}
 
-	// rotor extension: same editor-companion refresh for the shared
-	// $nameof / $keys / $file / $git / $buildTime declaration (macrodecl.go).
-	wroteMacroTypes := false
-	if usesMacros {
-		wroteMacroTypes, err = WriteMacroDeclarations(filepath.FromSlash(dir))
-		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", MacroDeclFileName, err)
-		}
-	}
-
 	return &BuildResult{
 		Outputs:         outputs,
 		EmittedFiles:    emittedFiles,
 		OutputDir:       pathTranslator.OutDir,
 		UsesEnvMacro:    usesEnvMacro,
-		WroteEnvTypes:   wroteEnvTypes,
 		UsesAssetMacro:  usesAssetMacro,
-		WroteAssetTypes: wroteAssetTypes,
 		UsesMacros:      usesMacros,
-		WroteMacroTypes: wroteMacroTypes,
+		WroteRotorTypes: wroteRotorTypes,
 		WroteLockfile:   wroteLockfile,
 	}, nil, nil
 }

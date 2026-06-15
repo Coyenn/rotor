@@ -12,10 +12,10 @@ import (
 
 // cmdClean removes a project's build outputs — the tsconfig outDir and the
 // runtime-library include folder — and, with --types, the generated editor
-// type companions in the project root (rotor-env.d.ts, rotor-asset.d.ts,
-// rotor-macros.d.ts, and rotor-config.d.ts when present). It never touches
-// source: only the resolved
-// output/include directories and the named generated files are removed.
+// type companion in the project root (rotor.d.ts, plus the legacy
+// rotor-env.d.ts / rotor-asset.d.ts / rotor-macros.d.ts / rotor-config.d.ts
+// when present). It never touches source: only the resolved output/include
+// directories and the named generated files are removed.
 //
 // Targets are resolved exactly the way `rotor build` resolves them: the
 // tsconfig is found with findTsConfigPath, the outDir read from that config
@@ -77,11 +77,10 @@ func cmdClean(args []string) int {
 		targets = append(targets, includeDir)
 	}
 	if types {
-		// Generated editor companions in the project root. Named literally
-		// rather than via internal/config so clean stays decoupled from the
-		// config package's filename churn; rotor-config.d.ts is legacy and
+		// Generated editor companions in the project root: the consolidated
+		// rotor.d.ts plus the legacy per-macro names (and rotor-config.d.ts),
 		// removed only when present.
-		for _, name := range []string{compile.EnvDeclFileName, compile.AssetDeclFileName, compile.MacroDeclFileName, "rotor-config.d.ts"} {
+		for _, name := range []string{compile.RotorTypesFileName, compile.EnvDeclFileName, compile.AssetDeclFileName, compile.MacroDeclFileName, "rotor-config.d.ts"} {
 			targets = append(targets, filepath.Join(dir, name))
 		}
 	}

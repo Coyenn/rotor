@@ -122,8 +122,10 @@ func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
 		}
 		// rotor's own generated companions are refreshed by the build itself;
 		// watching them would turn the first auto-write into a spurious
-		// rebuild (and a user edit is overwritten on the next pass anyway).
-		if strings.EqualFold(name, compile.EnvDeclFileName) ||
+		// rebuild (and a user edit is overwritten on the next pass anyway). The
+		// legacy per-macro names are still ignored for upgraded projects.
+		if strings.EqualFold(name, compile.RotorTypesFileName) ||
+			strings.EqualFold(name, compile.EnvDeclFileName) ||
 			strings.EqualFold(name, compile.AssetDeclFileName) ||
 			strings.EqualFold(name, compile.MacroDeclFileName) {
 			continue
@@ -380,14 +382,8 @@ func reportBuildPass(u *ui, result *compile.BuildResult, diags []compile.Diagnos
 		newUI(os.Stderr).buildFailure(err.Error(), diags, stats.maxErrors)
 	} else if result != nil {
 		stats.lastErrCount = 0
-		if result.WroteEnvTypes {
-			u.noteLine(compile.EnvDeclFileName + "  (generated — editor types for $env)")
-		}
-		if result.WroteAssetTypes {
-			u.noteLine(compile.AssetDeclFileName + "  (generated — editor types for $asset)")
-		}
-		if result.WroteMacroTypes {
-			u.noteLine(compile.MacroDeclFileName + "  (generated — editor types for $nameof/$keys/$file/$git/$buildTime)")
+		if result.WroteRotorTypes {
+			u.noteLine(compile.RotorTypesFileName + "  (generated — editor types for rotor macros)")
 		}
 		if result.WroteLockfile {
 			u.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")

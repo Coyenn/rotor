@@ -120,13 +120,13 @@ func TestCmdInitGame(t *testing.T) {
 		t.Errorf("rotor.toml should start with the hosted #:schema directive (%q):\n%s", config.SchemaDirective, toml)
 	}
 
-	// rotor-env.d.ts gives editors the $env macro types; the tsconfig include
-	// must list it so tsserver actually picks it up.
-	if got := mustReadFile(t, filepath.Join(dir, compile.EnvDeclFileName)); got != compile.EnvDeclFileText {
-		t.Errorf("%s content differs from compile.EnvDeclFileText", compile.EnvDeclFileName)
+	// rotor.d.ts gives editors types for ALL of rotor's macros; the tsconfig
+	// include must list it so tsserver actually picks it up.
+	if got := mustReadFile(t, filepath.Join(dir, compile.RotorTypesFileName)); got != compile.RotorTypesFileText {
+		t.Errorf("%s content differs from compile.RotorTypesFileText", compile.RotorTypesFileName)
 	}
-	if !strings.Contains(tsconfig, `"include": ["src", "rotor-env.d.ts"]`) {
-		t.Error(`tsconfig include should list rotor-env.d.ts alongside src`)
+	if !strings.Contains(tsconfig, `"include": ["src", "rotor.d.ts"]`) {
+		t.Error(`tsconfig include should list rotor.d.ts alongside src`)
 	}
 }
 
@@ -168,7 +168,7 @@ func TestAdoptFilesAndWrite(t *testing.T) {
 	dir := t.TempDir()
 	// An existing project plus a pre-existing env decl we must NOT clobber.
 	must(t, os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(`{"compilerOptions":{}}`), 0o644))
-	must(t, os.WriteFile(filepath.Join(dir, compile.EnvDeclFileName), []byte("// mine\n"), 0o644))
+	must(t, os.WriteFile(filepath.Join(dir, compile.RotorTypesFileName), []byte("// mine\n"), 0o644))
 
 	var out bytes.Buffer
 	if code := writeAdoptFiles(&out, dir, "game"); code != 0 {
@@ -180,9 +180,9 @@ func TestAdoptFilesAndWrite(t *testing.T) {
 	if fileExists(filepath.Join(dir, config.SchemaFileName)) {
 		t.Error("adopt mode should not write a per-project rotor.schema.json (the schema is hosted)")
 	}
-	// The env decl must be kept verbatim.
-	if got, _ := os.ReadFile(filepath.Join(dir, compile.EnvDeclFileName)); string(got) != "// mine\n" {
-		t.Errorf("env decl clobbered: %q", got)
+	// The existing rotor.d.ts must be kept verbatim.
+	if got, _ := os.ReadFile(filepath.Join(dir, compile.RotorTypesFileName)); string(got) != "// mine\n" {
+		t.Errorf("rotor.d.ts clobbered: %q", got)
 	}
 	if !strings.Contains(out.String(), "exists, kept") {
 		t.Errorf("expected a kept-file note:\n%s", out.String())
@@ -256,7 +256,7 @@ func TestCmdInitPackageTemplate(t *testing.T) {
 	if code := cmdInit([]string{dir, "--template=package"}); code != 0 {
 		t.Fatalf("cmdInit exit code = %d", code)
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "default.project.json", "src/init.ts", "rotor-env.d.ts"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "default.project.json", "src/init.ts", "rotor.d.ts"} {
 		if !fileExists(filepath.Join(dir, f)) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
@@ -279,7 +279,7 @@ func TestCmdInitPlainTemplate(t *testing.T) {
 			t.Errorf("missing scaffolded file %s", f)
 		}
 	}
-	for _, f := range []string{"package.json", "tsconfig.json", "rotor.toml", "rotor.schema.json", "rotor-env.d.ts"} {
+	for _, f := range []string{"package.json", "tsconfig.json", "rotor.toml", "rotor.schema.json", "rotor.d.ts"} {
 		if fileExists(filepath.Join(dir, f)) {
 			t.Errorf("plain template should not write %s", f)
 		}

@@ -13,9 +13,9 @@ const (
 	// ModeModule (default) generates the assets.luau accessor module plus its
 	// assets.d.ts declaration from the lockfile — the 1.x behaviour.
 	ModeModule Mode = "module"
-	// ModeMacro maintains the lockfile and writes the rotor-asset.d.ts editor
-	// companion (no assets.luau); the $asset transformer is the consumption
-	// path, with build-time auto-upload filling any gaps.
+	// ModeMacro maintains the lockfile and writes the consolidated rotor.d.ts
+	// editor companion (no assets.luau); the $asset transformer is the
+	// consumption path, with build-time auto-upload filling any gaps.
 	ModeMacro Mode = "macro"
 )
 
@@ -35,10 +35,10 @@ func ParseMode(raw string) Mode {
 
 // MacroCompanion names the on-disk editor companion written in macro mode and
 // its content. The single source of truth for the declaration lives in
-// internal/compile (compile.AssetDeclFileName / AssetDeclFileText); the caller
+// internal/compile (compile.RotorTypesFileName / RotorTypesFileText); the caller
 // passes them through so internal/assets need not depend on internal/compile.
 type MacroCompanion struct {
-	FileName string // e.g. "rotor-asset.d.ts"
+	FileName string // e.g. "rotor.d.ts"
 	Text     string // the full file content (with generated-file header)
 }
 
@@ -48,8 +48,8 @@ type MacroCompanion struct {
 //   - ModeModule: regenerate assets.luau + assets.d.ts from the lockfile at the
 //     configured output paths (unchanged 1.x behaviour). Empty paths are
 //     skipped.
-//   - ModeMacro: write the rotor-asset.d.ts editor companion (atomically, only
-//     when missing or stale) and write NO assets.luau, even if output paths are
+//   - ModeMacro: write the rotor.d.ts editor companion (atomically, only when
+//     missing or stale) and write NO assets.luau, even if output paths are
 //     configured.
 //
 // Both modes share the same lockfile/scan/hash/upload pipeline; only this final

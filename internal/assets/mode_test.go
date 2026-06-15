@@ -16,22 +16,22 @@ func outPaths(luau, types string) struct {
 	}{Luau: luau, Types: types}
 }
 
-// Macro mode: EmitForMode writes the rotor-asset.d.ts companion and does NOT
+// Macro mode: EmitForMode writes the rotor.d.ts companion and does NOT
 // write assets.luau, even when output paths are configured.
 func TestEmitForModeMacroWritesCompanionNotLuau(t *testing.T) {
 	dir := t.TempDir()
 	lock := NewLockfile()
 	lock.Assets["assets/logo.png"] = LockEntry{Hash: "sha256:x", AssetID: 123}
 
-	companion := MacroCompanion{FileName: "rotor-asset.d.ts", Text: "// generated\ndeclare function $asset(path: string): string;\n"}
+	companion := MacroCompanion{FileName: "rotor.d.ts", Text: "// generated\ndeclare function $asset(path: string): string;\n"}
 	written, err := EmitForMode(dir, ModeMacro, outPaths("src/shared/assets.luau", "src/shared/assets.d.ts"), companion, lock)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(written) != 1 || written[0] != "rotor-asset.d.ts" {
-		t.Fatalf("written = %v, want [rotor-asset.d.ts]", written)
+	if len(written) != 1 || written[0] != "rotor.d.ts" {
+		t.Fatalf("written = %v, want [rotor.d.ts]", written)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "rotor-asset.d.ts"))
+	data, err := os.ReadFile(filepath.Join(dir, "rotor.d.ts"))
 	if err != nil {
 		t.Fatalf("companion not written: %v", err)
 	}
@@ -54,13 +54,13 @@ func TestEmitForModeMacroWritesCompanionNotLuau(t *testing.T) {
 }
 
 // Module mode (default): EmitForMode regenerates assets.luau + assets.d.ts and
-// writes no rotor-asset.d.ts — unchanged 1.x behaviour.
+// writes no rotor.d.ts — unchanged 1.x behaviour.
 func TestEmitForModeModuleWritesLuauAndTypes(t *testing.T) {
 	dir := t.TempDir()
 	lock := NewLockfile()
 	lock.Assets["assets/logo.png"] = LockEntry{Hash: "sha256:x", AssetID: 123}
 
-	companion := MacroCompanion{FileName: "rotor-asset.d.ts", Text: "// generated\n"}
+	companion := MacroCompanion{FileName: "rotor.d.ts", Text: "// generated\n"}
 	written, err := EmitForMode(dir, ModeModule, outPaths("assets.luau", "assets.d.ts"), companion, lock)
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +74,9 @@ func TestEmitForModeModuleWritesLuauAndTypes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "assets.d.ts")); err != nil {
 		t.Errorf("module mode must write assets.d.ts: %v", err)
 	}
-	// No rotor-asset.d.ts companion in module mode.
-	if _, err := os.Stat(filepath.Join(dir, "rotor-asset.d.ts")); err == nil {
-		t.Error("module mode must not write rotor-asset.d.ts")
+	// No rotor.d.ts companion in module mode.
+	if _, err := os.Stat(filepath.Join(dir, "rotor.d.ts")); err == nil {
+		t.Error("module mode must not write rotor.d.ts")
 	}
 }
 

@@ -166,7 +166,7 @@ func declarationEnabled(data []byte) bool {
 func adoptFiles() []initFile {
 	return []initFile{
 		{config.ConfigFileName, rotorTOML(nil, nil)},
-		{compile.EnvDeclFileName, compile.EnvDeclFileText},
+		{compile.RotorTypesFileName, compile.RotorTypesFileText},
 	}
 }
 
@@ -429,10 +429,10 @@ print(makeHello("main.client.ts"));
 	if opts.assets != nil {
 		files = append(files, initFile{opts.assets.dir + "/.gitkeep", ""})
 	}
-	// Editor types for rotor's macros; the scaffolded tsconfig lists the file
-	// under "include" so tsserver picks it up (the compiler skips its own
-	// synthetic copy when this on-disk one is part of the program).
-	files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
+	// Editor types for all of rotor's macros; the scaffolded tsconfig lists the
+	// file under "include" so tsserver picks it up (the compiler skips its own
+	// synthetic copies when this on-disk one is part of the program).
+	files = append(files, initFile{compile.RotorTypesFileName, compile.RotorTypesFileText})
 	return files
 }
 
@@ -685,7 +685,7 @@ func tsconfigJSON(declaration bool, jsx string) string {
 %s		"rootDir": "src",
 		"outDir": "out"
 	},
-	"include": ["src", "rotor-env.d.ts"]
+	"include": ["src", "rotor.d.ts"]
 }
 `, jsxBlock, declarationLine)
 }
