@@ -114,7 +114,6 @@ func assetSync(dir string, dryRun bool) int {
 	for _, w := range cfg.Warnings {
 		errUI.warn("rotor asset: " + w)
 	}
-	refreshConfigSchema(u, dir)
 	if cfg.Assets == nil || len(cfg.Assets.Paths) == 0 {
 		errUI.failLine("rotor asset: rotor.toml has no [assets] section (or assets.paths is empty)")
 		return 1
@@ -228,20 +227,6 @@ func assetSync(dir string, dryRun bool) int {
 		joinDot(s, []string{fmt.Sprintf("%d created", res.Created), fmt.Sprintf("%d updated", res.Updated), elapsed}))
 	fmt.Println()
 	return 0
-}
-
-// refreshConfigSchema keeps rotor.schema.json current whenever a command has
-// just loaded rotor.toml successfully. Best-effort: a failed write only warns,
-// and an up-to-date file is untouched (and unreported).
-func refreshConfigSchema(u *ui, dir string) {
-	wrote, err := config.RefreshSchema(dir)
-	if err != nil {
-		newUI(os.Stderr).warn("could not refresh " + config.SchemaFileName + ": " + err.Error())
-		return
-	}
-	if wrote {
-		u.noteLine(config.SchemaFileName + "  (schema refreshed)")
-	}
 }
 
 // assetWriteOutputs performs the mode-aware output step of `rotor asset sync`,

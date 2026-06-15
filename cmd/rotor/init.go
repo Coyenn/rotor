@@ -13,12 +13,6 @@ import (
 	"rotor/internal/config"
 )
 
-// configSchema is the JSON Schema written to rotor.schema.json so editors
-// (taplo / Even Better TOML) validate and complete rotor.toml. Kept as a var
-// (rather than using the constant inline) so the scaffold skips the file
-// gracefully if the schema is ever empty.
-var configSchema = config.Schema
-
 // cmdInit scaffolds a new rotor project. The game template (default) is a
 // full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
 // starter src/); package is an rbxts model/package project; plain is a
@@ -167,17 +161,13 @@ func declarationEnabled(data []byte) bool {
 }
 
 // adoptFiles returns just the rotor config files for adopt mode: rotor.toml
-// (the commented skeleton), the JSON schema companion, and the $env type
-// declaration. Source/project files are never part of adopt mode.
+// (the commented skeleton) and the editor type declaration for rotor's macros.
+// Source/project files are never part of adopt mode.
 func adoptFiles() []initFile {
-	files := []initFile{
+	return []initFile{
 		{config.ConfigFileName, rotorTOML(nil, nil)},
+		{compile.EnvDeclFileName, compile.EnvDeclFileText},
 	}
-	if configSchema != "" {
-		files = append(files, initFile{config.SchemaFileName, configSchema})
-	}
-	files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
-	return files
 }
 
 // writeAdoptFiles writes adoptFiles() into an existing project, never
@@ -439,10 +429,7 @@ print(makeHello("main.client.ts"));
 	if opts.assets != nil {
 		files = append(files, initFile{opts.assets.dir + "/.gitkeep", ""})
 	}
-	if configSchema != "" {
-		files = append(files, initFile{config.SchemaFileName, configSchema})
-	}
-	// Editor types for the $env macro; the scaffolded tsconfig lists the file
+	// Editor types for rotor's macros; the scaffolded tsconfig lists the file
 	// under "include" so tsserver picks it up (the compiler skips its own
 	// synthetic copy when this on-disk one is part of the program).
 	files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})

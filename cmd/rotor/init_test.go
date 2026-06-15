@@ -109,15 +109,15 @@ func TestCmdInitGame(t *testing.T) {
 		t.Errorf("compilerOptions outDir/rootDir = %v/%v, want out/src", opts["outDir"], opts["rootDir"])
 	}
 
-	// rotor.schema.json is written whenever the schema is wired in.
-	hasSchema := fileExists(filepath.Join(dir, "rotor.schema.json"))
-	if want := configSchema != ""; hasSchema != want {
-		t.Errorf("rotor.schema.json present = %v, want %v", hasSchema, want)
+	// The schema is hosted (served from a raw-GitHub URL), so init must NOT
+	// write a per-project rotor.schema.json.
+	if fileExists(filepath.Join(dir, "rotor.schema.json")) {
+		t.Error("init should not write a per-project rotor.schema.json (the schema is hosted)")
 	}
-	// rotor.toml's first line carries the taplo #:schema directive.
+	// rotor.toml's first line carries the taplo #:schema directive — the hosted URL.
 	toml := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
-	if !strings.HasPrefix(toml, "#:schema ./rotor.schema.json") {
-		t.Errorf("rotor.toml should start with the #:schema directive:\n%s", toml)
+	if !strings.HasPrefix(toml, config.SchemaDirective) || !strings.HasPrefix(toml, "#:schema https://") {
+		t.Errorf("rotor.toml should start with the hosted #:schema directive (%q):\n%s", config.SchemaDirective, toml)
 	}
 
 	// rotor-env.d.ts gives editors the $env macro types; the tsconfig include
@@ -177,8 +177,8 @@ func TestAdoptFilesAndWrite(t *testing.T) {
 	if !fileExists(filepath.Join(dir, config.ConfigFileName)) {
 		t.Error("rotor.toml not created")
 	}
-	if configSchema != "" && !fileExists(filepath.Join(dir, config.SchemaFileName)) {
-		t.Error("rotor.schema.json not created")
+	if fileExists(filepath.Join(dir, config.SchemaFileName)) {
+		t.Error("adopt mode should not write a per-project rotor.schema.json (the schema is hosted)")
 	}
 	// The env decl must be kept verbatim.
 	if got, _ := os.ReadFile(filepath.Join(dir, compile.EnvDeclFileName)); string(got) != "// mine\n" {

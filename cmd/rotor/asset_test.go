@@ -74,12 +74,6 @@ id = 1
 			t.Fatalf("dry run wrote %s", rel)
 		}
 	}
-
-	// ... but a successful config load always refreshes the config's editor
-	// schema (rotor.schema.json) — that is metadata, not an asset output.
-	if !fileExists(filepath.Join(dir, "rotor.schema.json")) {
-		t.Error("asset sync did not auto-refresh rotor.schema.json after loading the config")
-	}
 }
 
 func TestCmdAssetList(t *testing.T) {

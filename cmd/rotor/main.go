@@ -57,6 +57,8 @@ func run(args []string) int {
 		return cmdInit(args[1:])
 	case "migrate":
 		return cmdMigrate(args[1:])
+	case "schema":
+		return cmdSchema(args[1:])
 	case "sourcemap":
 		return cmdSourcemap(args[1:])
 	case "asset":
@@ -104,9 +106,12 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  rotor init [dir] [--template game|package|plain]")
 	fmt.Fprintln(w, "                               scaffold a new project (rbxts game by default; package")
 	fmt.Fprintln(w, "                               library, or plain Luau) with tsconfig, Rojo project,")
-	fmt.Fprintln(w, "                               rotor.toml + schema, and starter src (interactive in a tty)")
+	fmt.Fprintln(w, "                               rotor.toml, rotor.d.ts, and starter src (interactive in a tty)")
 	fmt.Fprintln(w, "  rotor migrate [path] [--force]")
-	fmt.Fprintln(w, "                               convert a legacy rotor.config.ts to rotor.toml + schema")
+	fmt.Fprintln(w, "                               convert a legacy rotor.config.ts to rotor.toml")
+	fmt.Fprintln(w, "  rotor schema                 print the rotor.toml JSON Schema to stdout (editors")
+	fmt.Fprintln(w, "                               resolve it from the #:schema URL; redirect to a file")
+	fmt.Fprintln(w, "                               for a local/offline copy)")
 	fmt.Fprintln(w, "  rotor clean [path] [--types] [--dry-run]")
 	fmt.Fprintln(w, "                               remove build outputs (outDir, include); --types also")
 	fmt.Fprintln(w, "                               removes generated rotor-env.d.ts / rotor-asset.d.ts")

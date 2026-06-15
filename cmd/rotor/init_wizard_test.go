@@ -54,7 +54,7 @@ func TestWizardFullFlow(t *testing.T) {
 
 	for _, f := range []string{
 		"package.json", "tsconfig.json", "default.project.json", "biome.json",
-		"rotor.toml", "rotor.schema.json", "assets/.gitkeep", "include/.gitkeep",
+		"rotor.toml", "assets/.gitkeep", "include/.gitkeep",
 		"src/shared/module.ts", "src/server/main.server.ts", "src/client/main.client.ts",
 		"rotor-env.d.ts",
 	} {
@@ -104,7 +104,7 @@ func TestWizardFullFlow(t *testing.T) {
 	// rotor.toml: real (uncommented) assets + deploy sections.
 	cfg := mustReadFile(t, filepath.Join(dir, "rotor.toml"))
 	for _, want := range []string{
-		"#:schema ./rotor.schema.json",
+		"#:schema https://raw.githubusercontent.com/uproot/rotor",
 		"[assets]",
 		`paths = ["assets/**/*.png", "assets/**/*.ogg"]`,
 		"[assets.creator]",

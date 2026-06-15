@@ -63,18 +63,13 @@ func TestMigrateRoundTrip(t *testing.T) {
 		t.Fatalf("migrate exit %d\nstdout:\n%s\nstderr:\n%s", code, out, errOut)
 	}
 
-	// rotor.toml written with the #:schema directive on the first line.
+	// rotor.toml written with the hosted #:schema directive on the first line.
 	tomlData, err := os.ReadFile(filepath.Join(dir, "rotor.toml"))
 	if err != nil {
 		t.Fatalf("rotor.toml not written: %v", err)
 	}
-	if !strings.HasPrefix(string(tomlData), "#:schema ./rotor.schema.json") {
-		t.Errorf("rotor.toml missing #:schema directive:\n%s", tomlData)
-	}
-
-	// rotor.schema.json written.
-	if !fileExists(filepath.Join(dir, "rotor.schema.json")) {
-		t.Error("rotor.schema.json not written")
+	if !strings.HasPrefix(string(tomlData), "#:schema https://") {
+		t.Errorf("rotor.toml missing hosted #:schema directive:\n%s", tomlData)
 	}
 
 	// The legacy file is renamed to .bak (and no longer present).

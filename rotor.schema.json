@@ -1,33 +1,4 @@
-package config
-
-// SchemaFileName is the JSON Schema file name. A single copy is committed at the
-// rotor repository root and served from SchemaURL; projects no longer carry a
-// per-project one.
-const SchemaFileName = "rotor.schema.json"
-
-// SchemaURL is the canonical, hosted location of the rotor.toml JSON Schema,
-// served from the rotor repository via raw GitHub. rotor.toml's `#:schema`
-// directive points here so taplo / Even Better TOML fetch the schema directly —
-// there is no per-project rotor.schema.json to generate, refresh, or check in.
-// `rotor schema` prints this same schema for publishing the committed file or
-// keeping a local/offline copy.
-const SchemaURL = "https://raw.githubusercontent.com/uproot/rotor/master/" + SchemaFileName
-
-// SchemaDirective is the taplo schema comment prepended to rotor.toml so editors
-// resolve the hosted schema.
-const SchemaDirective = "#:schema " + SchemaURL
-
-// Schema is the hand-maintained JSON Schema (draft-07) describing rotor.toml.
-// It mirrors the Config structs in config.go 1:1 — the TOML analogue of the
-// old TypeScript TypeDeclarations — including every property, the enums
-// (creator.type, playability, socials.type, place versionType, assets.mode)
-// and human descriptions. It is the single source of truth: the committed
-// rotor.schema.json (served from SchemaURL) is generated from it by
-// `rotor schema`, and a test asserts the two never drift.
-//
-// It must itself be valid JSON; a test asserts json.Unmarshal succeeds and the
-// top-level assets + deploy properties exist.
-const Schema = `{
+{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/uproot/rotor/master/rotor.schema.json",
   "title": "rotor.toml",
@@ -259,4 +230,3 @@ const Schema = `{
     }
   }
 }
-`
