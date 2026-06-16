@@ -191,6 +191,43 @@ func TestPackLuauRunsUnderLune(t *testing.T) {
 	}
 }
 
+// TestPackVirtualGameResolvesUnderLune proves a DataModel-rooted bundle resolves an
+// absolute `game:GetService(...)`/`WaitForChild` path against the reconstructed tree, so
+// it stays self-contained even with no host game (lune has no `game` global).
+func TestPackVirtualGameResolvesUnderLune(t *testing.T) {
+	lune, err := exec.LookPath("lune")
+	if err != nil {
+		t.Skip("lune not on PATH")
+	}
+	greet := &Instance{ClassName: "ModuleScript", Name: "greet", Source: `return "hi world"`}
+	lib := &Instance{ClassName: "Folder", Name: "Lib", Children: []*Instance{greet}}
+	rs := &Instance{ClassName: "ReplicatedStorage", Name: "ReplicatedStorage", Children: []*Instance{lib}}
+	main := &Instance{ClassName: "ModuleScript", Name: "main",
+		Source: `return require(game:GetService("ReplicatedStorage"):WaitForChild("Lib"):WaitForChild("greet"))`}
+	root := &Instance{ClassName: "DataModel", Name: "game", Children: []*Instance{rs, main}}
+
+	out, err := EmitLuau([]*Instance{root}, "game.main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "local game = i") {
+		t.Fatalf("a DataModel bundle should shadow `game` with the virtual root:\n%s", out)
+	}
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bundle.luau"), out)
+	writeFile(t, filepath.Join(dir, "run.luau"), "print(require(\"./bundle\"))\n")
+	cmd := exec.Command(lune, "run", "run.luau")
+	cmd.Dir = dir
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lune run failed: %v\n%s\n--- bundle ---\n%s", err, got, out)
+	}
+	if !strings.Contains(string(got), "hi world") {
+		t.Fatalf("got %q, want \"hi world\"\n--- bundle ---\n%s", got, out)
+	}
+}
+
 func mkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {
