@@ -13,12 +13,6 @@ import (
 	"rotor/internal/config"
 )
 
-// configSchema is the JSON Schema written to rotor.schema.json so editors
-// (taplo / Even Better TOML) validate and complete rotor.toml. Kept as a var
-// (rather than using the constant inline) so the scaffold skips the file
-// gracefully if the schema is ever empty.
-var configSchema = config.Schema
-
 // cmdInit scaffolds a new rotor project. The game template (default) is a
 // full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
 // starter src/); package is an rbxts model/package project; plain is a
@@ -31,6 +25,7 @@ func cmdInit(args []string) int {
 	dir := ""
 	template := ""
 	yes := false
+	configOnly := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -39,10 +34,13 @@ func cmdInit(args []string) int {
 			fmt.Println("Init flags:")
 			fmt.Println("  -t, --template game|package|plain   scaffold non-interactively from a template")
 			fmt.Println("  -y, --yes                           accept all defaults, no prompts")
+			fmt.Println("  --config                            add only rotor config to an existing project")
 			fmt.Println("  (run in a terminal with neither flag, rotor init starts an interactive wizard)")
 			return 0
 		case a == "-y" || a == "--yes":
 			yes = true
+		case a == "--config":
+			configOnly = true
 		case a == "-t" || a == "--template":
 			if i+1 >= len(args) {
 				fmt.Fprintf(os.Stderr, "rotor init: %s requires a template name (game|package|plain)\n", a)
@@ -86,14 +84,26 @@ func cmdInit(args []string) int {
 	}
 	name := filepath.Base(abs)
 
-	// Refuse to scaffold over an existing project.
-	for _, marker := range []string{"package.json", "default.project.json"} {
+	// Three-way decision (replaces the old "refuse existing project" guard):
+	// adopt an existing project (config-only), no-op if already configured, or
+	// fall through to greenfield scaffolding for an empty directory.
+	existing := false
+	for _, marker := range []string{"package.json", "tsconfig.json", "default.project.json"} {
 		if fileExists(filepath.Join(dir, marker)) {
-			fmt.Fprintf(os.Stderr,
-				"rotor init: %s already exists in %s — refusing to scaffold into an existing project\n"+
-					"(pick an empty or new directory, e.g. `rotor init my-game`)\n", marker, abs)
-			return 1
+			existing = true
+			break
 		}
+	}
+	if configOnly || existing {
+		if fileExists(filepath.Join(dir, config.ConfigFileName)) {
+			u := newUI(os.Stdout)
+			u.banner("init  " + name)
+			fmt.Fprintln(u.w)
+			u.okLine("already configured", config.ConfigFileName+" exists")
+			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
+			return 0
+		}
+		return writeAdoptFiles(os.Stdout, dir, detectTemplate(dir))
 	}
 
 	// Wizard gate: a real terminal on both ends and no overriding flags.
@@ -111,6 +121,106 @@ func cmdInit(args []string) int {
 func isTerminal(f *os.File) bool {
 	info, err := f.Stat()
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// detectTemplate guesses which rotor.toml skeleton fits an existing project:
+//   - "plain"   — a default.project.json but no tsconfig.json (Luau-only)
+//   - "package" — tsconfig has "declaration": true (a model/package project)
+//   - "game"    — otherwise (the common rbxts game)
+//
+// It only chooses which commented skeleton to describe; it never reads or
+// writes source files.
+func detectTemplate(dir string) string {
+	tsconfig := filepath.Join(dir, "tsconfig.json")
+	hasTS := fileExists(tsconfig)
+	if !hasTS && fileExists(filepath.Join(dir, "default.project.json")) {
+		return "plain"
+	}
+	if hasTS {
+		if data, err := os.ReadFile(tsconfig); err == nil && declarationEnabled(data) {
+			return "package"
+		}
+	}
+	return "game"
+}
+
+// declarationEnabled reports whether a tsconfig's compilerOptions.declaration is
+// true. tsconfig.json is JSONC; a tolerant line scan avoids pulling in a full
+// JSONC parser for this one boolean (a commented-out "declaration" stays false).
+func declarationEnabled(data []byte) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "//") {
+			continue
+		}
+		if strings.Contains(t, "\"declaration\"") && strings.Contains(t, "true") {
+			return true
+		}
+	}
+	return false
+}
+
+// adoptFiles returns just the rotor config files for adopt mode: rotor.toml
+// (the commented skeleton) and the editor type declaration for rotor's macros.
+// Source/project files are never part of adopt mode.
+func adoptFiles() []initFile {
+	return []initFile{
+		{config.ConfigFileName, rotorTOML(nil, nil)},
+		{compile.RotorTypesFileName, compile.RotorTypesFileText},
+	}
+}
+
+// writeAdoptFiles writes adoptFiles() into an existing project, never
+// overwriting: a pre-existing target is reported as "(exists, kept)". template
+// is the detected skeleton, surfaced to the user as context (the skeleton is
+// shared today, but the detection keeps the message honest and future-proofs
+// per-template config).
+func writeAdoptFiles(out io.Writer, dir, template string) int {
+	u := newUI(out)
+	u.banner("init  " + filepath.Base(mustAbs(dir)) + "  (adopt)")
+	fmt.Fprintf(out, "  %s %s\n\n", u.s.Muted(u.s.Glyphs().Dot), u.s.Muted("detected an existing "+template+" project"))
+	wrote := 0
+	for _, f := range adoptFiles() {
+		path := filepath.Join(dir, filepath.FromSlash(f.path))
+		if fileExists(path) {
+			fmt.Fprintf(out, "  %s %s %s\n", u.s.Muted(u.s.Glyphs().Dot), f.path, u.s.Muted("(exists, kept)"))
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+			return 1
+		}
+		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
+			return 1
+		}
+		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
+		wrote++
+	}
+	printAdoptNextSteps(u, wrote)
+	return 0
+}
+
+// mustAbs resolves dir to an absolute path, falling back to dir on error (only
+// used for the display name in the banner).
+func mustAbs(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return abs
+}
+
+func printAdoptNextSteps(u *ui, wrote int) {
+	fmt.Fprintln(u.w)
+	if wrote == 0 {
+		u.okLine("already had rotor config", "nothing to add")
+	} else {
+		u.okLine("added rotor config to an existing project", plural(wrote, "file"))
+	}
+	fmt.Fprintln(u.w)
+	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
+	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
 }
 
 // initOptions is everything the scaffold needs to render a project. The
@@ -319,13 +429,10 @@ print(makeHello("main.client.ts"));
 	if opts.assets != nil {
 		files = append(files, initFile{opts.assets.dir + "/.gitkeep", ""})
 	}
-	if configSchema != "" {
-		files = append(files, initFile{config.SchemaFileName, configSchema})
-	}
-	// Editor types for the $env macro; the scaffolded tsconfig lists the file
-	// under "include" so tsserver picks it up (the compiler skips its own
-	// synthetic copy when this on-disk one is part of the program).
-	files = append(files, initFile{compile.EnvDeclFileName, compile.EnvDeclFileText})
+	// Editor types for all of rotor's macros; the scaffolded tsconfig lists the
+	// file under "include" so tsserver picks it up (the compiler skips its own
+	// synthetic copies when this on-disk one is part of the program).
+	files = append(files, initFile{compile.RotorTypesFileName, compile.RotorTypesFileText})
 	return files
 }
 
@@ -578,7 +685,7 @@ func tsconfigJSON(declaration bool, jsx string) string {
 %s		"rootDir": "src",
 		"outDir": "out"
 	},
-	"include": ["src", "rotor-env.d.ts"]
+	"include": ["src", "rotor.d.ts"]
 }
 `, jsxBlock, declarationLine)
 }

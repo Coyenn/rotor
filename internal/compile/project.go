@@ -468,6 +468,14 @@ type ProjectOptions struct {
 	// skip: unchanged compiled outputs and copied passthrough files are left
 	// untouched on disk.
 	WriteOnlyChanged bool
+
+	// MinifyOutput is a rotor extension (no rbxtsc analog): when set, every
+	// emitted `.luau`/`.lua` source is passed through the Luau minifier
+	// (internal/luau/cst) before it is written, stripping comments + whitespace
+	// and collapsing string indexing to field access. Semantics-preserving; the
+	// default (false) leaves output byte-identical to rbxtsc. Declaration
+	// (`.d.ts`) and include files are never minified.
+	MinifyOutput bool
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -497,18 +505,19 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 	if err := maybeCopyInclude(dir, opts); err != nil {
 		return nil, nil, err
 	}
-	return compileProjectProgram(dir, program, opts)
+	outputs, infos, err := compileProjectProgram(dir, program, opts)
+	return outputs, diagnosticInfoMessages(infos), err
 }
 
-func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []string, error) {
+func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
 	sourceFiles := projectSourceFiles(program)
 	program, sourceFiles, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles, sourceFiles)
 	if err != nil {
-		return nil, diags, err
+		return nil, stringDiagnostics(diags), err
 	}
-	pctx, diags, err := newProjectContext(dir, program, opts)
+	pctx, pctxDiags, err := newProjectContext(dir, program, opts)
 	if err != nil {
-		return nil, diags, err
+		return nil, stringDiagnostics(pctxDiags), err
 	}
 	return compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
 }
@@ -534,7 +543,7 @@ type checkerSourceFileGroup struct {
 type compiledProjectSourceFile struct {
 	relOut string
 	text   string
-	diags  []string
+	diags  []DiagnosticInfo
 	err    error
 }
 
@@ -543,13 +552,13 @@ type precheckedProjectSourceFile struct {
 	commentDiags []string
 }
 
-func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []string, error) {
+func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
 	ctx := context.Background()
 
 	// Program-level option diagnostics fail the compile before any file is
 	// transformed, mirroring CompileFile.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
-		return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -573,14 +582,14 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 
 	for _, precheck := range prechecks {
 		if len(precheck.tsDiags) > 0 {
-			return nil, diagnosticStrings(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+			return nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
 		if len(precheck.commentDiags) > 0 {
-			return nil, precheck.commentDiags, errors.New("compile: comment directive diagnostics")
+			return nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
 		}
 	}
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
-		return nil, diagnosticStrings(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -664,7 +673,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		// MacroManager; fail before transforming anything when
 		// registrations are missing while the types packages are present.
 		if missing := state.Macros().Missing(); len(missing) > 0 {
-			result.diags = missing
+			result.diags = stringDiagnostics(missing)
 			result.err = errors.New("compile: macro registration failure")
 			return
 		}
@@ -676,7 +685,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 
-		text, diags, err := transformAndRender(state)
+		text, diags, err := transformAndRenderDetailed(state)
 		if err != nil {
 			result.err = err
 			return

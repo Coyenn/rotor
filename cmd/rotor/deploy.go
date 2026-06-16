@@ -109,12 +109,6 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	for _, w := range cfg.Warnings {
 		errUI.warn("rotor deploy: " + w)
 	}
-	// The config just loaded — keep its editor schema fresh (best-effort).
-	if wrote, terr := config.RefreshSchema(projectDir); terr != nil {
-		errUI.warn("could not refresh " + config.SchemaFileName + ": " + terr.Error())
-	} else if wrote {
-		u.noteLine(config.SchemaFileName + "  (schema refreshed)")
-	}
 	if errs := cfg.Validate(); len(errs) > 0 {
 		for _, e := range errs {
 			errUI.failLine(fmt.Sprintf("rotor deploy: config: %v", e))

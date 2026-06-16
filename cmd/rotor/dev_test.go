@@ -39,4 +39,3 @@ func TestResolveRojoProject(t *testing.T) {
 		}
 	})
 }
-

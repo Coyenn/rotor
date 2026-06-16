@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,6 +267,70 @@ func TestTreeWatcherIntervalClamps(t *testing.T) {
 	if got := w.interval(); got != watchMaxInterval {
 		t.Errorf("interval for 1s walk = %v, want clamp to %v", got, watchMaxInterval)
 	}
+}
+
+// TestReportBuildPassPersistentErrorBanner proves a failed build leaves the
+// idle line in an error state (✗ + error count) and recovers on the next pass.
+func TestReportBuildPassPersistentErrorBanner(t *testing.T) {
+	var buf bytes.Buffer
+	u := newUI(&buf)
+	stats := &watchStats{}
+
+	// First build fails. (record() runs before reportBuildPass in the loop.)
+	stats.record(50 * time.Millisecond)
+	reportBuildPass(u, nil,
+		[]compile.DiagnosticInfo{{Message: "boom"}},
+		50*time.Millisecond,
+		errors.New("compile: TypeScript diagnostics"), stats)
+	out := buf.String()
+	if !strings.Contains(out, "watching for changes") {
+		t.Errorf("missing idle line:\n%s", out)
+	}
+	if !strings.Contains(out, "error") {
+		t.Errorf("expected error count in idle banner after failure:\n%s", out)
+	}
+	if !stats.lastFailed {
+		t.Error("stats.lastFailed not set after a failed build")
+	}
+
+	// Next build succeeds: error state clears.
+	buf.Reset()
+	stats.record(40 * time.Millisecond)
+	reportBuildPass(u, &compile.BuildResult{}, nil, 40*time.Millisecond, nil, stats)
+	if stats.lastFailed {
+		t.Error("stats.lastFailed should clear after a successful build")
+	}
+	if stats.lastErrCount != 0 {
+		t.Errorf("lastErrCount = %d, want 0 after success", stats.lastErrCount)
+	}
+}
+
+// TestClearForRebuild covers the three branches of the clear-on-rebuild gate.
+func TestClearForRebuild(t *testing.T) {
+	t.Run("clears when enabled and interactive", func(t *testing.T) {
+		t.Setenv("FORCE_COLOR", "1")
+		var buf bytes.Buffer
+		clearForRebuild(&buf, &watchStats{clearScreen: true})
+		if !strings.Contains(buf.String(), "\x1b[2J") {
+			t.Errorf("expected a clear sequence, got %q", buf.String())
+		}
+	})
+	t.Run("--no-clear suppresses", func(t *testing.T) {
+		t.Setenv("FORCE_COLOR", "1")
+		var buf bytes.Buffer
+		clearForRebuild(&buf, &watchStats{clearScreen: false})
+		if buf.Len() != 0 {
+			t.Errorf("expected no output with clearScreen=false, got %q", buf.String())
+		}
+	})
+	t.Run("non-interactive suppresses", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		var buf bytes.Buffer
+		clearForRebuild(&buf, &watchStats{clearScreen: true})
+		if buf.Len() != 0 {
+			t.Errorf("expected no output when color disabled, got %q", buf.String())
+		}
+	})
 }
 
 func TestWatchStatsRecordCapsHistory(t *testing.T) {

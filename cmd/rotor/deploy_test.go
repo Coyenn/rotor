@@ -76,10 +76,6 @@ func TestCmdDeployPlanFreshState(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, out)
 		}
 	}
-	// A successful config load auto-refreshes the config's editor schema.
-	if !fileExists(filepath.Join(dir, "rotor.schema.json")) {
-		t.Error("deploy plan did not auto-refresh rotor.schema.json after loading the config")
-	}
 }
 
 func TestCmdDeployPlanWithFakeState(t *testing.T) {

@@ -57,6 +57,8 @@ func run(args []string) int {
 		return cmdInit(args[1:])
 	case "migrate":
 		return cmdMigrate(args[1:])
+	case "schema":
+		return cmdSchema(args[1:])
 	case "sourcemap":
 		return cmdSourcemap(args[1:])
 	case "asset":
@@ -104,9 +106,12 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  rotor init [dir] [--template game|package|plain]")
 	fmt.Fprintln(w, "                               scaffold a new project (rbxts game by default; package")
 	fmt.Fprintln(w, "                               library, or plain Luau) with tsconfig, Rojo project,")
-	fmt.Fprintln(w, "                               rotor.toml + schema, and starter src (interactive in a tty)")
+	fmt.Fprintln(w, "                               rotor.toml, rotor.d.ts, and starter src (interactive in a tty)")
 	fmt.Fprintln(w, "  rotor migrate [path] [--force]")
-	fmt.Fprintln(w, "                               convert a legacy rotor.config.ts to rotor.toml + schema")
+	fmt.Fprintln(w, "                               convert a legacy rotor.config.ts to rotor.toml")
+	fmt.Fprintln(w, "  rotor schema                 print the rotor.toml JSON Schema to stdout (editors")
+	fmt.Fprintln(w, "                               resolve it from the #:schema URL; redirect to a file")
+	fmt.Fprintln(w, "                               for a local/offline copy)")
 	fmt.Fprintln(w, "  rotor clean [path] [--types] [--dry-run]")
 	fmt.Fprintln(w, "                               remove build outputs (outDir, include); --types also")
 	fmt.Fprintln(w, "                               removes generated rotor-env.d.ts / rotor-asset.d.ts")
@@ -143,6 +148,13 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al.")
 	fmt.Fprintln(w, "  --luau                    emit files with .luau extension (default true; --luau=false emits .lua)")
 	fmt.Fprintln(w, "  --cpuprofile <path>       write a pprof CPU profile of the build (diagnostics)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Diagnostics & watch DX (rotor extensions):")
+	fmt.Fprintln(w, "  --minify                  minify emitted Luau (strip comments/whitespace, t[\"x\"] -> t.x)")
+	fmt.Fprintln(w, "  --max-errors <n>          cap the rendered code frames on failure (default 50; 0 = all)")
+	fmt.Fprintln(w, "  --json                    emit one machine-readable result object instead of styled output")
+	fmt.Fprintln(w, "  --bell                    ring the terminal bell on a watch fail<->pass transition")
+	fmt.Fprintln(w, "  --no-clear                keep scroll history instead of clearing the screen each rebuild")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.")
 	fmt.Fprintln(w)

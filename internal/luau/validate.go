@@ -7,6 +7,14 @@ var luauReservedKeywords = map[string]struct{}{
 	"true": {}, "until": {}, "while": {},
 }
 
+// IsReservedKeyword reports whether id is a Luau reserved keyword (the canonical
+// set behind IsValidIdentifier). Exposed so presentation layers can mirror the
+// set without duplicating the source of truth.
+func IsReservedKeyword(id string) bool {
+	_, ok := luauReservedKeywords[id]
+	return ok
+}
+
 func isIdentifierStart(c byte) bool {
 	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }

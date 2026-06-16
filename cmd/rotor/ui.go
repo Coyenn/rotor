@@ -3,10 +3,13 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"rotor/internal/compile"
+	"rotor/internal/diagframe"
 	"rotor/internal/term"
 )
 
@@ -60,17 +63,82 @@ func (u *ui) buildSuccess(total, written, unchanged int, elapsed time.Duration) 
 	fmt.Fprintf(u.w, "    %s\n\n", joinDot(u.s, parts))
 }
 
-// buildFailure prints a red failure header followed by the diagnostic lines.
-func (u *ui) buildFailure(headline string, diags []string) {
+// buildFailure prints the failure headline, then a code frame per file.
+// maxFrames caps the number of rendered frames (0 = unlimited).
+func (u *ui) buildFailure(headline string, diags []compile.DiagnosticInfo, maxFrames int) {
 	g := u.s.Glyphs()
 	fmt.Fprintf(u.w, "  %s  %s\n", u.s.ErrorBold(g.Cross), u.s.Bold(headline))
-	if len(diags) > 0 {
+	if len(diags) == 0 {
 		fmt.Fprintln(u.w)
-		for _, d := range diags {
-			fmt.Fprintf(u.w, "    %s\n", d)
-		}
+		return
 	}
 	fmt.Fprintln(u.w)
+	fmt.Fprint(u.w, renderDiagFrames(u.w, diags, maxFrames))
+	fmt.Fprintln(u.w)
+}
+
+// renderDiagFrames groups located diagnostics by file, reads each file's source,
+// and renders frames; diagnostics without a usable location fall back to plain
+// indented message lines.
+func renderDiagFrames(w io.Writer, diags []compile.DiagnosticInfo, maxFrames int) string {
+	color := term.ColorEnabled(w)
+	byFile := map[string][]diagframe.Spot{}
+	var order []string
+	var loose []string
+	for _, d := range diags {
+		sev := diagframe.Error
+		if d.Warning {
+			sev = diagframe.Warning
+		}
+		if d.FileName == "" || d.Len == 0 {
+			loose = append(loose, d.Message)
+			continue
+		}
+		primary, help := splitHelp(d.Message)
+		if _, ok := byFile[d.FileName]; !ok {
+			order = append(order, d.FileName)
+		}
+		byFile[d.FileName] = append(byFile[d.FileName], diagframe.Spot{
+			Offset: d.Offset, Len: d.Len, Severity: sev, Code: d.Code, Message: primary, Help: help,
+		})
+	}
+	var groups []diagframe.Group
+	for _, fn := range order {
+		src, _ := os.ReadFile(fn)
+		groups = append(groups, diagframe.Group{
+			Path: relForDisplay(fn), Source: string(src), Lang: diagframe.TypeScript, Spots: byFile[fn],
+		})
+	}
+	out := diagframe.RenderGroups(groups, diagframe.Options{Color: color, Link: color}, maxFrames)
+	for _, l := range loose {
+		out += "    " + l + "\n"
+	}
+	return out
+}
+
+// splitHelp separates a diagnostic message into its primary line(s) and any
+// trailing "Suggestion:" / "More information:" lines (rendered as help:).
+func splitHelp(message string) (primary string, help []string) {
+	parts := strings.Split(message, "\n")
+	primary = parts[0]
+	for _, p := range parts[1:] {
+		if strings.HasPrefix(p, "Suggestion: ") || strings.HasPrefix(p, "More information: ") {
+			help = append(help, p)
+		} else {
+			primary += "\n" + p
+		}
+	}
+	return primary, help
+}
+
+// relForDisplay shows a path relative to the working directory when possible.
+func relForDisplay(p string) string {
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, p); err == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return p
 }
 
 // warn prints a single warning line in rotor chrome (distinct from the
@@ -108,12 +176,21 @@ func (u *ui) watchBanner(n int, stats *watchStats) {
 
 // watchIdle prints the post-build "watching for changes" line for build watch,
 // where the watched set is the whole project tree rather than a fixed count.
+// After a failed build it shows a persistent ✗ error banner so the failure
+// state stays visible after the code frames have scrolled off.
 func (u *ui) watchIdle(stats *watchStats) {
 	g := u.s.Glyphs()
-	parts := []string{u.s.Muted("watching for changes")}
+	icon := u.s.Info(g.Watch)
+	var parts []string
+	if stats != nil && stats.lastFailed {
+		icon = u.s.ErrorBold(g.Cross)
+		parts = append(parts, u.s.Error(plural(stats.lastErrCount, "error"))+u.s.Muted(" — watching for changes"))
+	} else {
+		parts = append(parts, u.s.Muted("watching for changes"))
+	}
 	parts = append(parts, u.watchStatParts(stats)...)
 	parts = append(parts, u.s.Muted("Ctrl+C to exit"))
-	fmt.Fprintf(u.w, "  %s  %s\n", u.s.Info(g.Watch), joinDot(u.s, parts))
+	fmt.Fprintf(u.w, "  %s  %s\n", icon, joinDot(u.s, parts))
 }
 
 // watchStatParts renders the rebuild counter and the build-time sparkline for

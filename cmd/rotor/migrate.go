@@ -103,12 +103,6 @@ func migrateMain(args []string, stdout, stderr io.Writer) int {
 	}
 	u.okLine("wrote "+config.ConfigFileName, "")
 
-	if _, err := config.RefreshSchema(dir); err != nil {
-		errUI.warn("could not write " + config.SchemaFileName + ": " + err.Error())
-	} else {
-		u.noteLine(config.SchemaFileName + "  (schema written)")
-	}
-
 	// Rename the legacy files to .bak so they stop being picked up but are not
 	// lost. A .bak that already exists is overwritten (idempotent re-runs).
 	if err := backup(legacyPath); err != nil {

@@ -114,7 +114,6 @@ func assetSync(dir string, dryRun bool) int {
 	for _, w := range cfg.Warnings {
 		errUI.warn("rotor asset: " + w)
 	}
-	refreshConfigSchema(u, dir)
 	if cfg.Assets == nil || len(cfg.Assets.Paths) == 0 {
 		errUI.failLine("rotor asset: rotor.toml has no [assets] section (or assets.paths is empty)")
 		return 1
@@ -230,25 +229,11 @@ func assetSync(dir string, dryRun bool) int {
 	return 0
 }
 
-// refreshConfigSchema keeps rotor.schema.json current whenever a command has
-// just loaded rotor.toml successfully. Best-effort: a failed write only warns,
-// and an up-to-date file is untouched (and unreported).
-func refreshConfigSchema(u *ui, dir string) {
-	wrote, err := config.RefreshSchema(dir)
-	if err != nil {
-		newUI(os.Stderr).warn("could not refresh " + config.SchemaFileName + ": " + err.Error())
-		return
-	}
-	if wrote {
-		u.noteLine(config.SchemaFileName + "  (schema refreshed)")
-	}
-}
-
 // assetWriteOutputs performs the mode-aware output step of `rotor asset sync`,
 // printing what was written. In "module" mode (default) it regenerates
 // assets.luau + assets.d.ts from the lockfile; in "macro" mode it writes the
-// rotor-asset.d.ts editor companion (and no assets.luau). Returns a process
-// exit code.
+// consolidated rotor.d.ts editor companion (and no assets.luau). Returns a
+// process exit code.
 func assetWriteOutputs(s *term.Styler, dir string, cfg *config.AssetsConfig, lock *assets.Lockfile) int {
 	written, err := assets.EmitForMode(
 		dir,
@@ -257,7 +242,7 @@ func assetWriteOutputs(s *term.Styler, dir string, cfg *config.AssetsConfig, loc
 			Luau  string
 			Types string
 		}{Luau: cfg.Output.Luau, Types: cfg.Output.Types},
-		assets.MacroCompanion{FileName: compile.AssetDeclFileName, Text: compile.AssetDeclFileText},
+		assets.MacroCompanion{FileName: compile.RotorTypesFileName, Text: compile.RotorTypesFileText},
 		lock,
 	)
 	if err != nil {

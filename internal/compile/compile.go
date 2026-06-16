@@ -14,15 +14,23 @@ import (
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/scanner"
 )
 
 // DiagnosticInfo carries the structured form of a compile diagnostic. Rotor
 // transformer diagnostics include a stable upstream-style Code (for example
 // "noAny"); TypeScript diagnostics leave Code empty and only populate Message.
+// FileName, Offset, and Len locate the diagnostic span within the source file
+// for code-frame rendering; FileName is empty when no source location is
+// available, and Len is 0 when no usable span was found.
 type DiagnosticInfo struct {
 	Code    string
 	Message string
 	Warning bool
+
+	FileName string // empty when the diagnostic has no source location
+	Offset   int    // byte offset of the span start into the file's source
+	Len      int    // span length in bytes; 0 means "no usable span"
 }
 
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
@@ -136,11 +144,7 @@ func transformAndRenderDetailed(state *transformer.State) (text string, diags []
 
 	hasErrors := state.Diags.HasErrors()
 	for _, d := range state.Diags.Flush() {
-		diags = append(diags, DiagnosticInfo{
-			Code:    d.Code,
-			Message: d.Message,
-			Warning: d.Warning,
-		})
+		diags = append(diags, infoFromNodeDiag(d))
 	}
 	if hasErrors {
 		// Upstream bails before rendering when the transformer reported
@@ -203,9 +207,40 @@ func stringDiagnostics(diags []string) []DiagnosticInfo {
 func tsDiagnosticInfos(diags []*ast.Diagnostic) []DiagnosticInfo {
 	out := make([]DiagnosticInfo, len(diags))
 	for i, d := range diags {
-		out[i] = DiagnosticInfo{Message: d.String()}
+		out[i] = infoFromTSDiag(d)
 	}
 	return out
+}
+
+// infoFromNodeDiag builds a located DiagnosticInfo from a transformer
+// diagnostic. Code/Message/Warning are copied verbatim (byte-identical to the
+// previous behaviour); location is resolved from the node when present.
+func infoFromNodeDiag(d transformer.Diagnostic) DiagnosticInfo {
+	info := DiagnosticInfo{Code: d.Code, Message: d.Message, Warning: d.Warning}
+	if d.Node != nil {
+		if sf := ast.GetSourceFileOfNode(d.Node); sf != nil {
+			start := scanner.GetTokenPosOfNode(d.Node, sf, false)
+			info.FileName = sf.FileName()
+			info.Offset = start
+			if end := d.Node.End(); end > start {
+				info.Len = end - start
+			}
+		}
+	}
+	return info
+}
+
+// infoFromTSDiag builds a located DiagnosticInfo from a tsgo diagnostic.
+// Message is d.String() exactly as before; Code stays empty (TS diagnostics had
+// no Code previously) so existing assertions are unaffected.
+func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
+	info := DiagnosticInfo{Message: d.String()}
+	if f := d.File(); f != nil {
+		info.FileName = f.FileName()
+		info.Offset = d.Pos()
+		info.Len = d.Len()
+	}
+	return info
 }
 
 func commentDirectiveDiagnostics(sourceFile *ast.SourceFile) []string {

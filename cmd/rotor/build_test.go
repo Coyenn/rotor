@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"rotor/internal/compile"
+	"rotor/internal/luau/cst"
 )
 
 // TestParseBuildArgs covers the rbxtsc-compatible flag surface
@@ -290,5 +294,236 @@ func TestCmdBuildJSONWithDiagnostic(t *testing.T) {
 	}
 	if res.Diagnostics[0].Message == "" {
 		t.Error("diagnostic message is empty")
+	}
+	// Structured location: file/line/col must be populated for a TS type error.
+	if res.Diagnostics[0].File == "" {
+		t.Error("diagnostic file is empty (want structured location)")
+	}
+	if res.Diagnostics[0].Line == 0 {
+		t.Error("diagnostic line is 0 (want ≥ 1)")
+	}
+	if res.Diagnostics[0].Col == 0 {
+		t.Error("diagnostic col is 0 (want ≥ 1)")
+	}
+}
+
+// TestRenderDiagFrames is a focused unit test for renderDiagFrames: it creates
+// a synthetic .ts file, constructs a DiagnosticInfo pointing at a span in it,
+// and asserts the rendered output contains the source line and a caret.
+func TestRenderDiagFrames(t *testing.T) {
+	dir := t.TempDir()
+	src := "export const s: string = 5;\n"
+	tsFile := filepath.Join(dir, "main.ts")
+	if err := os.WriteFile(tsFile, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Offset 25 points at "5" (the numeric literal): "export const s: string = "
+	diags := []compile.DiagnosticInfo{
+		{
+			Message:  "Type 'number' is not assignable to type 'string'.",
+			FileName: tsFile,
+			Offset:   25,
+			Len:      1,
+		},
+	}
+
+	out := renderDiagFrames(os.Stderr, diags, 0)
+
+	// The rendered frame must contain the source line.
+	if !strings.Contains(out, "export const s: string = 5;") {
+		t.Errorf("frame does not contain source line\noutput:\n%s", out)
+	}
+	// The rendered frame must contain a caret pointing at the error.
+	if !strings.Contains(out, "^") {
+		t.Errorf("frame does not contain caret '^'\noutput:\n%s", out)
+	}
+	// The rendered frame must contain the '-->' locator arrow.
+	if !strings.Contains(out, "-->") {
+		t.Errorf("frame does not contain '-->' locator\noutput:\n%s", out)
+	}
+	// The summary line must mention 'error'.
+	if !strings.Contains(out, "error") {
+		t.Errorf("frame does not contain 'error' summary\noutput:\n%s", out)
+	}
+}
+
+// TestParseBuildArgsMaxErrors verifies that --max-errors is parsed correctly.
+func TestParseBuildArgsMaxErrors(t *testing.T) {
+	t.Run("default is 50", func(t *testing.T) {
+		got, err := parseBuildArgs(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 50 {
+			t.Errorf("maxErrors = %d, want 50", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors value", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors", "10"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 10 {
+			t.Errorf("maxErrors = %d, want 10", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors=N form", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors=5"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 5 {
+			t.Errorf("maxErrors = %d, want 5", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors 0 means unlimited", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--max-errors", "0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.maxErrors != 0 {
+			t.Errorf("maxErrors = %d, want 0", got.maxErrors)
+		}
+	})
+
+	t.Run("--max-errors with negative value errors", func(t *testing.T) {
+		_, err := parseBuildArgs([]string{"--max-errors", "-1"})
+		if err == nil {
+			t.Error("expected error for negative --max-errors")
+		}
+	})
+}
+
+// TestParseBuildArgsWatchDXFlags verifies the watch DX booleans --bell and
+// --no-clear (and their defaults).
+func TestParseBuildArgsWatchDXFlags(t *testing.T) {
+	t.Run("defaults: bell off, clear on", func(t *testing.T) {
+		got, err := parseBuildArgs(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.bell {
+			t.Error("bell default = true, want false")
+		}
+		if !got.clearScreen {
+			t.Error("clearScreen default = false, want true")
+		}
+	})
+	t.Run("--bell enables the bell", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--bell"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.bell {
+			t.Error("--bell not parsed")
+		}
+	})
+	t.Run("--no-clear disables clear-on-rebuild", func(t *testing.T) {
+		got, err := parseBuildArgs([]string{"--no-clear"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.clearScreen {
+			t.Error("--no-clear did not disable clearScreen")
+		}
+	})
+}
+
+// TestCmdBuildMinify verifies that `rotor build --minify` produces smaller,
+// still-valid Luau with the header comment stripped, while a normal build keeps
+// it — i.e. the flag is what minifies, and only when set.
+func TestCmdBuildMinify(t *testing.T) {
+	src := "export const greeting = \"hi\";\nexport function greet() {\n\treturn greeting;\n}\n"
+	normalDir := writeBuildableProject(t, src)
+	minDir := writeBuildableProject(t, src)
+
+	if _, code := captureStdout(t, func() int { return cmdBuild([]string{normalDir}) }); code != 0 {
+		t.Fatalf("normal build exit = %d", code)
+	}
+	if _, code := captureStdout(t, func() int { return cmdBuild([]string{"--minify", minDir}) }); code != 0 {
+		t.Fatalf("--minify build exit = %d", code)
+	}
+
+	normalLuau := collectLuau(t, filepath.Join(normalDir, "out"))
+	minLuau := collectLuau(t, filepath.Join(minDir, "out"))
+	if len(normalLuau) == 0 || len(minLuau) == 0 {
+		t.Fatal("expected .luau outputs in both builds")
+	}
+
+	var normalSize, minSize int
+	for _, c := range normalLuau {
+		normalSize += len(c)
+	}
+	for p, c := range minLuau {
+		minSize += len(c)
+		// Minify strips comments, including rotor's header.
+		if strings.Contains(c, "-- Compiled with rotor") {
+			t.Errorf("%s still carries the header comment (not minified)", p)
+		}
+		// Minified output must still be valid Luau.
+		if _, diags := cst.Parse(c); len(diags) != 0 {
+			t.Errorf("%s minified output does not parse: %v", p, diags)
+		}
+	}
+	// A normal build keeps the header comment (proves the flag is the cause).
+	keptHeader := false
+	for _, c := range normalLuau {
+		if strings.Contains(c, "-- Compiled with rotor") {
+			keptHeader = true
+		}
+	}
+	if !keptHeader {
+		t.Error("normal build should keep the header comment")
+	}
+	if minSize >= normalSize {
+		t.Errorf("minified total (%d B) not smaller than normal (%d B)", minSize, normalSize)
+	}
+}
+
+// collectLuau reads every .luau file under dir into a path->content map.
+func collectLuau(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(p, ".luau") {
+			return nil
+		}
+		data, readErr := os.ReadFile(p)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		out[p] = string(data)
+		return nil
+	})
+	return out
+}
+
+// TestCmdBuildFailureCodeFrame verifies that a build failure renders code frames
+// (containing '-->' and '^') to stderr.
+func TestCmdBuildFailureCodeFrame(t *testing.T) {
+	// A type error: assign a number to a string-typed const.
+	dir := writeBuildableProject(t, "export const s: string = 5;\n")
+
+	stderr, code := captureStderr(t, func() int {
+		return cmdBuild([]string{dir})
+	})
+	if code != 1 {
+		t.Fatalf("cmdBuild (error) exit = %d, want 1; stderr:\n%s", code, stderr)
+	}
+	// The code frame must contain the '-->' locator line.
+	if !strings.Contains(stderr, "-->") {
+		t.Errorf("stderr does not contain '-->' locator\nstderr:\n%s", stderr)
+	}
+	// The code frame must contain a caret.
+	if !strings.Contains(stderr, "^") {
+		t.Errorf("stderr does not contain caret '^'\nstderr:\n%s", stderr)
+	}
+	// The failure summary must mention 'error'.
+	if !strings.Contains(stderr, "error") {
+		t.Errorf("stderr does not contain 'error'\nstderr:\n%s", stderr)
 	}
 }

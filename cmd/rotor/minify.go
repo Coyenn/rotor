@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"rotor/internal/diagframe"
 	"rotor/internal/luau/cst"
+	"rotor/internal/term"
 )
 
 // cmdMinify minifies a single Luau file: it strips comments (except leading `--!`
@@ -20,6 +22,7 @@ import (
 func cmdMinify(args []string) int {
 	input := ""
 	output := ""
+	indexToField := true // rotor DX: collapse t["foo"] -> t.foo (opt out with --no-index-field)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -37,6 +40,8 @@ func cmdMinify(args []string) int {
 			output = strings.TrimPrefix(a, "--output=")
 		case strings.HasPrefix(a, "-o="):
 			output = strings.TrimPrefix(a, "-o=")
+		case a == "--no-index-field":
+			indexToField = false
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "rotor minify: unknown flag %q\n\n", a)
 			usage(os.Stderr)
@@ -68,12 +73,19 @@ func cmdMinify(args []string) int {
 		return 1
 	}
 
-	minified, diags := cst.Minify(string(src))
+	minified, diags := cst.MinifyWith(string(src), cst.MinifyOptions{ConvertIndexToField: indexToField})
 	if len(diags) != 0 {
 		errUI.failLine(fmt.Sprintf("rotor minify: %s has %s", input, plural(len(diags), "syntax error")))
-		for _, d := range diags {
-			fmt.Fprintf(os.Stderr, "    %s:%d:%d: %s\n", input, d.Pos.Line, d.Pos.Col, d.Message)
+		spots := make([]diagframe.Spot, len(diags))
+		for i, d := range diags {
+			spots[i] = diagframe.Spot{Offset: d.Pos.Offset, Len: 1, Severity: diagframe.Error, Message: d.Message}
 		}
+		color := term.ColorEnabled(os.Stderr)
+		fmt.Fprint(os.Stderr, diagframe.RenderGroups(
+			[]diagframe.Group{{Path: input, Source: string(src), Lang: diagframe.Luau, Spots: spots}},
+			diagframe.Options{Color: color, Link: color},
+			0,
+		))
 		return 1
 	}
 

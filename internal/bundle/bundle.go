@@ -17,6 +17,19 @@ import (
 // cache. It is unlikely to collide with user code.
 const modulesIdentifier = "__ROTOR_BUNDLE"
 
+// ParseError is a Luau parse failure with enough context to render a code
+// frame. Bundle/BundleWith return it so the CLI can frame the error; its
+// Error() preserves the legacy "path:line:col: message" one-line form.
+type ParseError struct {
+	Path   string
+	Source string
+	Diag   cst.Diagnostic
+}
+
+func (e *ParseError) Error() string {
+	return fmt.Sprintf("%s:%d:%d: %s", e.Path, e.Diag.Pos.Line, e.Diag.Pos.Col, e.Diag.Message)
+}
+
 type module struct {
 	path    string // absolute file path
 	id      int
@@ -82,8 +95,7 @@ func BundleWith(entryPath string, opts Options) (string, error) {
 	newModule := func(absPath, src string) (*module, error) {
 		file, diags := cst.Parse(src)
 		if len(diags) != 0 {
-			d := diags[0]
-			return nil, fmt.Errorf("%s:%d:%d: %s", absPath, d.Pos.Line, d.Pos.Col, d.Message)
+			return nil, &ParseError{Path: absPath, Source: src, Diag: diags[0]}
 		}
 		m := &module{path: absPath, id: len(modules), file: file, replace: map[cst.Node]string{}}
 		byPath[absPath] = m // register before recursing so cycles terminate

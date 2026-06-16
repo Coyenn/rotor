@@ -61,7 +61,9 @@ func cmdDev(args []string) int {
 	signal.Notify(sigc, os.Interrupt)
 
 	done := make(chan int, 1)
-	go func() { done <- runBuildWatch(dir, tsConfigPath, opts) }()
+	go func() {
+		done <- runBuildWatch(dir, tsConfigPath, opts, watchOptions{maxErrors: 50, clearScreen: true})
+	}()
 
 	select {
 	case <-sigc:

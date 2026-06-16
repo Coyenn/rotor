@@ -191,6 +191,81 @@ func TestPackLuauRunsUnderLune(t *testing.T) {
 	}
 }
 
+// TestPackVirtualGameResolvesUnderLune proves a DataModel-rooted bundle resolves an
+// absolute `game:GetService(...)`/`WaitForChild` path against the reconstructed tree, so
+// it stays self-contained even with no host game (lune has no `game` global).
+func TestPackVirtualGameResolvesUnderLune(t *testing.T) {
+	lune, err := exec.LookPath("lune")
+	if err != nil {
+		t.Skip("lune not on PATH")
+	}
+	greet := &Instance{ClassName: "ModuleScript", Name: "greet", Source: `return "hi world"`}
+	lib := &Instance{ClassName: "Folder", Name: "Lib", Children: []*Instance{greet}}
+	rs := &Instance{ClassName: "ReplicatedStorage", Name: "ReplicatedStorage", Children: []*Instance{lib}}
+	main := &Instance{ClassName: "ModuleScript", Name: "main",
+		Source: `return require(game:GetService("ReplicatedStorage"):WaitForChild("Lib"):WaitForChild("greet"))`}
+	root := &Instance{ClassName: "DataModel", Name: "game", Children: []*Instance{rs, main}}
+
+	out, err := EmitLuau([]*Instance{root}, "game.main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "local game = i") {
+		t.Fatalf("a DataModel bundle should shadow `game` with the virtual root:\n%s", out)
+	}
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bundle.luau"), out)
+	writeFile(t, filepath.Join(dir, "run.luau"), "print(require(\"./bundle\"))\n")
+	cmd := exec.Command(lune, "run", "run.luau")
+	cmd.Dir = dir
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lune run failed: %v\n%s\n--- bundle ---\n%s", err, got, out)
+	}
+	if !strings.Contains(string(got), "hi world") {
+		t.Fatalf("got %q, want \"hi world\"\n--- bundle ---\n%s", got, out)
+	}
+}
+
+// TestPackScriptEntryRunsViaClosure verifies a Script/LocalScript --entry is invoked via
+// its closure (scripts are not requirable) rather than passed to rotorRequire.
+func TestPackScriptEntryRunsViaClosure(t *testing.T) {
+	boot := &Instance{ClassName: "LocalScript", Name: "boot", Source: `print("booted")`}
+	root := &Instance{ClassName: "Folder", Name: "app", Children: []*Instance{boot}}
+
+	out, err := EmitLuau([]*Instance{root}, "app.boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "return rotorRequire(i") {
+		t.Fatalf("a script entry must not be passed to rotorRequire:\n%s", out)
+	}
+	if !strings.Contains(out, "._impl(i") {
+		t.Fatalf("a script entry should run via its _impl closure:\n%s", out)
+	}
+	if _, diags := cst.Parse(out); len(diags) != 0 {
+		t.Fatalf("bundle does not parse: %s\n%s", diags[0].Message, out)
+	}
+
+	lune, err := exec.LookPath("lune")
+	if err != nil {
+		t.Skip("lune not on PATH")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bundle.luau"), out)
+	writeFile(t, filepath.Join(dir, "run.luau"), "require(\"./bundle\")\n")
+	cmd := exec.Command(lune, "run", "run.luau")
+	cmd.Dir = dir
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lune run failed: %v\n%s", err, got)
+	}
+	if !strings.Contains(string(got), "booted") {
+		t.Fatalf("got %q, want \"booted\"", got)
+	}
+}
+
 func mkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

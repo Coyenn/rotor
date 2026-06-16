@@ -12,6 +12,7 @@ import (
 	"rotor/internal/assets"
 	"rotor/internal/includefiles"
 	"rotor/internal/logservice"
+	"rotor/internal/luau/cst"
 	"rotor/internal/rojo"
 	"rotor/tsgo/compiler"
 )
@@ -32,32 +33,25 @@ type BuildResult struct {
 
 	// UsesEnvMacro reports whether any project source file references the
 	// rotor $env macro (cheap text scan over the already-loaded sources).
-	// When true the build also refreshes the on-disk rotor-env.d.ts editor
-	// companion (see envdecl.go).
 	UsesEnvMacro bool
-	// WroteEnvTypes reports whether rotor-env.d.ts was (re)written this pass
-	// (false when it was already current, or when UsesEnvMacro is false).
-	WroteEnvTypes bool
-
 	// UsesAssetMacro reports whether any project source file references the
-	// rotor $asset macro (cheap text scan). When true the build also refreshes
-	// the on-disk rotor-asset.d.ts editor companion (see assetdecl.go).
+	// rotor $asset macro (cheap text scan).
 	UsesAssetMacro bool
-	// WroteAssetTypes reports whether rotor-asset.d.ts was (re)written this
-	// pass (false when current, or when UsesAssetMacro is false).
-	WroteAssetTypes bool
-
 	// UsesMacros reports whether any project source file references one of the
-	// rotor $nameof / $keys / $file / $git / $buildTime macros (cheap text
-	// scan). When true the build also refreshes the on-disk rotor-macros.d.ts
-	// editor companion (see macrodecl.go).
+	// rotor $nameof / $keys / $file / $git / $buildTime macros (cheap text scan).
 	UsesMacros bool
-	// WroteMacroTypes reports whether rotor-macros.d.ts was (re)written this
-	// pass (false when current, or when UsesMacros is false).
-	WroteMacroTypes bool
+
+	// WroteRotorTypes reports whether the consolidated rotor.d.ts editor
+	// companion was (re)written this pass (true when the project references any
+	// macro and the on-disk file was missing or stale; see rotortypes.go).
+	WroteRotorTypes bool
 	// WroteLockfile reports whether rotor-lock.json was persisted this pass
 	// (true only when $asset uploaded a new asset on a cache miss).
 	WroteLockfile bool
+
+	// Diagnostics holds the structured diagnostics from this build (populated
+	// even when the build fails on diagnostics). Empty on success.
+	Diagnostics []DiagnosticInfo
 }
 
 // BuildProjectWithOptions runs the Phase 4 output pipeline for `rotor build`:
@@ -131,9 +125,19 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
-	outputs, diags, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
+	outputs, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	if err != nil {
-		return nil, diags, err
+		return &BuildResult{Diagnostics: infos}, diagnosticInfoMessages(infos), err
+	}
+
+	// rotor extension: --minify post-processes each compiled Luau source through
+	// the minifier before write + manifest. The incremental manifest hashes
+	// SOURCE files (not output content), so this never desyncs incremental
+	// builds; semantics are preserved (see ProjectOptions.MinifyOutput).
+	if opts.MinifyOutput {
+		if err := minifyOutputs(outputs); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	emittedFiles := make([]string, 0, len(outputs))
@@ -176,31 +180,24 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	// rotor extension: keep the on-disk rotor-env.d.ts editor companion fresh
-	// for projects that reference $env (written only when missing or stale;
-	// see envdecl.go). Editors never see the synthetic in-memory declaration,
-	// so this file is what stops $env from red-squiggling in VS Code.
-	wroteEnvTypes := false
-	if usesEnvMacro {
-		wroteEnvTypes, err = WriteEnvDeclarations(filepath.FromSlash(dir))
+	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
+	// fresh for projects that reference any macro ($env / $asset / $nameof /
+	// $keys / $file / $git / $buildTime). Editors never see the synthetic
+	// in-memory declarations, so this single file is what stops the macros from
+	// red-squiggling in VS Code. Written only when missing or stale (rotortypes.go).
+	wroteRotorTypes := false
+	if usesEnvMacro || usesAssetMacro || usesMacros {
+		wroteRotorTypes, err = WriteRotorTypes(filepath.FromSlash(dir))
 		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", EnvDeclFileName, err)
+			return nil, nil, fmt.Errorf("compile: writing %s: %w", RotorTypesFileName, err)
 		}
 	}
 
-	// rotor extension: same editor-companion refresh for $asset, plus the
-	// lockfile flush. The transformer never writes files/network beyond the
-	// upload inside Resolve; the lockfile PERSIST happens HERE, after a
-	// successful build, so a cache-hit build does zero IO beyond reading the
-	// lockfile (deterministic/parity-safe) and only a genuine upload-on-miss
-	// rewrites rotor-lock.json atomically.
-	wroteAssetTypes := false
-	if usesAssetMacro {
-		wroteAssetTypes, err = WriteAssetDeclarations(filepath.FromSlash(dir))
-		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", AssetDeclFileName, err)
-		}
-	}
+	// rotor extension: the $asset lockfile flush. The transformer never writes
+	// files/network beyond the upload inside Resolve; the lockfile PERSIST
+	// happens HERE, after a successful build, so a cache-hit build does zero IO
+	// beyond reading the lockfile (deterministic/parity-safe) and only a genuine
+	// upload-on-miss rewrites rotor-lock.json atomically.
 	wroteLockfile := false
 	if pctx.assets != nil && pctx.assets.Dirty() {
 		if err := pctx.assets.Lockfile().Save(filepath.FromSlash(dir)); err != nil {
@@ -209,26 +206,14 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		wroteLockfile = true
 	}
 
-	// rotor extension: same editor-companion refresh for the shared
-	// $nameof / $keys / $file / $git / $buildTime declaration (macrodecl.go).
-	wroteMacroTypes := false
-	if usesMacros {
-		wroteMacroTypes, err = WriteMacroDeclarations(filepath.FromSlash(dir))
-		if err != nil {
-			return nil, nil, fmt.Errorf("compile: writing %s: %w", MacroDeclFileName, err)
-		}
-	}
-
 	return &BuildResult{
 		Outputs:         outputs,
 		EmittedFiles:    emittedFiles,
 		OutputDir:       pathTranslator.OutDir,
 		UsesEnvMacro:    usesEnvMacro,
-		WroteEnvTypes:   wroteEnvTypes,
 		UsesAssetMacro:  usesAssetMacro,
-		WroteAssetTypes: wroteAssetTypes,
 		UsesMacros:      usesMacros,
-		WroteMacroTypes: wroteMacroTypes,
+		WroteRotorTypes: wroteRotorTypes,
 		WroteLockfile:   wroteLockfile,
 	}, nil, nil
 }
@@ -274,6 +259,26 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 
 func rewriteDeclarationTypeReferences(text string) string {
 	return strings.ReplaceAll(text, `types="types"`, `types="@rbxts/types"`)
+}
+
+// minifyOutputs rewrites every compiled .luau/.lua entry in outputs to its
+// minified form in place (rotor's --minify build flag). A minifier diagnostic
+// on rotor-generated Luau is an internal error — the compiler emits Luau the
+// minifier's parser handles — so it fails the build loudly rather than writing
+// truncated output.
+func minifyOutputs(outputs map[string]string) error {
+	for rel, text := range outputs {
+		lower := strings.ToLower(rel)
+		if !strings.HasSuffix(lower, ".luau") && !strings.HasSuffix(lower, ".lua") {
+			continue
+		}
+		minified, diags := cst.Minify(text)
+		if len(diags) != 0 {
+			return fmt.Errorf("compile: --minify: internal error minifying %s: %s", rel, diags[0].Message)
+		}
+		outputs[rel] = minified
+	}
+	return nil
 }
 
 // assertLocalOutputPath rejects project-relative output paths that are

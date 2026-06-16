@@ -18,77 +18,16 @@ func writeConfigFile(t *testing.T, dir, name, content string) {
 	}
 }
 
-// RefreshSchema is the auto-refresh hook used by `rotor asset` / `rotor deploy`
-// after a successful config load: missing → written, stale → rewritten,
-// current → untouched (content-compare; no write).
-func TestRefreshSchema(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, SchemaFileName)
-
-	// missing → written
-	wrote, err := RefreshSchema(dir)
+// The schema is hosted (served from SchemaURL via raw GitHub) rather than
+// written per-project, so a single rotor.schema.json is committed at the repo
+// root. It must never drift from config.Schema — `rotor schema` regenerates it.
+func TestCommittedSchemaMatchesConstant(t *testing.T) {
+	const rel = "../../rotor.schema.json" // repo root, relative to internal/config
+	data, err := os.ReadFile(rel)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if !wrote {
-		t.Error("missing file: wrote = false, want true")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("committed schema missing — run `rotor schema > rotor.schema.json` at the repo root: %v", err)
 	}
 	if string(data) != Schema {
-		t.Error("written content differs from Schema")
-	}
-
-	// current → untouched
-	wrote, err = RefreshSchema(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wrote {
-		t.Error("up-to-date file: wrote = true, want false")
-	}
-
-	// stale → rewritten
-	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wrote, err = RefreshSchema(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !wrote {
-		t.Error("stale file: wrote = false, want true")
-	}
-	data, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != Schema {
-		t.Error("stale file not refreshed to current Schema")
-	}
-
-	// no leftover temp files from the atomic write
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Errorf("directory has %d entries, want only %s", len(entries), SchemaFileName)
-	}
-}
-
-func TestWriteSchema(t *testing.T) {
-	dir := t.TempDir()
-	if err := WriteSchema(dir); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, SchemaFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != Schema {
-		t.Fatal("written file does not match Schema")
+		t.Errorf("%s is out of sync with config.Schema; regenerate with `rotor schema > rotor.schema.json`", rel)
 	}
 }
