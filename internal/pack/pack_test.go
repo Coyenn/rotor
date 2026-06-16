@@ -228,6 +228,44 @@ func TestPackVirtualGameResolvesUnderLune(t *testing.T) {
 	}
 }
 
+// TestPackScriptEntryRunsViaClosure verifies a Script/LocalScript --entry is invoked via
+// its closure (scripts are not requirable) rather than passed to rotorRequire.
+func TestPackScriptEntryRunsViaClosure(t *testing.T) {
+	boot := &Instance{ClassName: "LocalScript", Name: "boot", Source: `print("booted")`}
+	root := &Instance{ClassName: "Folder", Name: "app", Children: []*Instance{boot}}
+
+	out, err := EmitLuau([]*Instance{root}, "app.boot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "return rotorRequire(i") {
+		t.Fatalf("a script entry must not be passed to rotorRequire:\n%s", out)
+	}
+	if !strings.Contains(out, "._impl(i") {
+		t.Fatalf("a script entry should run via its _impl closure:\n%s", out)
+	}
+	if _, diags := cst.Parse(out); len(diags) != 0 {
+		t.Fatalf("bundle does not parse: %s\n%s", diags[0].Message, out)
+	}
+
+	lune, err := exec.LookPath("lune")
+	if err != nil {
+		t.Skip("lune not on PATH")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bundle.luau"), out)
+	writeFile(t, filepath.Join(dir, "run.luau"), "require(\"./bundle\")\n")
+	cmd := exec.Command(lune, "run", "run.luau")
+	cmd.Dir = dir
+	got, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("lune run failed: %v\n%s", err, got)
+	}
+	if !strings.Contains(string(got), "booted") {
+		t.Fatalf("got %q, want \"booted\"", got)
+	}
+}
+
 func mkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

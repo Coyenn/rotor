@@ -187,12 +187,12 @@ end
 `
 
 // EmitLuau renders a self-reconstructing Luau bundle for the given model trees. If
-// entry is non-empty it is resolved (a dotted instance path, optionally including
-// the root name) and the bundle returns `require(entry)`; otherwise the bundle runs
-// every Script/LocalScript and returns the root instance. When the root is a DataModel
-// the bundle binds `game` to the reconstructed root, so absolute `game:GetService(...)`
-// paths resolve against the bundle (see runtimePrelude); otherwise the host game's
-// fallback is disabled.
+// entry is non-empty it is resolved (a dotted instance path, optionally including the
+// root name); a ModuleScript entry returns `require(entry)`, a Script/LocalScript entry
+// runs its body; otherwise the bundle runs every Script/LocalScript and returns the root
+// instance. When the root is a DataModel the bundle binds `game` to the reconstructed
+// root, so absolute `game:GetService(...)` paths resolve against the bundle (see
+// runtimePrelude); otherwise the host game's fallback is disabled.
 func EmitLuau(roots []*Instance, entry string) (string, error) {
 	if len(roots) == 0 {
 		return "", fmt.Errorf("model has no instances")
@@ -255,10 +255,14 @@ func EmitLuau(roots []*Instance, entry string) (string, error) {
 	}
 
 	b.WriteString("\n-- === entry ===\n")
-	if entryInst != nil {
-		fmt.Fprintf(&b, "return rotorRequire(i%d)\n", entryInst.id)
-	} else {
+	switch {
+	case entryInst == nil:
 		fmt.Fprintf(&b, "runScripts(i%d)\nreturn i%d\n", root.id, root.id)
+	case entryInst.ClassName == "Script" || entryInst.ClassName == "LocalScript":
+		// Scripts aren't requirable; run the body closure directly.
+		fmt.Fprintf(&b, "return i%d._impl(i%d, rotorRequire)\n", entryInst.id, entryInst.id)
+	default:
+		fmt.Fprintf(&b, "return rotorRequire(i%d)\n", entryInst.id)
 	}
 	return b.String(), nil
 }
