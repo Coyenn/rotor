@@ -315,6 +315,128 @@ func TestBuildProjectTransformerSidecarStaysWarmAcrossBuilds(t *testing.T) {
 	}
 }
 
+// getterRenamePlugin is a minimal stand-in for rbxts-transformer-setget: it
+// renames every `get x()` accessor to a `__getx()` method and rewrites `.x`
+// reads (resolved through the type checker) into `.__getx()` calls. The rewrite
+// only type-checks when the DECLARATION file was transformed too, so it
+// exercises the cross-file overlay-coherence invariant.
+const getterRenamePlugin = `module.exports = function (program, config, helpers) {
+	const ts = helpers.ts;
+	const checker = program.getTypeChecker();
+	return (context) => {
+		const visit = (node) => {
+			if (ts.isGetAccessorDeclaration(node) && ts.isIdentifier(node.name)) {
+				return ts.factory.createMethodDeclaration(
+					node.modifiers,
+					undefined,
+					ts.factory.createIdentifier("__get" + node.name.text),
+					undefined,
+					node.typeParameters,
+					node.parameters,
+					node.type,
+					node.body,
+				);
+			}
+			if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.name)) {
+				const symbol = checker.getSymbolAtLocation(node);
+				const declarations = symbol ? symbol.declarations || [] : [];
+				if (declarations.some((declaration) => ts.isGetAccessorDeclaration(declaration))) {
+					return ts.factory.createCallExpression(
+						ts.factory.createPropertyAccessExpression(
+							ts.visitNode(node.expression, visit),
+							ts.factory.createIdentifier("__get" + node.name.text),
+						),
+						undefined,
+						[],
+					);
+				}
+			}
+			return ts.visitEachChild(node, visit, context);
+		};
+		return (sourceFile) => ts.visitNode(sourceFile, visit);
+	};
+};
+`
+
+// TestBuildProjectTransformerSidecarIncrementalTransformsAllSources is the
+// regression test for the `Property '__getx' does not exist` failures: an
+// incremental rebuild that recompiles only a changed call-site file must still
+// transform the WHOLE project, or the unchanged declaration file is left
+// untransformed in the overlay program and the rewritten call site fails to
+// type-check.
+func TestBuildProjectTransformerSidecarIncrementalTransformsAllSources(t *testing.T) {
+	setRepoSidecarPath(t)
+	closeSidecarSessions()
+
+	dir := writeProject(t, "@scope/plugin-incremental-fixture", "")
+	t.Cleanup(closeSidecarSessions)
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plugins", "getter.js"), []byte(getterRenamePlugin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"noLib": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out",
+		"incremental": true,
+		"tsBuildInfoFile": "out/tsconfig.tsbuildinfo",
+		"plugins": [{ "transform": "./plugins/getter.js" }]
+	},
+	"include": ["src"]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := "export class Model {\n\tprivate innerValue = 1;\n\tpublic get value(): number {\n\t\treturn this.innerValue;\n\t}\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "src", "model.ts"), []byte(model), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeUsage := func(suffix string) {
+		t.Helper()
+		usage := "import { Model } from \"./model\";\n\nexport function readValue(model: Model): number {\n\treturn model.value;\n}\n" + suffix
+		if err := os.WriteFile(filepath.Join(dir, "src", "usage.ts"), []byte(usage), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeUsage("")
+	// Drop writeProject's placeholder so only model.ts + usage.ts compile.
+	if err := os.Remove(filepath.Join(dir, "src", "main.ts")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+	if got := result.Outputs["out/usage.luau"]; !strings.Contains(got, "__getvalue") {
+		t.Fatalf("first build did not rewrite the getter call site:\n%s", got)
+	}
+
+	// Edit ONLY the call-site file. Incremental selection compiles just
+	// usage.ts; model.ts (the getter declaration) is unchanged, so the overlay
+	// must still transform it or `.__getvalue()` will not resolve.
+	writeUsage("export const tag = \"edited\";\n")
+
+	result, diags, err = BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("incremental build after editing only the call site: %v (diags: %v)", err, diags)
+	}
+	if got := result.Outputs["out/usage.luau"]; !strings.Contains(got, "__getvalue") {
+		t.Fatalf("incremental build lost the getter rewrite:\n%s", got)
+	}
+}
+
 func writeSidecarPluginFixture(t *testing.T, dir, baseTSConfig, rootTSConfig string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {

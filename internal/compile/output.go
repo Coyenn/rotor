@@ -118,7 +118,11 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 	}
-	program, selectedFiles, diags, err = prepareProjectProgramForCompile(dir, program, selectedFiles)
+	// Transform every project source file (sourceFiles), but compile only the
+	// incrementally selected subset (selectedFiles). See
+	// prepareProjectProgramForCompile: a partial overlay breaks cross-file
+	// accessor transforms (setget's __getx) during the subset's type-check.
+	program, selectedFiles, diags, err = prepareProjectProgramForCompile(dir, program, sourceFiles, selectedFiles)
 	if err != nil {
 		return nil, diags, err
 	}

@@ -68,7 +68,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 	if sourceFile == nil {
 		return "", nil, fmt.Errorf("compile: source file not in program: %s", filePath)
 	}
-	program, preparedFiles, diags, err := prepareProjectProgramForCompile(dir, program, []*ast.SourceFile{sourceFile})
+	program, preparedFiles, diags, err := prepareProjectProgramForCompile(dir, program, []*ast.SourceFile{sourceFile}, []*ast.SourceFile{sourceFile})
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"rotor/internal/compile"
 )
 
 func writeTestFile(t *testing.T, path, content string) {
@@ -72,6 +74,45 @@ func TestDiffStampsReportsRemovedAndModifiedFiles(t *testing.T) {
 	changed := diffStamps(before, w.snapshot())
 	if !reflect.DeepEqual(changed, []string{edited, gone}) {
 		t.Fatalf("diffStamps = %v, want [%s %s]", changed, edited, gone)
+	}
+}
+
+// TestTreeWatcherIgnoresFlameworkBuildArtifact guards the endless-rebuild-loop
+// fix: rbxts-transformer-flamework rewrites flamework.build at the project root
+// on every compile, so the watcher must never see it as a change.
+func TestTreeWatcherIgnoresFlameworkBuildArtifact(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "src", "main.ts"), "export {};\n")
+	artifact := filepath.Join(root, "flamework.build")
+	writeTestFile(t, artifact, "{\"version\":1}\n")
+
+	w := newTreeWatcher(root)
+	before := w.snapshot()
+	if _, ok := before[artifact]; ok {
+		t.Fatalf("snapshot should not watch %s", artifact)
+	}
+
+	// A rewrite (every compile does one) must not register as a change.
+	writeTestFile(t, artifact, "{\"version\":2,\"identifiers\":{}}\n")
+	if changed := diffStamps(before, w.snapshot()); len(changed) != 0 {
+		t.Fatalf("rewriting flamework.build produced changes %v, want none", changed)
+	}
+}
+
+func TestIsBuildGeneratedFile(t *testing.T) {
+	for name, want := range map[string]bool{
+		flameworkBuildArtifact:    true,
+		"Flamework.Build":         true,
+		compile.EnvDeclFileName:   true,
+		compile.AssetDeclFileName: true,
+		compile.MacroDeclFileName: true,
+		"main.ts":                 false,
+		"flamework.ts":            false,
+		"my.build":                false,
+	} {
+		if got := isBuildGeneratedFile(name); got != want {
+			t.Errorf("isBuildGeneratedFile(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

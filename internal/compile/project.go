@@ -502,7 +502,7 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 
 func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []string, error) {
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
+	program, sourceFiles, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles, sourceFiles)
 	if err != nil {
 		return nil, diags, err
 	}

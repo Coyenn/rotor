@@ -57,23 +57,40 @@ type sidecarOutputFile struct {
 	Text     string `json:"text"`
 }
 
-func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
-	if len(sourceFiles) == 0 {
-		return program, sourceFiles, nil, nil
+// prepareProjectProgramForCompile runs the transformer plugins and returns the
+// program the compiler should type-check and emit against, plus the remapped
+// subset to compile.
+//
+// transformFiles is the set sent to the transformer sidecar; the returned
+// overlay program replaces every one of them with its transformed text.
+// compileFiles is the (possibly smaller) set the caller will actually compile.
+//
+// These MUST be decoupled for incremental builds. A subset compile still
+// type-checks each selected file against the WHOLE project, so the overlay has
+// to be internally consistent: if only the changed call-site files were
+// transformed while the unchanged declaration files were read untransformed
+// from disk, an accessor rewrite like setget's `get x()` -> `__getx()` would
+// only land at the use sites, and the type checker would report
+// "Property '__getx' does not exist". Transforming every source file (while
+// emitting only compileFiles) keeps the overlay coherent — the same invariant
+// roblox-ts enforces with its transform-all-sources proxy program.
+func prepareProjectProgramForCompile(dir string, program *compiler.Program, transformFiles, compileFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
+	if len(compileFiles) == 0 {
+		return program, compileFiles, nil, nil
 	}
 	if !projectUsesTransformerPlugins(program.CommandLine()) {
-		return program, sourceFiles, nil, nil
+		return program, compileFiles, nil, nil
 	}
 
-	transformedProgram, diags, err := applyTransformerSidecar(dir, program, sourceFiles)
+	transformedProgram, diags, err := applyTransformerSidecar(dir, program, transformFiles)
 	if err != nil {
 		return nil, nil, diags, err
 	}
 	if transformedProgram == program {
-		return program, sourceFiles, nil, nil
+		return program, compileFiles, nil, nil
 	}
 
-	remapped, err := remapProgramSourceFiles(transformedProgram, sourceFiles)
+	remapped, err := remapProgramSourceFiles(transformedProgram, compileFiles)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -112,6 +129,22 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	for _, file := range response.Transformed {
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
+
+	// Defense-in-depth for the overlay-coherence invariant: every source file we
+	// asked the sidecar to transform must come back, or the overlay program
+	// would read that file untransformed from disk and surface as a spurious
+	// "Property '__getx' does not exist"-class diagnostic. Fail loudly with the
+	// offending paths instead.
+	var missing []string
+	for _, sourceFile := range sourceFiles {
+		if _, ok := overlays[normalizeOverlayPath(sourceFile.FileName(), caseSensitive)]; !ok {
+			missing = append(missing, filepath.FromSlash(sourceFile.FileName()))
+		}
+	}
+	if len(missing) > 0 {
+		return nil, []string{"transformer sidecar returned no transformed output for: " + strings.Join(missing, ", ")}, errors.New("compile: transformer sidecar incomplete overlay")
+	}
+
 	return newProjectProgramWithOverlay(dir, configPath, overlays)
 }
 
